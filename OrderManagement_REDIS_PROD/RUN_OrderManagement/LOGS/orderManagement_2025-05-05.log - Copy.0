@@ -1,0 +1,71 @@
+2025-05-05 13:51:00.409 [INFO] com.iontrading.samples.advanced.orderManagement.AsyncLoggingManager: Logging initialized
+2025-05-05 13:51:00.428 [INFO] com.iontrading.samples.advanced.orderManagement.AsyncLoggingManager: Log file: U:\jmkv168p9\OrderManagement_crossingwGC\RUN_OrderManagement\logs\orderManagement_2025-05-05.log
+2025-05-05 13:51:00.445 [INFO] com.iontrading.samples.advanced.orderManagement.AsyncLoggingManager: Logging levels - File: ALL, Console: FINE
+2025-05-05 13:51:00.617 [INFO] com.iontrading.samples.advanced.orderManagement.AsyncLoggingManager: Machine-readable logging initialized: U:\jmkv168p9\OrderManagement_crossingwGC\RUN_OrderManagement\logs\orderManagement_2025-05-05_machine.log
+2025-05-05 13:51:00.633 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Asynchronous logging initialized for orderManagement_2025-05-05
+2025-05-05 13:51:02.693 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Starting in PRODUCTION mode
+2025-05-05 13:51:02.697 [INFO] com.iontrading.samples.advanced.orderManagement.OrderManagement: Starting auto-shutdown monitor. Will shutdown at 5:00 PM local time.
+2025-05-05 13:51:02.694 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Starting OrderManagement
+2025-05-05 13:51:02.695 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Application ID: Java_Order_Manager
+2025-05-05 13:51:02.695 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Venue to trader mapping initialized with 3 entries
+2025-05-05 13:51:02.697 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Market recheck scheduler initialized
+2025-05-05 13:51:03.592 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Starting MKV API
+2025-05-05 13:51:03.592 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: MKV API already started
+2025-05-05 13:51:03.592 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Waiting for instrument data to be loaded...
+2025-05-05 13:51:19.213 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Instrument data loaded successfully
+2025-05-05 13:51:19.617 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Instrument data loaded successfully
+2025-05-05 13:51:19.618 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Creating VenueTraderListener instance
+2025-05-05 13:51:19.702 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: VenueTraderListener created successfully
+2025-05-05 13:51:19.702 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: VenueTraderListener initialization requested
+2025-05-05 13:51:19.703 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Setting up depths subscriptions
+2025-05-05 13:51:19.780 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Subscribing to consolidated depth data using pattern: USD.CM_DEPTH.VMO_REPO_US.
+2025-05-05 13:51:19.780 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Found consolidated depth pattern, subscribing: USD.CM_DEPTH.VMO_REPO_US.
+2025-05-05 13:51:19.839 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Successfully subscribed to consolidated depth pattern
+2025-05-05 13:51:24.781 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: DepthListener heartbeat: Last update 3 seconds ago. Update rate: 1283.29 updates/sec. Total updates: 6419
+2025-05-05 13:51:29.781 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: DepthListener heartbeat: Last update 0 seconds ago. Update rate: 642.47 updates/sec. Total updates: 6426
+2025-05-05 13:51:32.707 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: 2025-05-05 13:51:32 HEARTBEAT: Instruments=6419, Cached Orders=0, Memory (Used/Free)=133940584/2013543064 bytes, Continuous Trading=true, Latest Best Prices=6419
+2025-05-05 13:51:34.782 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: DepthListener heartbeat: Last update 0 seconds ago. Update rate: 428.98 updates/sec. Total updates: 6436
+2025-05-05 13:51:39.781 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: DepthListener heartbeat: Last update 0 seconds ago. Update rate: 322.17 updates/sec. Total updates: 6444
+2025-05-05 13:51:44.782 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: DepthListener heartbeat: Last update 0 seconds ago. Update rate: 258.14 updates/sec. Total updates: 6454
+2025-05-05 13:51:49.781 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: DepthListener heartbeat: Last update 0 seconds ago. Update rate: 215.45 updates/sec. Total updates: 6464
+2025-05-05 13:51:49.848 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Market data health status: {timeSinceLastUpdateMs=279, lastUpdateTimestamp=1746467509569, consecutiveErrors=0, totalUpdates=6464, isHealthy=true}
+2025-05-05 13:51:50.830 [WARNING] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Skipping update - no valid instrument ID found in record: USD.CM_INSTRUMENT.VMO_REPO_US.GC_TU10_C_Fixed
+2025-05-05 13:51:50.830 [WARNING] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Skipping update - no valid instrument ID found in record: USD.CM_INSTRUMENT.VMO_REPO_US.GC_TU10_C_Fixed
+2025-05-05 13:51:54.781 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: DepthListener heartbeat: Last update 3 seconds ago. Update rate: 184.76 updates/sec. Total updates: 6467
+2025-05-05 13:51:59.781 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: DepthListener heartbeat: Last update 8 seconds ago. Update rate: 161.67 updates/sec. Total updates: 6467
+2025-05-05 13:52:02.699 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: 2025-05-05 13:52:02 HEARTBEAT: Instruments=6419, Cached Orders=0, Memory (Used/Free)=139273360/2008210288 bytes, Continuous Trading=true, Latest Best Prices=6419
+2025-05-05 13:52:04.781 [WARNING] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: WARNING: No market data updates for 13 seconds. Last update at Mon May 05 13:51:51 EDT 2025. Total updates received: 6467
+2025-05-05 13:52:09.782 [WARNING] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: WARNING: No market data updates for 18 seconds. Last update at Mon May 05 13:51:51 EDT 2025. Total updates received: 6467
+2025-05-05 13:52:14.781 [WARNING] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: WARNING: No market data updates for 23 seconds. Last update at Mon May 05 13:51:51 EDT 2025. Total updates received: 6467
+2025-05-05 13:52:19.781 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: DepthListener heartbeat: Last update 0 seconds ago. Update rate: 107.86 updates/sec. Total updates: 6472
+2025-05-05 13:52:19.843 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Market data health status: {timeSinceLastUpdateMs=132, lastUpdateTimestamp=1746467539711, consecutiveErrors=0, totalUpdates=6472, isHealthy=true}
+2025-05-05 13:52:24.783 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: DepthListener heartbeat: Last update 0 seconds ago. Update rate: 99.69 updates/sec. Total updates: 6480
+2025-05-05 13:52:29.782 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: DepthListener heartbeat: Last update 0 seconds ago. Update rate: 92.75 updates/sec. Total updates: 6493
+2025-05-05 13:52:32.699 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: 2025-05-05 13:52:32 HEARTBEAT: Instruments=6419, Cached Orders=0, Memory (Used/Free)=143798520/2003685128 bytes, Continuous Trading=true, Latest Best Prices=6419
+2025-05-05 13:52:34.783 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: DepthListener heartbeat: Last update 0 seconds ago. Update rate: 86.72 updates/sec. Total updates: 6504
+2025-05-05 13:52:39.782 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: DepthListener heartbeat: Last update 0 seconds ago. Update rate: 81.40 updates/sec. Total updates: 6512
+2025-05-05 13:52:44.782 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: DepthListener heartbeat: Last update 1 seconds ago. Update rate: 76.70 updates/sec. Total updates: 6520
+2025-05-05 13:52:49.784 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: DepthListener heartbeat: Last update 6 seconds ago. Update rate: 72.44 updates/sec. Total updates: 6520
+2025-05-05 13:52:49.842 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Market data health status: {timeSinceLastUpdateMs=6322, lastUpdateTimestamp=1746467563520, consecutiveErrors=0, totalUpdates=6520, isHealthy=true}
+2025-05-05 13:52:54.783 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: DepthListener heartbeat: Last update 0 seconds ago. Update rate: 68.64 updates/sec. Total updates: 6521
+2025-05-05 13:52:59.782 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: DepthListener heartbeat: Last update 5 seconds ago. Update rate: 65.21 updates/sec. Total updates: 6521
+2025-05-05 13:53:02.700 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: 2025-05-05 13:53:02 HEARTBEAT: Instruments=6419, Cached Orders=0, Memory (Used/Free)=143798520/2003685128 bytes, Continuous Trading=true, Latest Best Prices=6419
+2025-05-05 13:53:04.783 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: DepthListener heartbeat: Last update 2 seconds ago. Update rate: 62.12 updates/sec. Total updates: 6523
+2025-05-05 13:53:09.784 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: DepthListener heartbeat: Last update 0 seconds ago. Update rate: 59.31 updates/sec. Total updates: 6524
+2025-05-05 13:53:14.571 [WARNING] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Skipping update - no valid instrument ID found in record: USD.CM_INSTRUMENT.VMO_REPO_US.GC_TU10_C_Fixed
+2025-05-05 13:53:14.571 [WARNING] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Skipping update - no valid instrument ID found in record: USD.CM_INSTRUMENT.VMO_REPO_US.GC_TU10_C_Fixed
+2025-05-05 13:53:14.782 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: DepthListener heartbeat: Last update 0 seconds ago. Update rate: 56.82 updates/sec. Total updates: 6534
+2025-05-05 13:53:19.782 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: DepthListener heartbeat: Last update 0 seconds ago. Update rate: 54.52 updates/sec. Total updates: 6543
+2025-05-05 13:53:19.844 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Market data health status: {timeSinceLastUpdateMs=921, lastUpdateTimestamp=1746467598923, consecutiveErrors=0, totalUpdates=6543, isHealthy=true}
+2025-05-05 13:53:24.783 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: DepthListener heartbeat: Last update 0 seconds ago. Update rate: 52.42 updates/sec. Total updates: 6553
+2025-05-05 13:53:29.784 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: DepthListener heartbeat: Last update 0 seconds ago. Update rate: 50.48 updates/sec. Total updates: 6563
+2025-05-05 13:53:32.703 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: 2025-05-05 13:53:32 HEARTBEAT: Instruments=6419, Cached Orders=0, Memory (Used/Free)=144259296/2003224352 bytes, Continuous Trading=true, Latest Best Prices=6419
+2025-05-05 13:53:34.784 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: DepthListener heartbeat: Last update 0 seconds ago. Update rate: 48.69 updates/sec. Total updates: 6574
+2025-05-05 13:53:39.783 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: DepthListener heartbeat: Last update 4 seconds ago. Update rate: 46.96 updates/sec. Total updates: 6575
+2025-05-05 13:53:44.784 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: DepthListener heartbeat: Last update 0 seconds ago. Update rate: 45.36 updates/sec. Total updates: 6578
+2025-05-05 13:53:49.785 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: DepthListener heartbeat: Last update 5 seconds ago. Update rate: 43.85 updates/sec. Total updates: 6578
+2025-05-05 13:53:49.843 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Market data health status: {timeSinceLastUpdateMs=5908, lastUpdateTimestamp=1746467623935, consecutiveErrors=0, totalUpdates=6578, isHealthy=true}
+2025-05-05 13:53:54.783 [WARNING] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: WARNING: No market data updates for 10 seconds. Last update at Mon May 05 13:53:43 EDT 2025. Total updates received: 6578
+2025-05-05 13:53:59.784 [WARNING] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: WARNING: No market data updates for 15 seconds. Last update at Mon May 05 13:53:43 EDT 2025. Total updates received: 6578
+2025-05-05 13:54:02.701 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: 2025-05-05 13:54:02 HEARTBEAT: Instruments=6419, Cached Orders=0, Memory (Used/Free)=144259296/2003224352 bytes, Continuous Trading=true, Latest Best Prices=6419
+2025-05-05 13:54:04.783 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: DepthListener heartbeat: Last update 0 seconds ago. Update rate: 39.91 updates/sec. Total updates: 6585
