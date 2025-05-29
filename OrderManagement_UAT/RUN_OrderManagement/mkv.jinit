@@ -2,7 +2,7 @@
 mkv.component = OrderManagement
 mkv.user = mkv
 mkv.pwd = mkvpwd
-mkv.cshost = 10.74.124.72
+mkv.cshost = 10.74.124.71
 mkv.csport = 20000
 mkv.listen = 17996
 mkv.debug = 1
