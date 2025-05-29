@@ -1,0 +1,37 @@
+2025-04-24 20:30:51.911 [INFO] com.iontrading.samples.advanced.orderManagement.AsyncLoggingManager: Logging initialized
+2025-04-24 20:30:51.938 [INFO] com.iontrading.samples.advanced.orderManagement.AsyncLoggingManager: Log file: U:\jmkv168p9\OrderManagement3\RUN_OrderManagement\logs\orderManagement_2025-04-24.log
+2025-04-24 20:30:51.971 [INFO] com.iontrading.samples.advanced.orderManagement.AsyncLoggingManager: Logging levels - File: ALL, Console: FINE
+2025-04-24 20:30:52.329 [INFO] com.iontrading.samples.advanced.orderManagement.AsyncLoggingManager: Machine-readable logging initialized: U:\jmkv168p9\OrderManagement3\RUN_OrderManagement\logs\orderManagement_2025-04-24_machine.log
+2025-04-24 20:30:52.358 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Asynchronous logging initialized for orderManagement_2025-04-24
+2025-04-24 20:30:54.555 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Global log level set to INFO
+2025-04-24 20:30:54.567 [INFO] com.iontrading.samples.advanced.orderManagement.OrderManagement: Starting auto-shutdown monitor. Will shutdown at 5:00 PM local time.
+2025-04-24 20:30:54.557 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Log level for com.iontrading.samples.advanced.orderManagement.AsyncLoggingManager set to WARNING
+2025-04-24 20:30:54.557 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Log level for com.iontrading.samples.advanced.orderManagement.MarketDef set to INFO
+2025-04-24 20:30:54.645 [WARNING] com.iontrading.samples.advanced.orderManagement.OrderManagement: Current time 20:30:54.644278400 is after scheduled shutdown time 17:00. Shutting down...
+2025-04-24 20:30:54.557 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Log level for com.iontrading.samples.advanced.orderManagement.Best set to INFO
+2025-04-24 20:30:54.557 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Log level for com.iontrading.samples.advanced.orderManagement.InstrumentSubscriber set to INFO
+2025-04-24 20:30:54.557 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Log level for com.iontrading.samples.advanced.orderManagement.OrderManagement set to FINE
+2025-04-24 20:30:54.557 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Log level for com.iontrading.samples.advanced.orderManagement.MarketOrder set to FINE
+2025-04-24 20:30:54.557 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Log level for com.iontrading.samples.advanced.orderManagement.DepthListener set to FINE
+2025-04-24 20:30:54.558 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Starting in DEVELOPMENT mode
+2025-04-24 20:30:54.558 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Starting OrderManagement
+2025-04-24 20:30:54.560 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Application ID: Java_Order_Manager
+2025-04-24 20:30:54.564 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Venue to trader mapping initialized with 3 entries
+2025-04-24 20:30:54.567 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Market recheck scheduler initialized
+2025-04-24 20:30:54.627 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Initializing InstrumentSubscriber
+2025-04-24 20:30:54.679 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Shutdown sequence initiated
+2025-04-24 20:30:54.680 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Continuous trading disabled
+2025-04-24 20:30:54.680 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Canceling all outstanding orders
+2025-04-24 20:30:54.680 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Canceled 0 orders
+2025-04-24 20:30:54.680 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Shutting down Heartbeat scheduler
+2025-04-24 20:30:54.680 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Starting Mkv for InstrumentSubscriber
+2025-04-24 20:30:54.680 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Shutting down Market recheck scheduler
+2025-04-24 20:30:54.681 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Shutting down Auto-shutdown scheduler
+2025-04-24 20:30:54.769 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Setting QoS for InstrumentSubscriber
+2025-04-24 20:30:56.564 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Mkv platform started
+2025-04-24 20:30:56.642 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Mkv started for InstrumentSubscriber
+2025-04-24 20:30:56.643 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Data not yet loaded, adding callback to queue
+2025-04-24 20:30:56.643 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Starting MKV API
+2025-04-24 20:30:56.643 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: MKV API already started
+2025-04-24 20:30:56.643 [INFO] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Waiting for instrument data to be loaded...
+2025-04-24 20:30:59.682 [WARNING] com.iontrading.samples.advanced.orderManagement.ApplicationLogging: Auto-shutdown scheduler did not terminate in time, forcing shutdown
