@@ -174,7 +174,7 @@ private final Map<String, Long> lastTradeTimeByInstrument =
   private boolean continuousTradingEnabled = true;
   //Timer for periodic market rechecks
   private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
-  
+
   private final Map<String, String> venueToTraderMap = new HashMap<>();
   // Pattern identifiers from MarketDef
   private static final String DEPTH_PATTERN = MarketDef.DEPTH_PATTERN;
@@ -222,18 +222,16 @@ private final Map<String, Long> lastTradeTimeByInstrument =
   private redis.clients.jedis.JedisPool jedisPool;
   private boolean isRedisConnected = false;
   
+  private final Map<String, Integer> orderIdToReqIdMap = new HashMap<>();
+
   private final Object gcDataLock = new Object();
   private final AtomicReference<Double> latestCashGC = new AtomicReference<>(0.0);
   private final AtomicReference<Double> latestRegGC = new AtomicReference<>(0.0);
   private final AtomicReference<GCBest> sharedGCBestCash = new AtomicReference<>();
   private final AtomicReference<GCBest> sharedGCBestREG = new AtomicReference<>();
-//   private volatile double latestCashGC = 0.0;
-//   private volatile double latestRegGC = 0.0;
-//   private volatile GCBest sharedGCBestCash = null;
-//   private volatile GCBest sharedGCBestREG = null;
+
   private final Map<String, Best> latestBestByInstrument = new ConcurrentHashMap<String, Best>() {
     private static final int MAX_SIZE = 5000;
-    
     @Override
     public Best put(String key, Best value) {
         if (size() >= MAX_SIZE) {
@@ -969,6 +967,43 @@ private void trySubscribeAndRemoveListener(MkvObject mkvObject, MkvPublishManage
   }
 
   /**
+   * Maps an order ID to a request ID for tracking purposes.
+   * 
+   * @param orderId The order ID to map
+   * @param reqId The request ID to associate with the order ID
+   */
+  public void mapOrderIdToReqId(String orderId, int reqId) {
+      if (orderId != null && !orderId.isEmpty()) {
+          orderIdToReqIdMap.put(orderId, reqId);
+      }
+  }
+
+    // Then your lookup becomes much more efficient
+    public MarketOrder getOrderByOrderId(String orderId) {
+        if (orderId == null || orderId.isEmpty()) {
+            LOGGER.warn("Cannot find order with null or empty orderId");
+            return null;
+        }
+        
+        Integer reqId = orderIdToReqIdMap.get(orderId);
+        if (reqId != null) {
+            return getOrder(reqId);
+        }
+        
+        // Fall back to full search if not found in map
+        // This handles edge cases where the index wasn't updated
+        for (MarketOrder order : orders.values()) {
+            if (orderId.equals(order.getOrderId())) {
+                // Update the map for future lookups
+                orderIdToReqIdMap.put(orderId, order.getMyReqId());
+                return order;
+            }
+        }
+        
+        return null;
+    }
+
+  /**
    * The component doesn't need to listen to partial updates for records.
    */
   public void onPartialUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply,
@@ -989,11 +1024,11 @@ private void trySubscribeAndRemoveListener(MkvObject mkvObject, MkvPublishManage
       boolean isSnap) {
     try {
       // Get the UserData (contains our request ID) and FreeText (contains our application ID)
-      String userData = mkvRecord.getValue("UserData").getString();
-      String freeText = mkvRecord.getValue("FreeText").getString();
+      String CompNameOrigin = mkvRecord.getValue("CompNameOrigin").getString();
+      String orderId = mkvRecord.getValue("Id").getString();
       
       // If this order wasn't placed by us, ignore it
-      if ("".equals(userData) || !freeText.equals(getApplicationId())) {
+      if ("".equals(orderId) || !"orderManagement".equals(CompNameOrigin)) {
         if (LOGGER.isDebugEnabled()) {
           LOGGER.debug("Ignoring order update for non-matching order: {}",
               mkvRecord.getName());
@@ -1003,26 +1038,24 @@ private void trySubscribeAndRemoveListener(MkvObject mkvObject, MkvPublishManage
         // This is an order we placed - forward the update to the MarketOrder
         try {
           // Parse the request ID from the UserData
-          int reqId = Integer.parseInt(userData);
           if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("Processing order update: reqId={}", reqId);
+            LOGGER.debug("Processing order update: orderId={}", orderId);
           }
           // Get the corresponding MarketOrder from the cache
-          MarketOrder order = getOrder(reqId);
+          MarketOrder order = getOrderByOrderId(orderId);
           
           if (order != null) {
             // Forward the update to the order
             if (LOGGER.isDebugEnabled()) {
-              LOGGER.debug("Forwarding update to order: reqId={}", reqId);
+              LOGGER.debug("Forwarding update to order: orderId={}", orderId);
             }
             order.onFullUpdate(mkvRecord, mkvSupply, isSnap);
-            String orderStatus = mkvRecord.getValue("Status").getString();
-            if ("Canceled".equals(orderStatus) || "Filled".equals(orderStatus) || 
-                "Rejected".equals(orderStatus)) {
+            int orderStatus = mkvRecord.getValue("TradingStatus").getInt();
+            if (!(orderStatus == 2) || !(orderStatus == 1)) {
                 removeOrder(order.getMyReqId());
             }
           } else {
-            LOGGER.debug("Order not found in cache: reqId={}", reqId);
+            LOGGER.debug("Order not found in cache: orderId={}", orderId);
           }
         } catch (Exception e) {
           LOGGER.error("Error processing order update: {}", e.getMessage(), e);
@@ -1833,9 +1866,6 @@ private void initializeHeartbeat() {
             status.put("state", isSystemStopped ? "STOPPED" : "RUNNING");
             status.put("continuousTrading", continuousTradingEnabled);
             status.put("activeOrders", orders.size());
-
-
-
 
             // Gather trading statistics
             int instrumentCount = depthListener != null ? 

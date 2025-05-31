@@ -52,4 +52,12 @@ public interface IOrderManager {
 	 * @return The unique application identifier
 	 */
 	public String getApplicationId();
+
+		/**
+	 * Maps an order ID to a request ID for lookup purposes
+	 * 
+	 * @param orderId The order ID from the market
+	 * @param reqId The internal request ID
+	 */
+	void mapOrderIdToReqId(String orderId, int reqId);
 }

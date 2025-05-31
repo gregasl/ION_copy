@@ -296,73 +296,8 @@ public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener {
     orderCallback.orderDead(this);
   }
 
-  /**
-   * Called when the function call to create an order succeeds.
-   * The order is now in the market and we'll start receiving updates.
-   */
-  /**
-   * Called when the function call to create an order succeeds.
-   * The order is now in the market and we'll start receiving updates.
-   */
   public void onResult(MkvFunctionCallEvent mkvFunctionCallEvent, MkvSupply mkvSupply) {
-	    try {
-	        // Check if we have a response
-	        if (mkvSupply != null) {
-	            // Get the first field index
-	            int firstIndex = mkvSupply.firstIndex();
-
-	            if (firstIndex >= 0 && mkvSupply.isSet(firstIndex)) {
-	                // The first field should be the order ID
-	                String responseOrderId = mkvSupply.getString(firstIndex);
-
-	                if (responseOrderId != null && !responseOrderId.isEmpty()) {
-	                    // Extract just the ID portion using regex
-	                    String extractedId = extractIdFromResponse(responseOrderId);
-	                    
-	                    // Set the extracted order ID
-	                    setOrderId(extractedId);
-
-	                    LOGGER.info("Order creation succeeded: reqId={}, orderId={}", myReqId, extractedId);
-
-	                    // Log to machine-readable format if needed
-	                    ApplicationLogging.logOrderUpdate(
-	                        "ORDER_ID_ASSIGNED",
-	                        myReqId,
-	                        extractedId,
-	                        "Order ID assigned by market"
-	                    );
-	                } else {
-	                    LOGGER.warn("Order creation succeeded but empty order ID received: reqId={}", myReqId);
-	                }
-	            } else {
-	                LOGGER.warn("Order creation succeeded but no order ID field in response: reqId={}", myReqId);
-	            }
-	        } else {
-	            LOGGER.warn("Order creation succeeded but received null response: reqId={}", myReqId);
-	        }
-	    } catch (Exception e) {
-	        LOGGER.error("Error extracting order ID from response: reqId={}, error={}", myReqId, e.getMessage(), e);
-	    }
-	}
-
-	/**
-	 * Extracts the ID portion from the response string
-	 * Example input: "0:OK -Result {-Id {4214177636_20250515}  -OrderTmpId {MKV_USP_91282CMV0_C_Par_0_1747306800044}  }"
-	 * Example output: "4214177636_20250515"
-	 */
-	private String extractIdFromResponse(String responseString) {
-	    // Look for pattern: -Id {XXXX}
-	    int idStart = responseString.indexOf("-Id {");
-	    if (idStart >= 0) {
-	        idStart += 5; // Move past "-Id {"
-	        int idEnd = responseString.indexOf("}", idStart);
-	        if (idEnd > idStart) {
-	            return responseString.substring(idStart, idEnd).trim();
-	        }
-	    }
-	    
-	    // If we couldn't extract the ID, return the original string
-	    return responseString;
+	   // not needed for this implementation
 	}
 
   /**
@@ -419,8 +354,8 @@ public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener {
    * This is now accessible to support cancel operations
    */
   public void setOrderId(String oid) {
-      LOGGER.info("Setting order ID: reqId={}, orderId={}", myReqId, oid);
-      orderId = oid;
+	  LOGGER.info("Setting order ID: reqId={}, orderId={}", myReqId, oid);
+	  orderId = oid;
   }
 
   public static long getOrderTtlMs() {
@@ -485,7 +420,9 @@ public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener {
       
       // Get and store the order ID from the market
       setOrderId(mkvRecord.getValue("Id").toString());
-
+      if (orderCallback != null) {
+    	  orderCallback.mapOrderIdToReqId(getOrderId(), myReqId);
+      }
       LOGGER.info("Received full update for order: reqId={}, orderId={}, active={}", myReqId, getOrderId(), active);
 
       // If the order is closed, notify the order manager

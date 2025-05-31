@@ -32,8 +32,8 @@ public class MarketDef {
 	 * The standard order fields to subscribe to for CM_ORDER records.
 	 * These fields provide essential information about order state and execution.
 	 */
-	public static String[] ORDER_FIELDS = { "Id", "QtyHit", "QtyTot", "Active",
-			"Status", "Price", "FreeText", "UserData" };
+	public static String[] ORDER_FIELDS = { "Id", "InstrumentId", "CompNameOrigin", "QtyFill", "QtyTot", "Active",
+			"OrigId", "TradingStatus", "QtyStatus", "Price", "FreeText", "UserData" };
 
 	/**
 	 * The standard depth fields to subscribe to for CM_DEPTH records.
