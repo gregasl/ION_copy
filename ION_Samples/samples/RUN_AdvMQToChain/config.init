@@ -1,0 +1,1 @@
+XTP_Trade TRS_AF_SearchTrades	STR trade_management_10 STR TradeDateFrom INT 20100406 STR TradeDateTo INT 20100517 STR TradeNum INT 1000000

@@ -1,0 +1,10 @@
+#STANDARD SETTINGS
+mkv.component = Subscriber
+mkv.user = mkvuser
+mkv.pwd = mkvpwd  
+mkv.cshost = localhost
+mkv.csport = 13000
+mkv.listen = 17030
+mkv.debug = 1
+mkv.debuglevel = 1
+mkv.logsdir = SUB_LOGS

@@ -1,0 +1,8 @@
+#STANDARD SETTINGS
+mkv.component = SimplePermChainSubscriber
+mkv.user = mkv
+mkv.pwd = mkvpwd  
+mkv.cshost = 10.74.124.71
+mkv.csport = 21000
+mkv.debug = 1
+mkv.debuglevel = 1
