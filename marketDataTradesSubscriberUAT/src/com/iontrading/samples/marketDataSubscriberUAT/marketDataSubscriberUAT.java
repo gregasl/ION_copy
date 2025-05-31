@@ -10,11 +10,14 @@ import com.iontrading.mkv.exceptions.MkvException;
 import com.iontrading.mkv.qos.MkvQoS;
 
 import redis.clients.jedis.Jedis;
+import redis.clients.jedis.JedisPool;
+import redis.clients.jedis.JedisPoolConfig;
 import redis.clients.jedis.exceptions.JedisConnectionException;
+import java.util.concurrent.atomic.AtomicReference;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Instant;
-
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.concurrent.*;
 import java.util.HashMap;
@@ -32,6 +35,8 @@ public class marketDataSubscriberUAT {
     private static final Logger LOGGER = Logger.getLogger(marketDataSubscriberUAT.class.getName());
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
+    public final String hostname = System.getenv("COMPUTERNAME");
+    
     // Static block for logging setup with async handler
     static {
         try {
@@ -124,13 +129,29 @@ public class marketDataSubscriberUAT {
         @Override
         public void close() throws SecurityException {
             isRunning = false;
+            worker.interrupt(); // Interrupt to break out of blocking queue poll
             try {
-                worker.join(5000); // Wait up to 5 second for worker to finish
+                worker.join(5000); // Wait up to 5 seconds for worker to finish
+                if (worker.isAlive()) {
+                    LOGGER.warning("AsyncHandler worker thread did not terminate within timeout");
+                }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
+                LOGGER.warning("Interrupted while waiting for AsyncHandler worker to terminate");
+            }
+            
+            // Drain remaining items if any and process them
+            List<LogRecord> remainingLogs = new ArrayList<>();
+            queue.drainTo(remainingLogs);
+            if (!remainingLogs.isEmpty() && handler != null) {
+                LOGGER.info("Processing " + remainingLogs.size() + " remaining log records");
+                for (LogRecord record : remainingLogs) {
+                    handler.publish(record);
+                }
             }
             
             if (handler != null) {
+                handler.flush();
                 handler.close();
             }
         }
@@ -141,14 +162,19 @@ public class marketDataSubscriberUAT {
     private static final String PATTERN = "USD.CM_DEPTH." + SOURCE + ".";
     private static final String PATTERNINSTRUMENT = "USD.CM_INSTRUMENT." + SOURCE + ".";
     private static final String PATTERNTRADE = "USD.CM_TRADE." + SOURCE + ".";
+    private static final String PATTERNORDER = "USD.CM_ORDER." + SOURCE + ".";
     private static final String REDIS_CHANNEL = "ION:ION_MARKET_DATA_UAT";
     private static final String REDIS_CHANNEL_INSTRUMENT = "ION:ION_INSTRUMENT_DATA_UAT";
     private static final String REDIS_CHANNEL_TRADE = "ION:ION_TRADE_DATA_UAT";
+    private static final String REDIS_CHANNEL_ORDER = "ION:ION_TRADE_ORDER_UAT";
     private static final String REDIS_HOST = "cacheuat";
     private static final int REDIS_PORT = 6379;
     private static final int TIMEOUT = 5000;
     private static final int EXPIRY_SECONDS = 86400; // 24 hours
 
+    private static final int PRICE_AON = 0x0010;
+    private static final int PRICE_MINE = 0x0020;  // Price belongs to the bank
+    
     private volatile long lastUpdateTimestamp = System.currentTimeMillis();
     private final ScheduledExecutorService shutdownScheduler = Executors.newScheduledThreadPool(1);
     
@@ -170,7 +196,9 @@ public class marketDataSubscriberUAT {
         "AskAttribute0", "AskAttribute1", "AskAttribute2", "AskAttribute3", "AskAttribute4", "AskAttribute5", 
         "AskAttribute6", "AskAttribute7", "AskAttribute8", "AskAttribute9", "BidAttribute0", "BidAttribute1",
         "BidAttribute2", "BidAttribute3", "BidAttribute4", "BidAttribute5", "BidAttribute6", "BidAttribute7", 
-        "BidAttribute8", "BidAttribute9"
+        "BidAttribute8", "BidAttribute9","Ask0Status", "Ask1Status", "Ask2Status", "Ask3Status", "Ask4Status", 
+        "Ask5Status", "Ask6Status", "Ask7Status", "Ask8Status", "Ask9Status", "Bid0Status", "Bid1Status", 
+        "Bid2Status", "Bid3Status", "Bid4Status", "Bid5Status", "Bid6Status", "Bid7Status", "Bid8Status", "Bid9Status"
     };
 
     // Fields for subscription
@@ -180,18 +208,29 @@ public class marketDataSubscriberUAT {
     
     // Fields for subscription
     private String[] fieldsTrade = new String[]{
-        "Id", "Code", "InstrumentId", "Desc", "CompNameOrigin", "DPriceStart", "CashStart", 
-        "OrigSrc","Price", "Qty", "TimeCreation"
+        "Id", "Code", "Date", "InstrumentId", "Desc", "CompNameOrigin", "DPriceStart", "CashStart", 
+        "OrderId", "OrigSrc","Price", "Qty", "TimeCreation"
     };
 
+    // Fields for subscription
+    private String[] fieldsOrder = new String[]{
+        "Active", "Code", "Date", "Desc", "Id", "InstrumentId", "Price", "QtyFill", "QtyStatus", "QtyTot", "TimeInForce", "TimeUpd", 
+        "Trader", "TradingStatus", "Verb" 
+    };
+
+    
     // Thread pools and control flags
     private final ExecutorService publishExecutor;
     private final ExecutorService processingExecutor;
     private volatile boolean running = true;
-    private boolean isRedisConnected = false;
+    private final AtomicReference<Boolean> isRedisConnected = new AtomicReference<>(false);
     
     // Redis connection
-    private Jedis jedis;
+    private JedisPool jedisPool;
+
+    private static final String HEARTBEAT_CHANNEL = "HEARTBEAT:ION:MARKET_DATA_UAT";
+    private static final int HEARTBEAT_INTERVAL_SECONDS = 30;
+    private ScheduledExecutorService heartbeatScheduler;
 
     // Initialize market data with zeros
     private void initializeMarketData() {
@@ -209,29 +248,10 @@ public class marketDataSubscriberUAT {
 
         initializeRedisConnection();
         initializeMkvConnection(args);
-        
-        // Start the auto-shutdown monitoring
-//        scheduleAutoShutdown();
 
         Runtime.getRuntime().addShutdownHook(new Thread(this::shutdown));
     }
 
-//    private void scheduleAutoShutdown() {
-//        LOGGER.info("Starting auto-shutdown monitor. Will shutdown at 5:00 PM local time.");
-//        
-//        shutdownScheduler.scheduleAtFixedRate(() -> {
-//
-//            // Check for time-based shutdown (5:00 PM)
-//            LocalTime currentTime = LocalTime.now();
-//            LocalTime shutdownTime = LocalTime.of(17, 0); // 5:00 PM
-//            
-//            if (currentTime.isAfter(shutdownTime)) {
-//                LOGGER.warning("Current time " + currentTime + " is after scheduled shutdown time " + 
-//                              shutdownTime + ". Shutting down...");
-//                shutdown();
-//            }
-//        }, 0, 5, TimeUnit.MINUTES); // Check every minute
-//    }
     
     // Create executor service with named threads
     private ExecutorService createExecutorService(String threadNamePrefix) {
@@ -248,15 +268,52 @@ public class marketDataSubscriberUAT {
 
     // Initialize Redis connection
     private void initializeRedisConnection() {
-        if (!isRedisConnected) {
+        if (!isRedisConnected.get()) {
             try {
-                jedis = new Jedis(REDIS_HOST, REDIS_PORT, TIMEOUT);
-                LOGGER.info("Connected to Redis at " + REDIS_HOST + ":" + REDIS_PORT);
-                isRedisConnected = true;
+                // Configure JedisPool
+                JedisPoolConfig poolConfig = new JedisPoolConfig();
+                poolConfig.setMaxTotal(16);              // Maximum active connections
+                poolConfig.setMaxIdle(8);                // Maximum idle connections
+                poolConfig.setMinIdle(2);                // Minimum idle connections 
+                poolConfig.setTestOnBorrow(true);        // Test connections when borrowed
+                poolConfig.setTestOnReturn(true);        // Test connections when returned
+                poolConfig.setTestWhileIdle(true);       // Test idle connections
+                poolConfig.setMaxWaitMillis(10000);      // Max wait time for connection
+                
+                jedisPool = new JedisPool(poolConfig, REDIS_HOST, REDIS_PORT, TIMEOUT);
+                
+                // Test connection
+                try (Jedis testJedis = jedisPool.getResource()) {
+                    testJedis.clientSetname(hostname + ":marketDataSubscriberUAT");
+                    isRedisConnected.set(true);
+                    LOGGER.info("Connected to Redis at " + REDIS_HOST + ":" + REDIS_PORT + " using JedisPool");
+                    
+                    // Start heartbeat after successful connection
+                    startHeartbeat();
+                }
             } catch (Exception e) {
                 LOGGER.log(Level.SEVERE, "Error connecting to Redis", e);
                 throw new RuntimeException("Redis connection failed", e);
             }
+        }
+    }
+
+    private void startHeartbeat() {
+        if (heartbeatScheduler == null || heartbeatScheduler.isShutdown()) {
+            heartbeatScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r);
+                t.setDaemon(true);
+                t.setName("Redis-Heartbeat");
+                return t;
+            });
+            
+            heartbeatScheduler.scheduleAtFixedRate(() -> {
+                if (isRedisConnected.get()) {
+                    sendHeartbeat();
+                }
+            }, 0, HEARTBEAT_INTERVAL_SECONDS, TimeUnit.SECONDS);
+            
+            LOGGER.info("Redis heartbeat scheduled every " + HEARTBEAT_INTERVAL_SECONDS + " seconds");
         }
     }
 
@@ -277,7 +334,12 @@ public class marketDataSubscriberUAT {
 
     // Publish method with JSON support
     public void publishToRedis(String key, String recordName, Map<String, Object> data) {
-        try {
+        if (!isRedisConnected.get()) {
+            initializeRedisConnection();
+            return;
+        }
+
+        try (Jedis jedis = jedisPool.getResource()) {
             // Create a comprehensive payload
             Map<String, Object> payload = new HashMap<>();
             DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
@@ -298,7 +360,6 @@ public class marketDataSubscriberUAT {
         } catch (JedisConnectionException jce) {
             LOGGER.log(Level.SEVERE, "Redis connection lost, attempting to reconnect", jce);
             try {
-                jedis.close();
                 initializeRedisConnection();
             } catch (Exception e) {
                 LOGGER.log(Level.SEVERE, "Failed to reconnect to Redis", e);
@@ -339,33 +400,34 @@ public class marketDataSubscriberUAT {
                     String fieldName = mkvRecord.getMkvType().getFieldName(cursor);
                     Object fieldValue = mkvSupply.getObject(cursor);
                     
-                    //updates for AONs
-                    if (fieldName.startsWith("BidAttribute") || fieldName.startsWith("AskAttribute")) {
+                    //updates for AONs and ASL Orders
+                    if ((fieldName.startsWith("Bid") || fieldName.startsWith("Ask")) && fieldName.endsWith("Status")) {
                         try {
                             int attributeIndex = -1;
                             String prefix = null;
-                            
+                            attributeIndex = Integer.parseInt(fieldName.substring(3, fieldName.length()-5));
                             // Extract the index from the attribute field name
-                            if (fieldName.startsWith("BidAttribute")) {
-                                attributeIndex = Integer.parseInt(fieldName.substring("BidAttribute".length()));
+                            if (fieldName.startsWith("Bid")) {
                                 prefix = "Bid";
                             } else { // AskAttribute
-                                attributeIndex = Integer.parseInt(fieldName.substring("AskAttribute".length()));
                                 prefix = "Ask";
                             }
                             
                             // Process the attribute - check if it ends with "AON"
                             if (fieldValue != null) {
-                                String strValue = fieldValue.toString();
-                                boolean isAON = strValue.endsWith("AON");
+           
+                            	int intValue = Integer.parseInt(fieldValue.toString());
+                                boolean isAON = isBitSet(intValue, PRICE_AON);
+                                boolean isASLOrder = isBitSet(intValue, PRICE_MINE);
                                 
                                 // Store with a new field name format: Ask0IsAON, Bid2IsAON, etc.
                                 String newFieldName = prefix + attributeIndex + "IsAON";
                                 recordData.put(newFieldName, isAON);
                                 
-                                // Optionally, also log this transformation for debugging
-                                LOGGER.fine("Transformed " + fieldName + "=" + strValue + 
-                                        " to " + newFieldName + "=" + isAON);
+                                // Store with a new field name format: Ask0IsASL, Bid2IsASL, etc.
+                                String newASLOrderName = prefix + attributeIndex + "IsASL";
+                                recordData.put(newASLOrderName, isASLOrder);
+
                             }
                         } catch (NumberFormatException e) {
                             LOGGER.log(Level.SEVERE, "Error parsing attribute index from field: " + fieldName, e);
@@ -472,6 +534,47 @@ public class marketDataSubscriberUAT {
         }
     }
 
+    private class OrderDataListener implements MkvRecordListener {
+        private final Map<String, Map<String, Object>> recordDataMap = new ConcurrentHashMap<>();
+        private final List<String> fieldsList = Arrays.asList(fieldsOrder);
+
+        public void onPartialUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolean isSnapshot) {
+            updateRecord(mkvRecord, mkvSupply);
+        }
+
+        public void onFullUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolean isSnapshot) {
+            updateRecord(mkvRecord, mkvSupply);
+        }
+
+        private void updateRecord(MkvRecord mkvRecord, MkvSupply mkvSupply) {
+            try {
+                String recordName = mkvRecord.getName();
+                recordName = recordName.replace(":", "_");
+                int cursor = mkvSupply.firstIndex();
+
+                recordDataMap.putIfAbsent(recordName, new HashMap<>());
+                Map<String, Object> recordData = recordDataMap.get(recordName);
+
+                while (cursor != -1) {
+                    String fieldName = mkvRecord.getMkvType().getFieldName(cursor);
+                    Object fieldValue = mkvSupply.getObject(cursor);
+                    
+                    if (fieldsList.contains(fieldName)) {
+                        recordData.put(fieldName, fieldValue != null ? fieldValue : "null");
+                    }
+                    cursor = mkvSupply.nextIndex(cursor);
+                }
+
+                // Publish trade data to Redis
+                String key = REDIS_CHANNEL_ORDER+ ":" + recordName;
+                publishToRedis(key, recordName, recordData);
+
+            } catch (Exception e) {
+                LOGGER.log(Level.SEVERE, "Error processing trade data update", e);
+            }
+        }
+    }
+    
     // Platform Listener inner class
     private class PlatformListener implements MkvPlatformListener {
         public void onComponent(MkvComponent component, boolean start) {}
@@ -489,9 +592,11 @@ public class marketDataSubscriberUAT {
         private final MkvRecordListener dataListener = new DataListener();
         private final MkvRecordListener instrumentListener = new InstrumentListener();
         private final MkvRecordListener tradeListener = new TradeDataListener();
+        private final MkvRecordListener orderListener = new OrderDataListener();
         private volatile boolean isDepthSubscribed = false;
         private volatile boolean isInstrumentSubscribed = false;
         private volatile boolean isTradeSubscribed = false;
+        private volatile boolean isOrderSubscribed = false;
         
         private synchronized void safeSubscribe(MkvPattern pattern) {
             // Check which pattern we're dealing with
@@ -528,6 +633,17 @@ public class marketDataSubscriberUAT {
                         isInstrumentSubscribed = false;
                     }
                 }
+            }  else if (pattern.getName().startsWith("USD.CM_ORDER")) {
+                if (!isInstrumentSubscribed) {
+                    try {
+                        pattern.subscribe(fieldsOrder, orderListener);
+                        isOrderSubscribed = true;
+                        LOGGER.info("Subscribed to order pattern: " + pattern.getName());
+                    } catch (Exception e) {
+                        LOGGER.log(Level.SEVERE, "Error subscribing to order data", e);
+                        isOrderSubscribed = false;
+                    }
+                }
             }
         }
         
@@ -553,11 +669,20 @@ public class marketDataSubscriberUAT {
             if (instrObj != null && instrObj.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
                 safeSubscribe((MkvPattern) instrObj);
             }
+            
+            MkvObject orderObj = Mkv.getInstance().getPublishManager().getMkvObject(PATTERNORDER);
+            if (orderObj != null && orderObj.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
+                safeSubscribe((MkvPattern) orderObj);
+            }
         }
 
         public void onSubscribe(MkvObject mkvObject) {}
     }
 
+    private boolean isBitSet(int bitmask, int bit) {
+        return (bitmask & bit) != 0;
+    }
+    
     // Shutdown method
     private void shutdown() {
         if (!running) return; // Prevent multiple shutdown calls
@@ -565,20 +690,65 @@ public class marketDataSubscriberUAT {
 
         LOGGER.info("Shutting down market data subscriber...");
         try {
-            if (jedis != null) {
-                jedis.close();
-                LOGGER.info("Redis connection closed");
+            // Send final heartbeat with stopped status if still connected
+            if (isRedisConnected.get()) {
+                try (Jedis jedis = jedisPool.getResource()) {
+                    Map<String, Object> heartbeatData = new HashMap<>();
+                    heartbeatData.put("timestamp", LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
+                    heartbeatData.put("source", hostname);
+                    heartbeatData.put("application", "marketDataSubscriberUAT");
+                    heartbeatData.put("status", "STOPPING");
+                    
+                    String jsonPayload = OBJECT_MAPPER.writeValueAsString(heartbeatData);
+                    jedis.publish(HEARTBEAT_CHANNEL, jsonPayload);
+                    LOGGER.info("Final heartbeat sent with STOPPING status");
+                } catch (Exception e) {
+                    LOGGER.log(Level.WARNING, "Failed to send final heartbeat", e);
+                }
+            }
+            
+            // Stop heartbeat scheduler
+            if (heartbeatScheduler != null) {
+                heartbeatScheduler.shutdownNow();
+                LOGGER.info("Heartbeat scheduler terminated");
+            }
+            
+            // Close JedisPool
+            if (jedisPool != null) {
+                jedisPool.close();
+                LOGGER.info("Redis connection pool closed");
             }
             
             shutdownScheduler.shutdownNow();
             LOGGER.info("Shutdown scheduler terminated");
             
-            publishExecutor.shutdownNow();
-            processingExecutor.shutdownNow();
-            LOGGER.info("Executor services terminated");
+            // Rest of the shutdown code remains the same...
+            publishExecutor.shutdown();
+            processingExecutor.shutdown();
+            
+            try {
+                if (!publishExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                    publishExecutor.shutdownNow();
+                }
+                if (!processingExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                    processingExecutor.shutdownNow();
+                }
+                LOGGER.info("Executor services terminated");
+            } catch (InterruptedException e) {
+                publishExecutor.shutdownNow();
+                processingExecutor.shutdownNow();
+                Thread.currentThread().interrupt();
+                LOGGER.warning("Executor service shutdown interrupted");
+            }
             
             Mkv.stop();
             LOGGER.info("MKV connection stopped");
+            
+            // Close logging handlers to ensure all logs are flushed
+            for (Handler handler : LOGGER.getHandlers()) {
+                handler.flush();
+                handler.close();
+            }
             
             // Release the latch to allow main thread to exit
             terminationLatch.countDown();
@@ -605,15 +775,6 @@ public class marketDataSubscriberUAT {
         LOGGER.info("Current time: " + LocalDateTime.now());
         
         try {
-//            // Check if current time is already past 5:00 PM
-//            LocalTime currentTime = LocalTime.now();
-//            LocalTime shutdownTime = LocalTime.of(17, 0); // 5:00 PM
-//            
-//            if (currentTime.isAfter(shutdownTime)) {
-//                LOGGER.warning("Current time " + currentTime + " is already after scheduled shutdown time " + 
-//                              shutdownTime + ". Not starting the application.");
-//                return;
-//            }
             
             marketDataSubscriberUAT subscriber = new marketDataSubscriberUAT(args);
             
@@ -627,6 +788,34 @@ public class marketDataSubscriberUAT {
         } catch (Exception e) {
             LOGGER.log(Level.SEVERE, "Fatal error in application", e);
             System.exit(1);
+        }
+    }
+
+    private void sendHeartbeat() {
+        try (Jedis jedis = jedisPool.getResource()) {
+            Map<String, Object> heartbeatData = new HashMap<>();
+            heartbeatData.put("timestamp", LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
+            heartbeatData.put("source", hostname);
+            heartbeatData.put("application", "marketDataSubscriberUAT");
+            heartbeatData.put("status", "RUNNING");
+            heartbeatData.put("uptime_ms", System.currentTimeMillis() - lastUpdateTimestamp);
+            
+            String jsonPayload = OBJECT_MAPPER.writeValueAsString(heartbeatData);
+            jedis.publish(HEARTBEAT_CHANNEL, jsonPayload);
+
+            // LOGGER.fine("Heartbeat sent to Redis");
+        } catch (Exception e) {
+            LOGGER.log(Level.WARNING, "Failed to send heartbeat", e);
+            isRedisConnected.set(false);
+            
+            // Try to reconnect
+            try {
+                if (jedisPool != null && !jedisPool.isClosed()) {
+                    initializeRedisConnection();
+                }
+            } catch (Exception reconnectEx) {
+                LOGGER.log(Level.SEVERE, "Failed to reconnect to Redis during heartbeat", reconnectEx);
+            }
         }
     }
 }
