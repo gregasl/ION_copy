@@ -1,0 +1,11 @@
+#STANDARD SETTINGS
+mkv.component = SimpleExternalAuthenticator
+mkv.user = mkv
+mkv.pwd = mkvpwd
+mkv.cshost = localhost
+mkv.csport = 13000
+mkv.listen = 16826
+mkv.debug = 1
+mkv.debuglevel = 1
+mk.currency = EUR
+mkv.syscomponent=1
