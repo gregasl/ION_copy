@@ -166,7 +166,7 @@ public class marketDataSubscriberUAT {
     private static final String REDIS_CHANNEL = "ION:ION_MARKET_DATA_UAT";
     private static final String REDIS_CHANNEL_INSTRUMENT = "ION:ION_INSTRUMENT_DATA_UAT";
     private static final String REDIS_CHANNEL_TRADE = "ION:ION_TRADE_DATA_UAT";
-    private static final String REDIS_CHANNEL_ORDER = "ION:ION_TRADE_ORDER_UAT";
+    private static final String REDIS_CHANNEL_ORDER = "ION:ION_ORDER_DATA_UAT";
     private static final String REDIS_HOST = "cacheuat";
     private static final int REDIS_PORT = 6379;
     private static final int TIMEOUT = 5000;
@@ -777,9 +777,6 @@ public class marketDataSubscriberUAT {
         try {
             
             marketDataSubscriberUAT subscriber = new marketDataSubscriberUAT(args);
-            
-            // Log the scheduled shutdown time
-            LOGGER.info("Application will automatically shut down at 5:00 PM local time if still running");
             
             // Keep the application running until shutdown is triggered
             subscriber.waitForTermination();
