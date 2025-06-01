@@ -157,6 +157,9 @@ public class marketDataSubscriberPROD {
     private static final int TIMEOUT = 5000;
     private static final int EXPIRY_SECONDS = 86400; // 24 hours
 
+    private static final int PRICE_AON = 0x0010;
+    private static final int PRICE_MINE = 0x0020;  // Price belongs to the bank
+
     private volatile long lastUpdateTimestamp = System.currentTimeMillis();
     private final ScheduledExecutorService shutdownScheduler = Executors.newScheduledThreadPool(1);
     
@@ -678,7 +681,7 @@ public class marketDataSubscriberPROD {
                     Map<String, Object> heartbeatData = new HashMap<>();
                     heartbeatData.put("timestamp", LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
                     heartbeatData.put("source", hostname);
-                    heartbeatData.put("application", "marketDataSubscriberUAT");
+                    heartbeatData.put("application", "marketDataSubscriber");
                     heartbeatData.put("status", "STOPPING");
                     
                     String jsonPayload = OBJECT_MAPPER.writeValueAsString(heartbeatData);
@@ -774,7 +777,7 @@ public class marketDataSubscriberPROD {
             Map<String, Object> heartbeatData = new HashMap<>();
             heartbeatData.put("timestamp", LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
             heartbeatData.put("source", hostname);
-            heartbeatData.put("application", "marketDataSubscriberUAT");
+            heartbeatData.put("application", "marketDataSubscriber");
             heartbeatData.put("status", "RUNNING");
             heartbeatData.put("uptime_ms", System.currentTimeMillis() - lastUpdateTimestamp);
             
