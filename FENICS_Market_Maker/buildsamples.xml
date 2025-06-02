@@ -1,0 +1,304 @@
+<project name="JMKVSamples" basedir=".">
+	<description>JAVA MKV API Samples</description>
+
+	<property name="build.jar.name" value="samples.jar" />
+	<property name="build.jar" value="dist/${build.jar.name}" />
+
+	<property name="libs.JMKV.jar" value="../jmkv@JMKV_VERSION@.jar" />
+
+	<property name="javac.classpath" value="${libs.JMKV.jar}" />
+	<property name="java.classpath" value="${libs.JMKV.jar}:build/classes" />
+
+	<target name="help">
+		<echo>Targets:</echo>
+		<echo>- PlatformListener: Listen for platform events</echo>
+		<echo>- SimpleLog: As PlatformListener but writes down events to a log file</echo>
+		<echo>- SimplePublisher: Publish a type, a record and supply values for the record</echo>
+		<echo>- SimplePublisher2: Same as SimplePublisher + MkvSupplyProxy mechanism</echo>
+		<echo>- SimplePublisher3: Same as SimplePublisher, it publishes an MkvRecord implementing the Subscribeable interface</echo>
+		<echo>- SimpleTimerSupplier: Publish a type, a record and supply values for the record every 500ms</echo>
+		<echo>- SimpleChainPublisher Publish a type, some records and a chain</echo>
+		<echo>- SimplePatternPublisher Publish a type, some records and a pattern</echo>
+		<echo>- SimpleSubscriber: Subscribe to the record published by SimplePublisher or SimpleTimerSupplier and listen for supplies</echo>
+		<echo>- SimpleSubscriber2: Same as SimpleSubscriber + MkvSupplyProxy mechanism</echo>
+		<echo>- SimpleChainSubscriber: Subscribe to the chain published by SimpleChainPublisher</echo>
+		<echo>- SimplePatternSubscriber: Subscribe to the pattern published by SimplePatternPublisher</echo>
+		<echo>- SimplePermChainSubscriber: Subscribe to the chain published by SimpleChainPublisher using a permanent subscription</echo>
+		<echo>- SimpleFunctionHandler: Publish and manage functions</echo>
+		<echo>- SimpleTransactionHandler: As SimplePublisher but support for transaction</echo>
+		<echo>- SimpleFunctionCaller: Calls the functions published by SimpleFunctionhandler</echo>
+		<echo>- SimpleTransactionCaller: As SimpleSubscriber but request a transaction at timer</echo>
+		<echo>- MessageQueuePublisher: Publish a function, return result on a dynamically created message queue</echo>
+		<echo>- MessageQueueSubscriber: Request MessageQueuePublisher to dynamically create a message queue, the retrieve data from it</echo>
+		<echo>- SimpleCustomStats: Show how to use the Custom Stats interface to report custom statistics</echo>
+		<echo>- SimpleCMStats: Show how to use the Custom Stats interface to report Common Market Statistics</echo>
+		<echo>- SimpleCMDrillDown: Show how to report a drill down of Common Market performance indicators</echo>
+		<echo>- SimpleCMProxy: Show how to report Custom Statistics on behalf of other components</echo>
+		<echo>- SimpleVirtualHost: Show how to use the Custom Stats interface to report standard statistics for a Virtual Host</echo>
+		<echo>- CommonMarketCustomStats: Show how to use the Custom Stats interface to report custom statistics</echo>
+		<echo>- SimpleExternalAuthenticator: Show how to implement a component behaving as an external authenticator for platform users</echo>
+		<echo>- SimpleAsyncShutdownComponent: Show how to implement a component able to request an asynchronous shutdown to the daemon</echo>
+		<echo>- SimpleQueryUserEntitlements: Show how to use the advanced query interface of the Entitlement Server</echo>
+		<echo>- SimpleGenericAuditClient: Show how to implement a component able to log Audit Events to a Generic Audit Server</echo>
+		<echo>- PersistentSubscription: Show how to use the Persistent Subscription API.</echo>
+		<echo>- Recordset: Show how to use the Recordset API.</echo>
+		<echo>- EntitlementConfiguration: Show how to configure the ION Entitlement Server.</echo>
+		<echo>- SimplePriceContributionCustomE2EDelay: Show how to use the Custom End-To-End Delay API.</echo>
+		<echo>- SimpleOnBehalfOfLicense: Show how to use the on-behalf-of API for license management.</echo>
+		<echo>- XRSClient: Show how to interact with a typical XRS publisher.</echo>
+		<echo>- AdvConfigHandling Manage configuration at runtime (ADVANCED)</echo>
+		<echo>- AdvOrderManagement Order management sample (ADVANCED)</echo>
+		<echo>- AdvProxySubscriber Supply proxy mechanism (ADVANCED)</echo>
+		<echo>- AdvSTP Use proxies and permanent subscription to subscribe to the trade chain (ADVANCED)</echo>
+		<echo>- MQToChain: Show how to implement a protocol to deliver data from a message queue to a chain</echo>
+		<echo>- OnBehalfOfRegistration: Show how to register a virtual component component on the platform</echo>
+		<echo>- TickDataApi: Show an example of usage of the TickDataApi API</echo>
+		<echo>- UltraLowLatency: Show how to leverage Ultra Low Latency message passing for same-host connections.</echo>
+		<echo>- AdvCNE CNE sample (ADVANCED)</echo>
+		<echo>- PasswordServerServiceCredentials: Show how to use the Daemon Password Server to retrieve service credentials.</echo>
+	</target>
+
+	<target name="default" depends="compile" description="Compile the samples" />
+
+	<target name="init">
+		<!-- Create the time stamp -->
+		<tstamp />
+		<!-- Create the build directory structure used by compile -->
+		<mkdir dir="build" />
+		<mkdir dir="build/classes" />
+	</target>
+
+	<target name="compile" depends="init" description="compile the source ">
+		<!-- Compile the java code from ${src} into ${build} -->
+		<copy todir="build/classes">
+			<fileset excludes="**/*.java" dir="src" />
+		</copy>
+		<javac debug="true" srcdir="src" destdir="build/classes" classpath="${javac.classpath}" />
+	</target>
+
+	<target name="clean" description="clean up">
+		<delete dir="build" />
+	</target>
+
+	<target name="PlatformListener" depends="compile">
+		<java fork="true" classname="com.iontrading.samples.platformListener.PlatformListener" dir="RUN_PlatformListener" classpath="${java.classpath}">
+		</java>
+	</target>
+
+	<target name="SimpleLog" depends="compile">
+		<java fork="true" classname="com.iontrading.samples.simpleLog.SimpleLog" dir="RUN_SimpleLog" classpath="${java.classpath}">
+		</java>
+	</target>
+
+	<target name="SimplePublisher2" depends="compile">
+		<java fork="true" classname="com.iontrading.samples.simplePublisher2.Publisher" dir="RUN_SimplePublisher2" classpath="${java.classpath}">
+		</java>
+	</target>
+
+	<target name="SimplePublisher" depends="compile">
+		<java fork="true" classname="com.iontrading.samples.simplePublisher.Publisher" dir="RUN_SimplePublisher" classpath="${java.classpath}">
+		</java>
+	</target>
+
+	<target name="SimplePublisher3" depends="compile">
+		<java fork="true" classname="com.iontrading.samples.simplePublisher3.Publisher" dir="RUN_SimplePublisher3" classpath="${java.classpath}">
+		</java>
+	</target>
+
+	<target name="SimpleTransactionHandler" depends="compile">
+		<java fork="true" classname="com.iontrading.samples.simpleTransactionHandler.TransactionHandler" dir="RUN_SimpleTransactionHandler" classpath="${java.classpath}">
+		</java>
+	</target>
+
+	<target name="SimpleChainPublisher" depends="compile">
+		<java fork="true" classname="com.iontrading.samples.simpleChainPublisher.ChainPublisher" dir="RUN_SimpleChainPublisher" classpath="${java.classpath}">
+		</java>
+	</target>
+
+	<target name="SimplePatternPublisher" depends="compile">
+		<java fork="true" classname="com.iontrading.samples.simplePatternPublisher.Publisher" dir="RUN_SimplePatternPublisher" classpath="${java.classpath}">
+		</java>
+	</target>
+
+	<target name="SimpleTimerSupplier" depends="compile">
+		<java fork="true" classname="com.iontrading.samples.simpleTimerSupplier.TimerPublisher" dir="RUN_SimpleTimerSupplier" classpath="${java.classpath}">
+		</java>
+	</target>
+
+	<target name="SimpleSubscriber" depends="compile">
+		<java fork="true" classname="com.iontrading.samples.simpleSubscriber.Subscriber" dir="RUN_SimpleSubscriber" classpath="${java.classpath}">
+		</java>
+	</target>
+
+	<target name="SimplePatternSubscriber" depends="compile">
+		<java fork="true" classname="com.iontrading.samples.simplePatternSubscriber.Subscriber" dir="RUN_SimplePatternSubscriber" classpath="${java.classpath}">
+		</java>
+	</target>
+
+	<target name="SimpleSubscriber2" depends="compile">
+		<java fork="true" classname="com.iontrading.samples.simpleSubscriber2.Subscriber" dir="RUN_SimpleSubscriber2" classpath="${java.classpath}">
+		</java>
+	</target>
+
+	<target name="SimpleTransactionCaller" depends="compile">
+		<java fork="true" classname="com.iontrading.samples.simpleTransactionCaller.TransactionCaller" dir="RUN_SimpleTransactionCaller" classpath="${java.classpath}">
+		</java>
+	</target>
+
+	<target name="SimpleChainSubscriber" depends="compile">
+		<java fork="true" classname="com.iontrading.samples.simpleChainSubscriber.ChainSubscriber" dir="RUN_SimpleChainSubscriber" classpath="${java.classpath}">
+		</java>
+	</target>
+
+	<target name="simplePermChainSubscriber" depends="compile">
+		<java fork="true" classname="com.iontrading.samples.simplePermChainSubscriber.ChainSubscriber" dir="RUN_SimplePermChainSubscriber" classpath="${java.classpath}">
+		</java>
+	</target>
+
+	<target name="SimpleFunctionHandler" depends="compile">
+		<java fork="true" classname="com.iontrading.samples.simpleFunctionHandler.FunctionHandler" dir="RUN_SimpleFunctionHandler" classpath="${java.classpath}">
+		</java>
+	</target>
+
+	<target name="SimpleFunctionCaller" depends="compile">
+		<java fork="true" classname="com.iontrading.samples.simpleFunctionCaller.FunctionCaller" dir="RUN_SimpleFunctionCaller" classpath="${java.classpath}">
+		</java>
+	</target>
+
+	<target name="AdvOrderManagement" depends="compile">
+		<java fork="true" classname="com.iontrading.samples.advanced.orderManagement.OrderManagement" dir="RUN_OrderManagement" classpath="${java.classpath}">
+		</java>
+	</target>
+
+	<target name="AdvCNE" depends="compile">
+		<java fork="true" classname="com.iontrading.samples.advanced.cne.CNESample" dir="RUN_CNE" classpath="${java.classpath}">
+		</java>
+	</target>
+
+	<target name="AsyncShutdownComponent" depends="compile" >
+	      <java fork="true" classname="com.iontrading.samples.simpleAsyncShutdownComponent.AsyncShutdownComponent" 
+	            dir="RUN_SimpleAsyncShutdownComponent" classpath="${java.classpath}">
+	      </java>
+	 </target>
+	  
+	<target name="AdvConfigHandling" depends="compile">
+		<java fork="true" classname="com.iontrading.samples.advanced.configuration.PropertyRegistration" dir="RUN_AdvancedConfHandler" classpath="${java.classpath}">
+		</java>
+	</target>
+
+	<target name="AdvProxySubscriber" depends="compile">
+		<java fork="true" classname="com.iontrading.samples.advanced.proxySubscriber.ProxySubscriber" dir="RUN_AdvancedProxySubscriber" classpath="${java.classpath}">
+		</java>
+	</target>
+
+	<target name="AdvSTP" depends="compile">
+		<java fork="true" classname="com.iontrading.samples.advanced.stp.TradeChainSubscriber" dir="RUN_AdvancedSTP" classpath="${java.classpath}">
+		</java>
+	</target>
+
+	<target name="MessageQueuePublisher" depends="compile">
+		<java fork="true" classname="com.iontrading.samples.messageQueuePublisher.MessageQueuePublisher" dir="RUN_MessageQueuePublisher" classpath="${java.classpath}">
+		</java>
+	</target>
+
+	<target name="MessageQueueSubscriber" depends="compile">
+		<java fork="true" classname="com.iontrading.samples.messageQueueSubscriber.MessageQueueSubscriber" dir="RUN_MessageQueueSubscriber" classpath="${java.classpath}">
+		</java>
+	</target>
+
+	<target name="SimpleQueryUserEntitlements" depends="compile">
+		<java fork="true" classname="com.iontrading.samples.simpleQueryUserEntitlements.QueryUserEntitlements" dir="RUN_QueryUserEntitlements" classpath="${java.classpath}">
+		</java>
+	</target>
+
+	<target name="MQToChain" depends="compile">
+		<java fork="true" classname="com.iontrading.samples.advanced.mqtochain.MQToChain" dir="RUN_AdvancedMQToChain" classpath="${java.classpath}">
+		</java>
+	</target>
+
+	<target name="OnBehalfOfRegistration" depends="compile">
+		<java fork="true" classname="com.iontrading.samples.advanced.onBehalfOfRegistration.OnBehalfOfRegistration" dir="RUN_AdvancedOnBehalfOfRegistration" classpath="${java.classpath}">
+		</java>
+	</target>
+
+	<target name="SimpleCustomStats" depends="compile">
+		<java fork="true" classname="com.iontrading.samples.simpleCustomStats.CustomStats" dir="RUN_SimpleCustomStats" classpath="${java.classpath}">
+		</java>
+	</target>
+
+	<target name="SimpleCMStats" depends="compile">
+		<java fork="true" classname="com.iontrading.samples.simpleCMStats.CustomStats" dir="RUN_SimpleCMStats" classpath="${java.classpath}">
+		</java>
+	</target>
+
+	<target name="SimpleCMDrillDown" depends="compile">
+		<java fork="true" classname="com.iontrading.samples.simpleCMDrillDown.CustomStats" dir="RUN_SimpleCMDrillDown" classpath="${java.classpath}">
+		</java>
+	</target>
+
+	<target name="SimpleCMProxy" depends="compile">
+		<java fork="true" classname="com.iontrading.samples.simpleCMProxy.CustomStats" dir="RUN_SimpleCMProxy" classpath="${java.classpath}">
+		</java>
+	</target>
+
+	<target name="SimpleVirtualHost" depends="compile">
+		<java fork="true" classname="com.iontrading.samples.simpleVirtualHost.CustomStats" dir="RUN_SimpleVirtualHost" classpath="${java.classpath}">
+		</java>
+	</target>
+
+	<target name="CommonMarket" depends="compile">
+		<java fork="true" classname="com.iontrading.samples.commonMarketCustomStats.CustomStats" dir="RUN_CommonMarketCustomStats" classpath="${java.classpath}">
+		</java>
+	</target>
+
+	<target name="ExternalAuthenticator" depends="compile">
+		<java fork="true" classname="com.iontrading.samples.simpleExternalAuthenticator.ExternalAuthenticator" dir="RUN_SimpleExternalAuthenticator" classpath="${java.classpath}">
+		</java>
+	</target>
+	
+	<target name="SimpleGenericAuditClient" depends="compile">
+		<java fork="true" classname="com.iontrading.samples.simpleGenericAuditClient.SimpleGenericAuditClient" dir="RUN_SimpleGenericAuditClient" classpath="${java.classpath}">
+		</java>
+	</target>
+	
+	<target name="TickDataApi" depends="compile">
+		<java fork="true" classname="com.iontrading.samples.advanced.tickDataApi.MkvTickDataApi" dir="RUN_TickDataApi" classpath="${java.classpath}">
+		</java>
+	</target>
+
+	<target name="EntitlementConfiguration" depends="compile">
+		<java fork="true" classname="com.iontrading.samples.entitlementConfiguration.EntitlementGenConfiguration" dir="RUN_EntitlementConfiguration" classpath="${java.classpath}">
+		</java>
+	</target>
+
+	<target name="SimplePriceContributionCustomE2EDelay" depends="compile">
+		<java fork="true" classname="com.iontrading.samples.simplePriceContributionCustomE2EDelay.PriceProducer" dir="RUN_SimplePriceContributionCustomE2EDelay" classpath="${java.classpath}">
+		</java>
+	</target>
+
+	<target name="PersistentSubscription" depends="compile">
+		<java fork="true" classname="com.iontrading.samples.persistentSubscription.PersistentSubscription" dir="RUN_PersistentSubscription" classpath="${java.classpath}">
+		</java>
+	</target>
+
+	<target name="Recordset" depends="compile">
+		<java fork="true" classname="com.iontrading.samples.recordset.Recordset" dir="RUN_Recordset" classpath="${java.classpath}">
+		</java>
+	</target>
+
+	<target name="SimpleOnBehalfOfLicense" depends="compile">
+		<java fork="true" classname="com.iontrading.samples.onbehalfoflicense.OnBehalfOfLicense" dir="RUN_SimpleOnBehalfOfLicense" classpath="${java.classpath}">
+		</java>
+	</target>
+
+	<target name="UltraLowLatency" depends="compile">
+		<java fork="true" classname="com.iontrading.samples.advanced.ultraLowLatency.PubSubPublisher" dir="RUN_AdvancedUltraLowLatency" classpath="${java.classpath}">
+		</java>
+	</target>
+
+	<target name="XRSClient" depends="compile">
+		<java fork="true" classname="com.iontrading.samples.xrsClient.XRSClient" dir="RUN_XRSClient" classpath="${java.classpath}">
+		</java>
+	</target>
+
+</project>
