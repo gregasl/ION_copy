@@ -293,7 +293,8 @@ public class DepthListener implements MkvRecordListener {
             // Only proceed if data changed
             if (changed) {
                 Best best = createAppropriateBean(recordName, recordData);
-                
+                LOGGER.info(depthInstrumentId + " - Processing depth update for " + recordName +
+                    ": " + best.toString() + " (isSnapshot=" + isSnapshot + ")");
                 // Always use cached GC data
                 orderManager.best(best, cachedCashGC, cachedRegGC, cachedGCBestCash, cachedGCBestREG);
                 updateCounter.incrementAndGet();

@@ -382,6 +382,20 @@ public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener {
       // Check if the order age exceeds the TTL
       boolean expired = orderAge > currentTtl;
 
+      if (expired && orderId == null) {
+          // If the order is expired but has no ID, it means it was never successfully created
+          LOGGER.warn("Order expired without being created: reqId={}, age={} seconds", myReqId, (orderAge / 1000));
+          if (orderCallback != null) {
+            orderCallback.removeOrder(myReqId);
+          }
+      } else if (expired && orderId != null) {
+          // If the order is expired, remove it from OrderManagement
+          LOGGER.info("Calling OrderManagement to remove expired order: reqId={}", myReqId);
+          if (orderCallback != null) {
+            orderCallback.orderDead(this);
+          }
+      }
+
       if (expired && LOGGER.isInfoEnabled()) {
           LOGGER.info("Order expired: reqId={}, orderId={}, age={} seconds", myReqId, orderId, (orderAge / 1000));
       }

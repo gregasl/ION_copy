@@ -106,6 +106,7 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
         ApplicationLogging.setLogLevels("INFO",
             "com.iontrading.samples.advanced.orderManagement.OrderManagement",
             "com.iontrading.samples.advanced.orderManagement.MarketOrder",
+            "com.iontrading.samples.advanced.orderManagement.Best",
             "com.iontrading.samples.advanced.orderManagement.DepthListener"
         );
 
@@ -114,7 +115,6 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
             "com.iontrading.samples.advanced.orderManagement.AsyncLoggingManager",
             "com.iontrading.samples.advanced.orderManagement.ApplicationLogging",
             "com.iontrading.samples.advanced.orderManagement.MarketDef",
-            "com.iontrading.samples.advanced.orderManagement.Best",
             "com.iontrading.samples.advanced.orderManagement.Instrument",
             "com.iontrading.samples.advanced.orderManagement.GCBest",
             "com.iontrading.samples.advanced.orderManagement.GCLevelResult"
@@ -1202,13 +1202,11 @@ private void trySubscribeAndRemoveListener(MkvObject mkvObject, MkvPublishManage
    */
   @Override
     public void best(Best best, double cash_gc, double reg_gc, GCBest gcBestCash, GCBest gcBestREG) {
-        if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("best() called: instrument={}, ask=%.6f ({}), bid=%.6f ({}), cash_gc=%.6f, reg_gc=%.6f", 
+            LOGGER.info("best() called: instrument={}, ask=%.6f ({}), bid=%.6f ({}), cash_gc=%.6f, reg_gc=%.6f", 
                 best.getId(), 
                 best.getAsk(), best.getAskSrc(), 
                 best.getBid(), best.getBidSrc(),
                 cash_gc, reg_gc);
-        }
 
         // Store the latest best for this instrument
         synchronized(gcDataLock) {
@@ -1222,9 +1220,9 @@ private void trySubscribeAndRemoveListener(MkvObject mkvObject, MkvPublishManage
             if (gcBestREG != null) sharedGCBestREG.set(gcBestREG);
             latestBestByInstrument.put(best.getInstrumentId(), best);
         }
-        if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("Calling processMarketOpportunity for {}", best.getId());
-        }
+
+        LOGGER.info("Calling processMarketOpportunity for {}", best.getId());
+
         processMarketOpportunity(best, cash_gc, reg_gc, gcBestCash, gcBestREG);
     }
 
