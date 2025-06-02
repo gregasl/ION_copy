@@ -22,6 +22,13 @@ public interface IOrderManager {
 	public void orderDead(MarketOrder order);
 
 	/**
+	 * Removes an order from the manager's tracking.
+	 * 
+	 * @param reqId The request ID of the order to remove
+	 */
+	public void removeOrder(int reqId);
+
+	/**
 	 * Creates and puts an order on the market with the specified parameters.
 	 * 
 	 * @param instrId The instrument identifier of the venue ID
