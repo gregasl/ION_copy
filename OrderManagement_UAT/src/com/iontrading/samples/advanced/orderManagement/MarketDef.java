@@ -33,7 +33,7 @@ public class MarketDef {
 	 * These fields provide essential information about order state and execution.
 	 */
 	public static String[] ORDER_FIELDS = { "Id", "InstrumentId", "CompNameOrigin", "QtyFill", "QtyTot", "Active",
-			"OrigId", "TradingStatus", "QtyStatus", "Price", "FreeText", "UserData" };
+			"OrderNo", "OrigId", "TradingStatus", "QtyStatus", "Price", "FreeText", "UserData" };
 
 	/**
 	 * The standard depth fields to subscribe to for CM_DEPTH records.
@@ -43,7 +43,8 @@ public class MarketDef {
     		"AskSrc0", "AskSrc1", "AskSrc2", "AskSrc3", "AskSrc4", "AskSrc5", "AskSrc6", "AskSrc7", "AskSrc8", "AskSrc9", 
     		"Bid0", "Bid1", "Bid2", "Bid3", "Bid4", "Bid5", "Bid6", "Bid7", "Bid8", "Bid9",
     		"BidSrc0", "BidSrc1", "BidSrc2", "BidSrc3", "BidSrc4", "BidSrc5", "BidSrc6", "BidSrc7", "BidSrc8", "BidSrc9", 
-    		"AskSize0", "BidSize0", "BidSize0_Min", "AskSize0_Min", "TrdValueLast", "Ask0Status", "Bid0Status" };
+    		"AskSize0", "BidSize0", "BidSize0_Min", "AskSize0_Min", "TrdValueLast", "Ask0Status", "Bid0Status", 
+    		"AskAttribute0", "BidAttribute0"};
 
     /**
      * The standard instrument fields to subscribe to for CM_INSTRUMENT records.
@@ -58,7 +59,8 @@ public class MarketDef {
             "Id8", "Src8", "Attribute8", "Id9", "Src9", "Attribute9",
             "Id10", "Src10", "Attribute10", "Id11", "Src11", "Attribute11",
             "Id12", "Src12", "Attribute12", "Id13", "Src13", "Attribute13",
-            "Id14", "Src14", "Attribute14", "Id15", "Src15", "Attribute15"
+            "Id14", "Src14", "Attribute14", "Id15", "Src15", "Attribute15", 
+            "IsAon"
     };
     
     /**

@@ -151,9 +151,7 @@ public class Best {
         }
         
         if (askSrc.equals(FENICS_USREPO)) {
-            if (LOGGER.isDebugEnabled()) {
-                LOGGER.debug("FENICS_USREPO source detected for ask, returning askSrcCheck: {} for instrument: {}", askSrcCheck, instrumentId);
-            }
+        	LOGGER.info("FENICS_USREPO source detected for ask, returning askSrcCheck: {} for instrument: {}", askSrcCheck, instrumentId);
             return askSrcCheck;
         } else {
             return askSrc;
@@ -373,9 +371,7 @@ public class Best {
         }
         
         if (bidSrc.equals(FENICS_USREPO)) {
-            if (LOGGER.isDebugEnabled()) {
-                LOGGER.debug("FENICS_USREPO source detected for bid, returning bidSrcCheck: {} for instrument: {}", bidSrcCheck, instrumentId);
-            }
+            LOGGER.debug("FENICS_USREPO source detected for bid, returning bidSrcCheck: {} for instrument: {}", bidSrcCheck, instrumentId);
             return bidSrcCheck;
         } else {
             return bidSrc;

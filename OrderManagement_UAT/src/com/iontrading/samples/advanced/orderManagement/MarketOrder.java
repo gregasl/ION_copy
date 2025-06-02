@@ -390,7 +390,7 @@ public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener {
           }
       } else if (expired && orderId != null) {
           // If the order is expired, remove it from OrderManagement
-          LOGGER.info("Calling OrderManagement to remove expired order: reqId={}", myReqId);
+          LOGGER.info("Calling OrderManagement to remove expired order: reqId={}, orderID={}", myReqId, orderId);
           if (orderCallback != null) {
             orderCallback.orderDead(this);
           }
@@ -433,7 +433,7 @@ public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener {
       boolean closed = (active == 0);
       
       // Get and store the order ID from the market
-      setOrderId(mkvRecord.getValue("Id").toString());
+      setOrderId(mkvRecord.getValue("OrigId").toString());
       if (orderCallback != null) {
     	  orderCallback.mapOrderIdToReqId(getOrderId(), myReqId);
       }
