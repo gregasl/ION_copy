@@ -150,16 +150,16 @@ public class DepthListener implements MkvRecordListener {
             depthProps.setProperty("Id", "Id");
             depthProps.setProperty("Ask0", "ask");
             depthProps.setProperty("Ask0Status", "askStatus");
+            depthProps.setProperty("AskAttribute0", "askSrcCheck");
             depthProps.setProperty("AskSrc0", "askSrc");
             depthProps.setProperty("Ask0Status", "askIsAON");
-            depthProps.setProperty("AskAttribute0", "askSrcCheck");
             depthProps.setProperty("AskSize0", "askSize");
             depthProps.setProperty("AskSize0_Min", "askSizeMin");
             depthProps.setProperty("Bid0", "bid");
+            depthProps.setProperty("BidAttribute0", "bidSrcCheck");
             depthProps.setProperty("BidSrc0", "bidSrc");
             depthProps.setProperty("Bid0Status", "bidStatus");
             depthProps.setProperty("Bid0Status", "bidIsAON");
-            depthProps.setProperty("BidAttribute0", "bidSrcCheck");
             depthProps.setProperty("BidSize0", "bidSize");
             depthProps.setProperty("BidSize0_Min", "bidSizeMin");
             depthProps.setProperty("TrdValueLast", "lastTradePrice");
@@ -534,6 +534,9 @@ private void updateBestFromMap(Best best, Map<String, Object> recordData) {
     best.setAsk(getDoubleValue(recordData, "Ask0", 0.0));
     best.setBid(getDoubleValue(recordData, "Bid0", 0.0));
     
+    best.setAskSrcCheck(getStringValue(recordData, "AskAttribute0", ""));
+    best.setBidSrcCheck(getStringValue(recordData, "BidAttribute0", ""));
+    
     // Set source fields
     best.setAskSrc(getStringValue(recordData, "AskSrc0", ""));
     best.setBidSrc(getStringValue(recordData, "BidSrc0", ""));
@@ -546,8 +549,6 @@ private void updateBestFromMap(Best best, Map<String, Object> recordData) {
     best.setAskIsAON(askStatus);
     best.setBidIsAON(bidStatus);
 
-    best.setAskSrcCheck(getStringValue(recordData, "AskAttribute0", ""));
-    best.setBidSrcCheck(getStringValue(recordData, "BidAttribute0", ""));
     
     // Set size fields
     best.setAskSize(getDoubleValue(recordData, "AskSize0", 0.0));

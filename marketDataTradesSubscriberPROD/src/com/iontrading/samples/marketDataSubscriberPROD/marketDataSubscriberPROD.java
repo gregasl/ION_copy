@@ -199,8 +199,8 @@ public class marketDataSubscriberPROD {
 
     // Fields for subscription
     private String[] fieldsOrder = new String[]{
-        "Active", "Code", "Date", "Desc", "Id", "InstrumentId", "Price", "QtyFill", "QtyStatus", "QtyTot", "TimeInForce", "TimeUpd", 
-        "Trader", "TradingStatus", "Verb" 
+    		"Active", "Code", "CompNameOrigin", "Date", "Desc", "Id", "InstrumentId", "OrderNo", "OrigId", "Price", "QtyFill", "QtyStatus", "QtyTot", "TimeInForce", "TimeUpd", 
+            "Trader", "TradingStatus", "Verb" 
     };
         
     // Thread pools and control flags

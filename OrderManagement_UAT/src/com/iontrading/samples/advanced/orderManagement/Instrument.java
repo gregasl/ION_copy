@@ -240,60 +240,67 @@ public class Instrument {
         String cacheKey = sourceId + (isAON ? "_AON" : "");
         String cachedResult = sourceToNativeIdMap.get(cacheKey);
         if (cachedResult != null) {
-            LOGGER.debug("Found cached mapping for {}, source={}, isAON={}: {}", instrumentId, sourceId, isAON, cachedResult);
+            LOGGER.info("Found cached mapping for {}, source={}, isAON={}: {}", instrumentId, sourceId, isAON, cachedResult);
             return cachedResult;
         }
 
         // Log the contents of the sourceToNativeIdMap for debugging
-        LOGGER.debug("Source mapping cache for {} contains {} entries:", instrumentId, sourceToNativeIdMap.size());
-
-        for (Map.Entry<String, String> entry : sourceToNativeIdMap.entrySet()) {
-            LOGGER.debug("  {} -> {}", entry.getKey(), entry.getValue());
+        if (LOGGER.isDebugEnabled()) {
+            LOGGER.debug("Source mapping cache for {} contains {} entries:", instrumentId, sourceToNativeIdMap.size());
+            for (Map.Entry<String, String> entry : sourceToNativeIdMap.entrySet()) {
+                LOGGER.debug("  {} -> {}", entry.getKey(), entry.getValue());
+            }
         }
 
         try {
             // Search through all source/ID pairs
-            LOGGER.debug("Searching through source/ID pairs for {} looking for source={}", instrumentId, sourceId);
+            LOGGER.info("Searching through source/ID pairs for {} looking for source={}", instrumentId, sourceId);
 
             for (int i = 0; i <= 15; i++) {
                 String src = getSourceByIndex(i);
                 String nativeId = getIdByIndex(i);
 
-                LOGGER.trace("Checking index {}: src={}, nativeId={}", i, src, nativeId);
+                if (LOGGER.isTraceEnabled()) {
+                    LOGGER.trace("Checking index {}: src={}, nativeId={}", i, src, nativeId);
+                }
 
                 if (src == null || !sourceId.equals(src) || nativeId == null) {
                     continue;
                 }
 
-                LOGGER.debug("Found matching source at index {}: {}", i, src);
+                LOGGER.info("Found matching source at index {}: {}", i, src);
                     
-                // Special handling for FENICS_USREPO - check attribute value
+                // Special handling for FENICS_USREPO
                 if ("FENICS_USREPO".equals(src)) {
                     String attributeValue = getAttributeByIndex(i);
-                    LOGGER.debug("FENICS_USREPO special handling, attribute={}", attributeValue);
-
-                    if (attributeValue != null) {
-                        // Append attribute to make ID unique for FENICS_USREPO
-                        nativeId = nativeId + "_" + attributeValue;
-                    }
+                    LOGGER.debug("FENICS_USREPO found, checking attribute value: {}", attributeValue);
+                    
+                    // Only use this entry if attribute also matches FENICS_USREPO
+                    if ("BGC".equals(attributeValue)) {
+                        LOGGER.info("Skipping FENICS_USREPO entry because attribute doesn't match: {}", attributeValue);
+                        continue;
+                    } else if ("FENICS_USREPO".equals(attributeValue)) {
+                        LOGGER.info("Using FENICS_USREPO entry because attribute matches: {}", attributeValue);
+                        return nativeId;
+                    } 
                 }
                 
-                // Check if this ID matches the AON requirement
+                // For non-FENICS sources, just check AON status
                 boolean idIsAon = nativeId.endsWith("AON");
-                LOGGER.debug("Checking AON match: idIsAon={}, requested isAON={}", idIsAon, isAON);
+                LOGGER.info("Checking AON match: idIsAon={}, requested isAON={}", idIsAon, isAON);
                     
                 if (isAON == idIsAon) {
                     // Cache the result
                     sourceToNativeIdMap.put(cacheKey, nativeId);
-
-                    LOGGER.debug("Found matching ID for {}, source={}, isAON={}: {}", instrumentId, sourceId, isAON, nativeId);
-
+                    LOGGER.info("Found matching ID for {}, source={}, isAON={}: {}", 
+                        instrumentId, sourceId, isAON, nativeId);
                     return nativeId;
                 }
             }
 
             // No matches found after full search
-            LOGGER.warn("No matching instrument found for source: {}, AON: {}, instrument: {}", sourceId, isAON, instrumentId);
+            LOGGER.warn("No matching instrument found for source: {}, AON: {}, instrument: {}", 
+                sourceId, isAON, instrumentId);
 
             // Log the actual source and ID fields to help diagnose
             StringBuilder sb = new StringBuilder();
@@ -437,7 +444,22 @@ public class Instrument {
                 
                 // Build regular mapping
                 String cacheKey = src;
-                sourceToNativeIdMap.put(cacheKey, id);
+                
+                if ("FENICS_USREPO".equals(src)) {
+                    String attributeValue = getAttributeByIndex(i);
+                    LOGGER.debug("FENICS_USREPO found, checking attribute value: {}", attributeValue);
+                    
+                    // Only use this entry if attribute also matches FENICS_USREPO
+                    if ("BGC".equals(attributeValue)) {
+                        LOGGER.info("Skipping FENICS_USREPO entry because attribute doesn't match: {}", attributeValue);
+                        continue;
+                    } else if ("FENICS_USREPO".equals(attributeValue)) {
+                        LOGGER.info("Using FENICS_USREPO entry because attribute matches: {}", attributeValue);
+                        sourceToNativeIdMap.put(cacheKey, id);
+                    }
+                } else {
+                	sourceToNativeIdMap.put(cacheKey, id);
+                }
                 
                 // Add AON variant if applicable
                 boolean isAon = id.contains("AON");

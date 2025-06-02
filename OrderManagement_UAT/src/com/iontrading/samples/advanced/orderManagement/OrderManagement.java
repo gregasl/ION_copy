@@ -105,17 +105,18 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
         // Core business logic at INFO
         ApplicationLogging.setLogLevels("INFO",
             "com.iontrading.samples.advanced.orderManagement.OrderManagement",
-            "com.iontrading.samples.advanced.orderManagement.MarketOrder",
-            "com.iontrading.samples.advanced.orderManagement.Best",
-            "com.iontrading.samples.advanced.orderManagement.DepthListener"
+            "com.iontrading.samples.advanced.orderManagement.MarketOrder"
+
         );
 
         // Infrastructure at ERROR
         ApplicationLogging.setLogLevels("ERROR",
             "com.iontrading.samples.advanced.orderManagement.AsyncLoggingManager",
             "com.iontrading.samples.advanced.orderManagement.ApplicationLogging",
-            "com.iontrading.samples.advanced.orderManagement.MarketDef",
             "com.iontrading.samples.advanced.orderManagement.Instrument",
+            "com.iontrading.samples.advanced.orderManagement.Best",
+            "com.iontrading.samples.advanced.orderManagement.DepthListener",
+            "com.iontrading.samples.advanced.orderManagement.MarketDef",
             "com.iontrading.samples.advanced.orderManagement.GCBest",
             "com.iontrading.samples.advanced.orderManagement.GCLevelResult"
         );
@@ -1025,7 +1026,7 @@ private void trySubscribeAndRemoveListener(MkvObject mkvObject, MkvPublishManage
     try {
       // Get the UserData (contains our request ID) and FreeText (contains our application ID)
       String CompNameOrigin = mkvRecord.getValue("CompNameOrigin").getString();
-      String orderId = mkvRecord.getValue("Id").getString();
+      String orderId = mkvRecord.getValue("OrigID").getString();
       
       // If this order wasn't placed by us, ignore it
       if ("".equals(orderId) || !"orderManagement".equals(CompNameOrigin)) {
@@ -1202,7 +1203,7 @@ private void trySubscribeAndRemoveListener(MkvObject mkvObject, MkvPublishManage
    */
   @Override
     public void best(Best best, double cash_gc, double reg_gc, GCBest gcBestCash, GCBest gcBestREG) {
-            LOGGER.info("best() called: instrument={}, ask=%.6f ({}), bid=%.6f ({}), cash_gc=%.6f, reg_gc=%.6f", 
+            LOGGER.info("best() called: instrument={}, ask= ({}), asksrc= ({}), bid= ({}), bidsrc= ({}), cash_gc=({}), reg_gc=({})", 
                 best.getId(), 
                 best.getAsk(), best.getAskSrc(), 
                 best.getBid(), best.getBidSrc(),
