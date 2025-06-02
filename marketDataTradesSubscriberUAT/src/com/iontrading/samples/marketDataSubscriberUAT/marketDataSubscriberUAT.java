@@ -405,7 +405,7 @@ public class marketDataSubscriberUAT {
                         try {
                             int attributeIndex = -1;
                             String prefix = null;
-                            attributeIndex = Integer.parseInt(fieldName.substring(3, fieldName.length()-5));
+                            attributeIndex = Integer.parseInt(fieldName.substring(3, fieldName.length()-6));
                             // Extract the index from the attribute field name
                             if (fieldName.startsWith("Bid")) {
                                 prefix = "Bid";
@@ -634,7 +634,7 @@ public class marketDataSubscriberUAT {
                     }
                 }
             }  else if (pattern.getName().startsWith("USD.CM_ORDER")) {
-                if (!isInstrumentSubscribed) {
+                if (!isOrderSubscribed) {
                     try {
                         pattern.subscribe(fieldsOrder, orderListener);
                         isOrderSubscribed = true;
