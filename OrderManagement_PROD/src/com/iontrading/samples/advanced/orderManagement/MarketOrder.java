@@ -24,8 +24,10 @@
 
 package com.iontrading.samples.advanced.orderManagement;
 
-import java.util.logging.Logger;
-import java.util.logging.Level;
+// import java.util.logging.Logger;
+// import java.util.logging.Level;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.iontrading.mkv.Mkv;
 import com.iontrading.mkv.MkvFunction;
@@ -58,7 +60,7 @@ public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener {
   private final long creationTimestamp;
 
   // Add logger for debugging
-  private static final Logger LOGGER = Logger.getLogger(MarketOrder.class.getName());
+  private static final Logger LOGGER = LoggerFactory.getLogger(MarketOrder.class.getName());
   
   /**
    * An id that should be unique during the life of the component.
@@ -89,8 +91,8 @@ public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener {
     reqId++;
     
     // Log the order creation attempt
-    if (LOGGER.isLoggable(Level.INFO)) {
-      ApplicationLogging.logAsync(LOGGER, Level.INFO, "Creating order request #" + reqId + " for " + verb + " " + instrId + " " + qty + " @ " + price);
+    if (LOGGER.isInfoEnabled()) {
+      LOGGER.info("Creating order request #{} for {} {} @ {}", reqId, verb, instrId, qty, price);
     }
 
     // Get the publish manager to access functions
@@ -102,7 +104,7 @@ public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener {
     MkvFunction fn = pm.getMkvFunction(MarketSource + "_VCMIOrderAdd181");
     
     if (fn == null) {
-      ApplicationLogging.logAsync(LOGGER, Level.SEVERE, "Failed to get VCMIOrderAdd181 function from gateway");
+      LOGGER.error("Failed to get VCMIOrderAdd181 function from gateway");
       return null;
     }
     
@@ -133,16 +135,15 @@ public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener {
         Double.valueOf(0)                                   // StopPrice             
       });
         
-      if (LOGGER.isLoggable(Level.INFO)) {
-        ApplicationLogging.logAsync(LOGGER, Level.INFO, "Creating order with args: " + args);
+      if (LOGGER.isInfoEnabled()) {
+        LOGGER.info("Creating order with args: {}", args);
       }
       // Call the function with this MarketOrder as the listener for the response
       fn.call(args, order);
       
       return order;
     } catch (MkvException e) {
-      ApplicationLogging.logAsync(LOGGER, Level.SEVERE, "Error creating order: " + e.getMessage());
-      e.printStackTrace();
+      LOGGER.error("Error creating order: {}", e.getMessage());
     }
     return null;
   }
@@ -163,9 +164,8 @@ public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener {
       reqId++;
       
       // Log the order cancellation attempt
-      if (LOGGER.isLoggable(Level.INFO)) {
-          ApplicationLogging.logAsync(LOGGER, Level.INFO, "Cancelling order: reqId=" + reqId + 
-                  ", orderId=" + orderId + ", trader=" + traderId);
+      if (LOGGER.isInfoEnabled()) {
+          LOGGER.info("Cancelling order: reqId={}, orderId={}, trader={}", reqId, orderId, traderId);
       }
 
       // Get the publish manager to access functions
@@ -175,7 +175,7 @@ public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener {
       MkvFunction fn = pm.getMkvFunction(marketSource + "_VCMIOrderDel");
       
       if (fn == null) {
-          ApplicationLogging.logAsync(LOGGER, Level.SEVERE, "Failed to get VCMIOrderDel function from gateway for " + marketSource);
+          LOGGER.error("Failed to get VCMIOrderDel function from gateway for {}", marketSource);
           return null;
       }
       
@@ -196,8 +196,8 @@ public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener {
               MarketDef.getFreeText("" + reqId, freeText)  // FreeText with request ID and app ID
           });
               
-          if (LOGGER.isLoggable(Level.INFO)) {
-              ApplicationLogging.logAsync(LOGGER, Level.INFO, "Cancelling order with args: " + args);
+          if (LOGGER.isInfoEnabled()) {
+              LOGGER.info("Cancelling order with args: {}", args);
           }
           
           // Call the function with this MarketOrder as the listener for the response
@@ -213,7 +213,7 @@ public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener {
           
           return order;
       } catch (MkvException e) {
-          ApplicationLogging.logAsync(LOGGER, Level.SEVERE, "Error cancelling order: " + e.getMessage(), e);
+          LOGGER.error("Error cancelling order: {}", e.getMessage(), e);
       }
       return null;
   }
@@ -264,11 +264,11 @@ public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener {
       this.orderCallback = callback;
       this.instrId = instrId;
       this.creationTimestamp = System.currentTimeMillis();
-      if (LOGGER.isLoggable(Level.INFO)) {
+      if (LOGGER.isInfoEnabled()) {
           if ("Cancel".equals(verb)) {
-              ApplicationLogging.logAsync(LOGGER, Level.INFO, "Cancel request created: reqId=" + _reqId + ", instrId=" + instrId);
+              LOGGER.info("Cancel request created: reqId={}, instrId={}", _reqId, instrId);
           } else {
-              ApplicationLogging.logAsync(LOGGER, Level.INFO, "MarketOrder created: reqId=" + _reqId + ", instrId=" + instrId + ", verb=" + verb);
+              LOGGER.info("MarketOrder created: reqId={}, instrId={}, verb={}", _reqId, instrId, verb);
           }
       }
   }
@@ -279,16 +279,15 @@ public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener {
    */
   public void onError(MkvFunctionCallEvent mkvFunctionCallEvent,
       byte errCode, String errStr) {
-    ApplicationLogging.logAsync(LOGGER, Level.SEVERE, "Error creating order: reqId=" + myReqId + ", errCode=" + errCode + ", errStr=" + errStr);
+    LOGGER.error("Error creating order: reqId={}, errCode={}, errStr={}", myReqId, errCode, errStr);
     System.out.println("_VCMIOrderAdd181 Failure {" + myReqId + "} {"
         + errCode + "} {" + errStr + "}");
     
     // Add more detailed logging
     if (mkvFunctionCallEvent != null) {
-    ApplicationLogging.logAsync(LOGGER, Level.SEVERE, "Order creation failed: reqId=" + myReqId + 
-                  ", errCode=" + errCode + ", errStr=" + errStr);
+      LOGGER.error("Order creation failed: reqId={}, errCode={}, errStr={}", myReqId, errCode, errStr);
     }
-    
+
     // Save the error information
     this.errCode = errCode;
     this.errStr = errStr;
@@ -297,80 +296,8 @@ public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener {
     orderCallback.orderDead(this);
   }
 
-  /**
-   * Called when the function call to create an order succeeds.
-   * The order is now in the market and we'll start receiving updates.
-   */
-  /**
-   * Called when the function call to create an order succeeds.
-   * The order is now in the market and we'll start receiving updates.
-   */
   public void onResult(MkvFunctionCallEvent mkvFunctionCallEvent, MkvSupply mkvSupply) {
-	    try {
-	        // Check if we have a response
-	        if (mkvSupply != null) {
-	            // Get the first field index
-	            int firstIndex = mkvSupply.firstIndex();
-
-	            if (firstIndex >= 0 && mkvSupply.isSet(firstIndex)) {
-	                // The first field should be the order ID
-	                String responseOrderId = mkvSupply.getString(firstIndex);
-
-	                if (responseOrderId != null && !responseOrderId.isEmpty()) {
-	                    // Extract just the ID portion using regex
-	                    String extractedId = extractIdFromResponse(responseOrderId);
-	                    
-	                    // Set the extracted order ID
-	                    setOrderId(extractedId);
-
-	                    ApplicationLogging.logAsync(LOGGER, Level.INFO,
-	                        "Order creation succeeded: reqId=" + myReqId +
-	                        ", orderId=" + extractedId);
-
-	                    // Log to machine-readable format if needed
-	                    ApplicationLogging.logOrderUpdate(
-	                        "ORDER_ID_ASSIGNED",
-	                        myReqId,
-	                        extractedId,
-	                        "Order ID assigned by market"
-	                    );
-	                } else {
-	                    ApplicationLogging.logAsync(LOGGER, Level.WARNING,
-	                        "Order creation succeeded but empty order ID received: reqId=" + myReqId);
-	                }
-	            } else {
-	                ApplicationLogging.logAsync(LOGGER, Level.WARNING,
-	                    "Order creation succeeded but no order ID field in response: reqId=" + myReqId);
-	            }
-	        } else {
-	            ApplicationLogging.logAsync(LOGGER, Level.WARNING,
-	                "Order creation succeeded but received null response: reqId=" + myReqId);
-	        }
-	    } catch (Exception e) {
-	        ApplicationLogging.logAsync(LOGGER, Level.SEVERE,
-	            "Error extracting order ID from response: reqId=" + myReqId +
-	            ", error=" + e.getMessage(), e);
-	    }
-	}
-
-	/**
-	 * Extracts the ID portion from the response string
-	 * Example input: "0:OK -Result {-Id {4214177636_20250515}  -OrderTmpId {MKV_USP_91282CMV0_C_Par_0_1747306800044}  }"
-	 * Example output: "4214177636_20250515"
-	 */
-	private String extractIdFromResponse(String responseString) {
-	    // Look for pattern: -Id {XXXX}
-	    int idStart = responseString.indexOf("-Id {");
-	    if (idStart >= 0) {
-	        idStart += 5; // Move past "-Id {"
-	        int idEnd = responseString.indexOf("}", idStart);
-	        if (idEnd > idStart) {
-	            return responseString.substring(idStart, idEnd).trim();
-	        }
-	    }
-	    
-	    // If we couldn't extract the ID, return the original string
-	    return responseString;
+	   // not needed for this implementation
 	}
 
   /**
@@ -427,10 +354,10 @@ public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener {
    * This is now accessible to support cancel operations
    */
   public void setOrderId(String oid) {
-      ApplicationLogging.logAsync(LOGGER, Level.INFO, "Setting order ID: reqId=" + myReqId + ", orderId=" + oid);
-      orderId = oid;
+	  LOGGER.info("Setting order ID: reqId={}, orderId={}", myReqId, oid);
+	  orderId = oid;
   }
-  
+
   public static long getOrderTtlMs() {
 	    return OrderManagement.getOrderTtlForCurrentTime();
 	}
@@ -454,14 +381,25 @@ public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener {
       
       // Check if the order age exceeds the TTL
       boolean expired = orderAge > currentTtl;
-      
-      if (expired && LOGGER.isLoggable(Level.INFO)) {
-          ApplicationLogging.logAsync(LOGGER, Level.INFO, 
-              "Order expired: reqId=" + myReqId + 
-              ", orderId=" + orderId + 
-              ", age=" + (orderAge / 1000) + " seconds");
+
+      if (expired && orderId == null) {
+          // If the order is expired but has no ID, it means it was never successfully created
+          LOGGER.warn("Order expired without being created: reqId={}, age={} seconds", myReqId, (orderAge / 1000));
+          if (orderCallback != null) {
+            orderCallback.removeOrder(myReqId);
+          }
+      } else if (expired && orderId != null) {
+          // If the order is expired, remove it from OrderManagement
+          LOGGER.info("Calling OrderManagement to remove expired order: reqId={}, orderID={}", myReqId, orderId);
+          if (orderCallback != null) {
+            orderCallback.orderDead(this);
+          }
       }
-      
+
+      if (expired && LOGGER.isInfoEnabled()) {
+          LOGGER.info("Order expired: reqId={}, orderId={}, age={} seconds", myReqId, orderId, (orderAge / 1000));
+      }
+
       return expired;
   }
 
@@ -480,7 +418,7 @@ public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener {
   public void onPartialUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply,
       boolean param) {
     // Not interested in partial updates
-    ApplicationLogging.logAsync(LOGGER, Level.INFO, "Received partial update for order: reqId=" + myReqId);
+    LOGGER.info("Received partial update for order: reqId={}", myReqId);
   }
 
   /**
@@ -495,20 +433,19 @@ public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener {
       boolean closed = (active == 0);
       
       // Get and store the order ID from the market
-      setOrderId(mkvRecord.getValue("Id").toString());
-      
-      ApplicationLogging.logAsync(LOGGER, Level.INFO, "Received full update for order: reqId=" + myReqId + 
-                  ", orderId=" + getOrderId() + ", active=" + active);
+      setOrderId(mkvRecord.getValue("OrigId").toString());
+      if (orderCallback != null) {
+    	  orderCallback.mapOrderIdToReqId(getOrderId(), myReqId);
+      }
+      LOGGER.info("Received full update for order: reqId={}, orderId={}, active={}", myReqId, getOrderId(), active);
 
       // If the order is closed, notify the order manager
       if (closed && orderCallback != null) {
-        ApplicationLogging.logAsync(LOGGER, Level.INFO, "Order is now dead: reqId=" + myReqId + 
-                      ", orderId=" + getOrderId());
+        LOGGER.info("Order is now dead: reqId={}, orderId={}", myReqId, getOrderId());
         orderCallback.orderDead(this);
       }
     } catch (Exception e) {
-      ApplicationLogging.logAsync(LOGGER, Level.SEVERE, "Error processing order update: " + e.getMessage());
-      e.printStackTrace();
+      LOGGER.error("Error processing order update: {}", e.getMessage());
     }
   }
 }
