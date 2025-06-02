@@ -2030,7 +2030,7 @@ private void setupPatternSubscriptionMonitor() {
 
                 // Check if the order is in a valid state for cancellation
                 if (orderId == null || orderId.isEmpty()) {
-                    LOGGER.warn("Order ID is null or empty for order: {}", order);
+                    LOGGER.warn("Order ID is null or empty for reqId: {}", order.getMyReqId());
                     continue;
                 }
 
