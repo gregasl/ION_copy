@@ -389,7 +389,7 @@ public class marketDataSubscriberPROD {
                         try {
                             int attributeIndex = -1;
                             String prefix = null;
-                            attributeIndex = Integer.parseInt(fieldName.substring(3, fieldName.length()-5));
+                            attributeIndex = Integer.parseInt(fieldName.substring(3, fieldName.length()-6));
                             // Extract the index from the attribute field name
                             if (fieldName.startsWith("Bid")) {
                                 prefix = "Bid";
