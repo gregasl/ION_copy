@@ -18,7 +18,6 @@ import ch.qos.logback.core.Appender;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.io.File;
-import java.lang.Object;
 
 /**
  * Centralized logging initialization - completely programmatic configuration

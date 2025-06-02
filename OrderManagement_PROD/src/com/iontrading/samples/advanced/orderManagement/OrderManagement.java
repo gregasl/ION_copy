@@ -105,17 +105,16 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
         // Core business logic at INFO
         ApplicationLogging.setLogLevels("INFO",
             "com.iontrading.samples.advanced.orderManagement.OrderManagement",
-            "com.iontrading.samples.advanced.orderManagement.MarketOrder"
-
+            "com.iontrading.samples.advanced.orderManagement.MarketOrder",
+            "com.iontrading.samples.advanced.orderManagement.Instrument",
+            "com.iontrading.samples.advanced.orderManagement.Best",
+            "com.iontrading.samples.advanced.orderManagement.DepthListener"
         );
 
         // Infrastructure at ERROR
         ApplicationLogging.setLogLevels("ERROR",
             "com.iontrading.samples.advanced.orderManagement.AsyncLoggingManager",
             "com.iontrading.samples.advanced.orderManagement.ApplicationLogging",
-            "com.iontrading.samples.advanced.orderManagement.Instrument",
-            "com.iontrading.samples.advanced.orderManagement.Best",
-            "com.iontrading.samples.advanced.orderManagement.DepthListener",
             "com.iontrading.samples.advanced.orderManagement.MarketDef",
             "com.iontrading.samples.advanced.orderManagement.GCBest",
             "com.iontrading.samples.advanced.orderManagement.GCLevelResult"
@@ -201,9 +200,9 @@ private final Map<String, Long> lastTradeTimeByInstrument =
     ThreadLocal.withInitial(() -> new StringBuilder(512));
 
   // Redis connection constants
-  private static final String HEARTBEAT_CHANNEL = "HEARTBEAT:ION:ORDERMANAGEMENTUAT";
-  private static final String ADMIN_CHANNEL = "ADMIN:ION:ORDERMANAGEMENTUAT";
-  private static final String REDIS_HOST = "cacheuat";
+  private static final String HEARTBEAT_CHANNEL = "HEARTBEAT:ION:ORDERMANAGEMENT";
+  private static final String ADMIN_CHANNEL = "ADMIN:ION:ORDERMANAGEMENT";
+  private static final String REDIS_HOST = "cacheprod";
   private static final int REDIS_PORT = 6379;
   
   public final String hostname = System.getenv("COMPUTERNAME");
@@ -473,12 +472,12 @@ private final Map<String, Long> lastTradeTimeByInstrument =
   
   // Initialize the mapping of venues to trader IDs
   private void initializeTraderMap() {
-    //  venueToTraderMap.put("BTEC_REPO_US", "EGEI");
-    //  venueToTraderMap.put("DEALERWEB_REPO", "aslegerhard01");
-    //  venueToTraderMap.put("FENICS_USREPO", "frosevan");
-    venueToTraderMap.put("BTEC_REPO_US", "TEST2");
-    venueToTraderMap.put("DEALERWEB_REPO", "asldevtrd1");
-    venueToTraderMap.put("FENICS_USREPO", "frosasl1");
+      venueToTraderMap.put("BTEC_REPO_US", "EGEI");
+      venueToTraderMap.put("DEALERWEB_REPO", "aslegerhard01");
+      venueToTraderMap.put("FENICS_USREPO", "frosevan");
+//    venueToTraderMap.put("BTEC_REPO_US", "TEST2");
+//    venueToTraderMap.put("DEALERWEB_REPO", "asldevtrd1");
+//    venueToTraderMap.put("FENICS_USREPO", "frosasl1");
       // Add more venue-trader mappings as needed
 
       LOGGER.info("Venue to trader mapping initialized with {} entries", venueToTraderMap.size());
@@ -1566,9 +1565,9 @@ private void trySubscribeAndRemoveListener(MkvObject mkvObject, MkvPublishManage
 	  		    ((minsizeDiff <= 5) && ((ask-0.01) < bid)) || 
 	  		    ((minsizeDiff == 0) && ((ask-0.02) < bid))
 	  		) {
-	        LOGGER.info("ID: {} - Skipping trade: Details: [{}] ask={:.6f} ({}), bid={:.6f} ({}), " +
-  		        "sizeDiff={:.2f}, minSizeDiff={:.2f}, spread={:.6f}, " +
-  		        "askSize={:.2f}/{:.2f}, bidSize={:.2f}/{:.2f}, multiplier={}, adjustment={:.6f}",
+	        LOGGER.info("ID: {} - Skipping trade: Details: [{}] ask={} ({}), bid={} ({}), " +
+  		        "sizeDiff={}, minSizeDiff={}, spread={}, " +
+  		        "askSize={}/{}, bidSize={}/{}, multiplier={}, adjustment={}",
   		        id, reason, securityType,
   		        ask, askSrc, bid, bidSrc,
   		        sizeDiff, minsizeDiff, spread,
@@ -1728,7 +1727,7 @@ private void trySubscribeAndRemoveListener(MkvObject mkvObject, MkvPublishManage
         double threshold = isAfterEightThirtyFive() ? 0.05 : 0.03;
         // Skip if spread is insufficient for the time
         if ((ask - threshold) < gcBidPrice) {
-            LOGGER.debug("Skipping GC trade for id: {} - insufficient spread - ask=%.6f, gcBid=%.6f, threshold=%.2f, spread=%.6f",
+            LOGGER.debug("Skipping GC trade for id: {} - insufficient spread - ask={}, gcBid={}, threshold={}, spread={}",
                 id, ask, gcBidPrice, threshold, ask - gcBidPrice);
             return;
         }
@@ -1778,13 +1777,13 @@ private void trySubscribeAndRemoveListener(MkvObject mkvObject, MkvPublishManage
 	        sb.append("Type: ").append(type).append("\n");
 	        
 	        // Price information from Best
-	        sb.append(String.format("Ask: %.6f (%s) IsAON=%s, Size=%.2f/%.2f\n", 
+	        sb.append(String.format("Ask: {} ({}) IsAON={}, Size={}/{}\n", 
 	                  best.getAsk(), best.getAskSrc(), best.getAskIsAON(), 
 	                  best.getAskSizeMin(), best.getAskSize()));
-	        sb.append(String.format("Bid: %.6f (%s) IsAON=%s, Size=%.2f/%.2f\n", 
+	        sb.append(String.format("Bid: {} ({}) IsAON={}, Size={}/{}\n", 
 	                  best.getBid(), best.getBidSrc(), best.getBidIsAON(), 
 	                  best.getBidSizeMin(), best.getBidSize()));
-	        sb.append(String.format("Spread: %.6f\n", best.getAsk() - best.getBid()));
+	        sb.append(String.format("Spread: {}\n", best.getAsk() - best.getBid()));
 	        
 	        
 	    } catch (Exception e) {
@@ -1861,7 +1860,7 @@ private void initializeHeartbeat() {
         	
             Map<String, Object> status = new HashMap<>();
             status.put("hostname", hostname);
-            status.put("application", "OrderManagementUAT");
+            status.put("application", "OrderManagement");
             status.put("state", isSystemStopped ? "STOPPED" : "RUNNING");
             status.put("continuousTrading", continuousTradingEnabled);
             status.put("activeOrders", orders.size());
