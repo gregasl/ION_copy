@@ -1,285 +1,427 @@
 package com.iontrading.samples.advanced.orderManagement;
 
-import java.util.logging.Level;
-import java.util.logging.Logger;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.slf4j.bridge.SLF4JBridgeHandler;
+import ch.qos.logback.classic.LoggerContext;
+import ch.qos.logback.classic.encoder.PatternLayoutEncoder;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.rolling.RollingFileAppender;
+import ch.qos.logback.core.rolling.TimeBasedRollingPolicy;
+import ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy;
+import ch.qos.logback.core.util.FileSize;
+import ch.qos.logback.classic.AsyncAppender;
+import ch.qos.logback.core.ConsoleAppender;
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.core.Appender;  
+
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.io.File;
 
 /**
- * This class provides a centralized way to initialize and configure
- * asynchronous logging for the entire application. All components
- * should use this class instead of setting up logging individually.
+ * Centralized logging initialization - completely programmatic configuration
  */
 public class ApplicationLogging {
-    
-    private static final Logger LOGGER = Logger.getLogger(ApplicationLogging.class.getName());
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(ApplicationLogging.class);
+    private static final Logger MACHINE_READABLE_LOGGER = LoggerFactory.getLogger("MACHINE_READABLE");
     private static boolean initialized = false;
     
     /**
-     * Initialize logging for the entire application.
-     * This method should be called once at application startup,
-     * before any other logging operations.
-     * 
-     * @param applicationName Name of the application (used for log file naming)
-     * @return true if initialization was successful, false otherwise
+     * Initialize SLF4J/Logback logging programmatically - no XML required
      */
-    public static synchronized boolean initialize(String applicationName) {
+    public static boolean initialize(String applicationName) {
         if (initialized) {
-            System.out.println("Logging already initialized");
             return true;
         }
         
         try {
-            System.out.println("### STARTUP: Initializing logging for " + applicationName);
-            
-            // Initialize the AsyncLoggingManager
-            AsyncLoggingManager manager = AsyncLoggingManager.getInstance();
-            manager.setupFileLogging(applicationName + ".log");
-            
-            // Set up machine-readable logging
-            manager.setupMachineReadableLogging(applicationName);
-            
-            // Log initialization success
-            logAsync(LOGGER, Level.INFO, "Asynchronous logging initialized for " + applicationName);
-            
-            // Wait up to 2 seconds for the first message to be processed
-            System.out.println("### STARTUP: Waiting for logging system to process first message");
-            if (!manager.waitForFirstMessageProcessed(2000)) {
-                System.err.println("### WARNING: Logging system did not process first message within timeout");
+            // Bridge java.util.logging to SLF4J
+            if (!SLF4JBridgeHandler.isInstalled()) {
+                SLF4JBridgeHandler.removeHandlersForRootLogger();
+                SLF4JBridgeHandler.install();
             }
             
-            // Register shutdown hook to ensure logs are flushed
-            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                logAsync(LOGGER, Level.INFO, "Application shutting down, flushing logs");
-                manager.shutdown();
-            }));
+            // Get the default log directory
+            String logDir = System.getProperty("log.dir", "logs");
+            
+            // Ensure log directory exists
+            File dir = new File(logDir);
+            if (!dir.exists()) {
+                boolean created = dir.mkdirs();
+                if (!created) {
+                    System.err.println("Failed to create log directory: " + dir.getAbsolutePath());
+                    return false;
+                }
+            }
+            
+            // Configure logback programmatically
+            configureProgrammaticLogging(applicationName, logDir);
+            
+            LOGGER.info("=== SLF4J/Logback logging initialized programmatically for {} ===", applicationName);
+            LOGGER.info("Log directory: {}", dir.getAbsolutePath());
+            
+            // Test machine readable logging
+            MACHINE_READABLE_LOGGER.info("SYSTEM,STARTUP,{},{},,,,,,,,-1,", 
+                applicationName, new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS").format(new Date()));
             
             initialized = true;
-            System.out.println("### STARTUP: Logging system fully initialized");
             return true;
             
         } catch (Exception e) {
-            System.err.println("Failed to initialize logging: " + e.getMessage());
+            System.err.println("Failed to initialize SLF4J logging: " + e.getMessage());
             e.printStackTrace();
             return false;
         }
     }
     
     /**
-     * Log a message asynchronously.
-     * This is the main method that all components should use for logging.
-     * 
-     * @param logger The logger to use
-     * @param level The log level
-     * @param message The message to log
+     * Configure logback entirely in Java code
      */
-    public static void logAsync(Logger logger, Level level, String message) {
-        if (!initialized) {
-            // Fall back to synchronous logging if not initialized
-            logger.log(level, message);
-            return;
-        }
+    private static void configureProgrammaticLogging(String applicationName, String logDir) {
+        LoggerContext context = (LoggerContext) LoggerFactory.getILoggerFactory();
         
-        AsyncLoggingManager.getInstance().log(logger, level, message);
-    }
-    
-    /**
-     * Log a message with an exception asynchronously.
-     * 
-     * @param logger The logger to use
-     * @param level The log level
-     * @param message The message to log
-     * @param thrown The exception to log
-     */
-    public static void logAsync(Logger logger, Level level, String message, Throwable thrown) {
-        if (!initialized) {
-            // Fall back to synchronous logging if not initialized
-            logger.log(level, message, thrown);
-            return;
-        }
+        // Clear any existing configuration
+        context.reset();
         
-        AsyncLoggingManager.getInstance().log(logger, level, message, thrown);
-    }
-    
-    /**
-     * Set the log level for a specific logger or package
-     * 
-     * @param loggerName The name of the logger or package (e.g., "com.iontrading" or a specific class name)
-     * @param level The desired logging level
-     */
-    public static void setLogLevel(String loggerName, Level level) {
-        if (!initialized) {
-            System.err.println("Logging not yet initialized. Call initialize() first.");
-            return;
-        }
+        String datePattern = new SimpleDateFormat("yyyy-MM-dd").format(new Date());
         
-        try {
-            Logger logger = Logger.getLogger(loggerName);
-            logger.setLevel(level);
-            
-            // Log the level change
-            logAsync(LOGGER, Level.INFO, "Log level for " + loggerName + " set to " + level);
-        } catch (Exception e) {
-            System.err.println("Error setting log level: " + e.getMessage());
-        }
-    }
-    
-    /**
-     * Convenience method to set log levels for multiple loggers
-     * 
-     * @param level The desired logging level
-     * @param loggerNames List of logger or package names
-     */
-    public static void setLogLevels(Level level, String... loggerNames) {
-        for (String loggerName : loggerNames) {
-            setLogLevel(loggerName, level);
-        }
-    }
-    
-    /**
-     * Set global logging level
-     * 
-     * @param level The desired global logging level
-     */
-    public static void setGlobalLogLevel(Level level) {
-        if (!initialized) {
-            System.err.println("Logging not yet initialized. Call initialize() first.");
-            return;
-        }
+        // 1. Create Console Appender
+        ConsoleAppender<ILoggingEvent> consoleAppender = createConsoleAppender(context);
         
-        try {
-            // Set root logger level
-            Logger rootLogger = Logger.getLogger("");
-            rootLogger.setLevel(level);
-            
-            // Set application-specific package level
-            Logger appLogger = Logger.getLogger("com.iontrading.samples.advanced");
-            appLogger.setLevel(level);
-            
-            // Log the global level change
-            logAsync(LOGGER, Level.INFO, "Global log level set to " + level);
-        } catch (Exception e) {
-            System.err.println("Error setting global log level: " + e.getMessage());
-        }
+        // 2. Create Main Log File Appender
+        RollingFileAppender<ILoggingEvent> mainFileAppender = createMainFileAppender(context, 
+            logDir + "/" + applicationName + "_" + datePattern + ".log",
+            logDir + "/" + applicationName + "_%d{yyyy-MM-dd}.%i.log");
+        
+        // 3. Create Machine Readable File Appender
+        RollingFileAppender<ILoggingEvent> machineFileAppender = createMachineFileAppender(context,
+            logDir + "/" + applicationName + "_machine_" + datePattern + ".csv",
+            logDir + "/" + applicationName + "_machine_%d{yyyy-MM-dd}.%i.csv");
+        
+        // 4. Create Async Appenders for Performance
+        AsyncAppender asyncMainAppender = createAsyncAppender(context, "ASYNC_MAIN", mainFileAppender);
+        AsyncAppender asyncMachineAppender = createAsyncAppender(context, "ASYNC_MACHINE", machineFileAppender);
+        
+        // 5. Configure Machine Readable Logger
+        ch.qos.logback.classic.Logger machineLogger = context.getLogger("MACHINE_READABLE");
+        machineLogger.setLevel(Level.INFO);  // Now unambiguous - refers to ch.qos.logback.classic.Level
+        machineLogger.setAdditive(false); // Don't inherit from root
+        machineLogger.addAppender(asyncMachineAppender);
+        
+        // 6. Configure Application Loggers
+        ch.qos.logback.classic.Logger appLogger = context.getLogger("com.iontrading.samples.advanced.orderManagement");
+        appLogger.setLevel(Level.DEBUG);  // Now unambiguous
+        
+        // 7. Configure Root Logger
+        ch.qos.logback.classic.Logger rootLogger = context.getLogger(Logger.ROOT_LOGGER_NAME);
+        rootLogger.setLevel(Level.INFO);  // Now unambiguous
+        rootLogger.addAppender(consoleAppender);
+        rootLogger.addAppender(asyncMainAppender);
+        
+        // Start all appenders
+        consoleAppender.start();
+        mainFileAppender.start();
+        machineFileAppender.start();
+        asyncMainAppender.start();
+        asyncMachineAppender.start();
+        
+        System.out.println("Programmatic logging configuration completed");
+        System.out.println("Main log file: " + logDir + "/" + applicationName + "_" + datePattern + ".log");
+        System.out.println("Machine log file: " + logDir + "/" + applicationName + "_machine_" + datePattern + ".csv");
     }
     
-
-	/**
-	 * Log order information in a machine-readable format (CSV).
-	 * This is specifically for tracking order operations.
-	 * 
-	 * @param operation The operation type (e.g., SEND, FILL, CANCEL)
-	 * @param source The market source
-	 * @param trader The trader ID
-	 * @param instrumentId The instrument ID
-	 * @param direction Buy/Sell
-	 * @param size Order size
-	 * @param price Order price
-	 * @param orderType Order type (e.g., Limit, Market)
-	 * @param tif Time in force
-	 * @param requestId Request ID
-	 * @param orderId Order ID (can be null for new orders)
-	 */
-	public static void logOrderEvent(
-	        String operation,
-	        String source,
-	        String trader,
-	        String instrumentId,
-	        String direction,
-	        double size,
-	        double price,
-	        String orderType,
-	        String tif,
-	        int requestId,
-	        String orderId) {
-	    
-	    if (!initialized) {
-	        // Fall back to synchronous logging if not initialized
-	        LOGGER.log(Level.INFO, String.format(
-	            "ORDER,%s,%s,%s,%s,%s,%.2f,%.4f,%s,%s,%d,%s",
-	            operation, source, trader, instrumentId, direction, 
-	            size, price, orderType, tif, requestId, 
-	            (orderId != null ? orderId : "")
-	        ));
-	        return;
-	    }
-	    
-	    // Escape any commas in string fields
-	    String safeInstrumentId = instrumentId.replace(",", "\\,");
-	    String safeOrderId = (orderId != null) ? orderId.replace(",", "\\,") : "";
-	    
-	    // Format timestamp
-	    String timestamp = new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS").format(new java.util.Date());
-	    
-	    // Build CSV record
-	    String csvRecord = String.format(
-	        "%s,%s,%s,%s,%s,%s,%.2f,%.4f,%s,%s,%d,%s",
-	        timestamp, operation, source, trader, safeInstrumentId, direction,
-	        size, price, orderType, tif, requestId, safeOrderId
-	    );
-	    
-	    // Log to machine-readable file
-	    AsyncLoggingManager.getInstance().logMachineReadable(csvRecord);
-	    
-	    // Also log to normal log at FINE level for debugging
-	    logAsync(LOGGER, Level.FINE, "Order event: " + csvRecord);
-	}
-
-	/**
-	 * Simplified version for order updates where not all fields are changing
-	 */
-	public static void logOrderUpdate(
-	        String operation,
-	        int requestId,
-	        String orderId,
-	        String status) {
-	    
-	    if (!initialized) {
-	        return;
-	    }
-	    
-	    // Format timestamp
-	    String timestamp = new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS").format(new java.util.Date());
-	    
-	    // Build simplified CSV record with minimal fields
-	    String csvRecord = String.format(
-	        "%s,%s,,,,,,,,,,%d,%s,%s",
-	        timestamp, operation, requestId, orderId, status
-	    );
-	    
-	    // Log to machine-readable file
-	    AsyncLoggingManager.getInstance().logMachineReadable(csvRecord);
-	}
+    /**
+     * Create console appender
+     */
+    private static ConsoleAppender<ILoggingEvent> createConsoleAppender(LoggerContext context) {
+        ConsoleAppender<ILoggingEvent> consoleAppender = new ConsoleAppender<>();
+        consoleAppender.setContext(context);
+        consoleAppender.setName("CONSOLE");
+        
+        PatternLayoutEncoder encoder = new PatternLayoutEncoder();
+        encoder.setContext(context);
+        encoder.setPattern("%d{HH:mm:ss.SSS} [%thread] %-5level %c{1} - %msg%n");
+        encoder.start();
+        
+        consoleAppender.setEncoder(encoder);
+        return consoleAppender;
+    }
     
     /**
-     * Get logging statistics for monitoring.
-     * 
-     * @return String containing current logging statistics
+     * Create main log file appender with rolling
+     */
+    private static RollingFileAppender<ILoggingEvent> createMainFileAppender(LoggerContext context, 
+            String fileName, String fileNamePattern) {
+        RollingFileAppender<ILoggingEvent> fileAppender = new RollingFileAppender<>();
+        fileAppender.setContext(context);
+        fileAppender.setName("MAIN_FILE");
+        fileAppender.setFile(fileName);
+        
+        // Create encoder
+        PatternLayoutEncoder encoder = new PatternLayoutEncoder();
+        encoder.setContext(context);
+        encoder.setPattern("%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %c{1} - %msg%n");
+        encoder.start();
+        fileAppender.setEncoder(encoder);
+        
+        // Create rolling policy
+        SizeAndTimeBasedRollingPolicy<ILoggingEvent> rollingPolicy = new SizeAndTimeBasedRollingPolicy<>();
+        rollingPolicy.setContext(context);
+        rollingPolicy.setParent(fileAppender);
+        rollingPolicy.setFileNamePattern(fileNamePattern);
+        rollingPolicy.setMaxFileSize(FileSize.valueOf("100MB"));
+        rollingPolicy.setMaxHistory(30);
+        rollingPolicy.setTotalSizeCap(FileSize.valueOf("3GB"));
+        rollingPolicy.start();
+        
+        fileAppender.setRollingPolicy(rollingPolicy);
+        return fileAppender;
+    }
+    
+    /**
+     * Create machine readable file appender
+     */
+    private static RollingFileAppender<ILoggingEvent> createMachineFileAppender(LoggerContext context,
+            String fileName, String fileNamePattern) {
+        RollingFileAppender<ILoggingEvent> fileAppender = new RollingFileAppender<>();
+        fileAppender.setContext(context);
+        fileAppender.setName("MACHINE_FILE");
+        fileAppender.setFile(fileName);
+        
+        // Create encoder - just the message, no formatting
+        PatternLayoutEncoder encoder = new PatternLayoutEncoder();
+        encoder.setContext(context);
+        encoder.setPattern("%msg%n");
+        encoder.start();
+        fileAppender.setEncoder(encoder);
+        
+        // Create rolling policy
+        SizeAndTimeBasedRollingPolicy<ILoggingEvent> rollingPolicy = new SizeAndTimeBasedRollingPolicy<>();
+        rollingPolicy.setContext(context);
+        rollingPolicy.setParent(fileAppender);
+        rollingPolicy.setFileNamePattern(fileNamePattern);
+        rollingPolicy.setMaxFileSize(FileSize.valueOf("100MB"));
+        rollingPolicy.setMaxHistory(30);
+        rollingPolicy.setTotalSizeCap(FileSize.valueOf("1GB"));
+        rollingPolicy.start();
+        
+        fileAppender.setRollingPolicy(rollingPolicy);
+        return fileAppender;
+    }
+    
+    /**
+     * Create async appender for performance
+     */
+    private static AsyncAppender createAsyncAppender(LoggerContext context, String name, 
+            Appender<ILoggingEvent> appender) {
+        AsyncAppender asyncAppender = new AsyncAppender();
+        asyncAppender.setContext(context);
+        asyncAppender.setName(name);
+        asyncAppender.setQueueSize(1024);
+        asyncAppender.setDiscardingThreshold(0);
+        asyncAppender.setIncludeCallerData(false);
+        asyncAppender.setNeverBlock(true);
+        asyncAppender.addAppender(appender);
+        return asyncAppender;
+    }
+    
+    /**
+     * Test method to verify logging is working
+     */
+    public static void testLogging() {
+        LOGGER.info("=== Testing Programmatic Logging Configuration ===");
+        
+        // Test regular logging at different levels
+        LOGGER.error("TEST: Error level logging");
+        LOGGER.warn("TEST: Warn level logging");
+        LOGGER.info("TEST: Info level logging");
+        LOGGER.debug("TEST: Debug level logging");
+        
+        // Test machine readable logging
+        logOrderEvent("TEST", "SYSTEM", "testuser", "TEST_INSTRUMENT", "BUY", 
+                      100.0, 25.50, "LIMIT", "DAY", 999, "TEST_ORDER_123");
+        
+        LOGGER.info("=== Logging test complete - check logs directory ===");
+    }
+    
+    // ... rest of your existing methods (logOrderEvent, etc.) remain the same
+    
+    /**
+     * Log order information in machine-readable format
+     */
+    public static void logOrderEvent(
+            String operation, String source, String trader, String instrumentId,
+            String direction, double size, double price, String orderType,
+            String tif, int requestId, String orderId) {
+        
+        String safeInstrumentId = instrumentId.replace(",", "\\,");
+        String safeOrderId = (orderId != null) ? orderId.replace(",", "\\,") : "";
+        String timestamp = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS").format(new Date());
+        
+        String csvRecord = String.format(
+            "%s,%s,%s,%s,%s,%s,%.2f,%.4f,%s,%s,%d,%s",
+            timestamp, operation, source, trader, safeInstrumentId, direction,
+            size, price, orderType, tif, requestId, safeOrderId
+        );
+        
+        MACHINE_READABLE_LOGGER.info(csvRecord);
+        LOGGER.debug("Order event: {}", csvRecord);
+    }
+    
+    /**
+     * Simplified order update logging
+     */
+    public static void logOrderUpdate(String operation, int requestId, String orderId, String status) {
+        String timestamp = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS").format(new Date());
+        String csvRecord = String.format("%s,%s,,,,,,,,,,%d,%s,%s", timestamp, operation, requestId, orderId, status);
+        MACHINE_READABLE_LOGGER.info(csvRecord);
+    }
+    
+    /**
+     * Get logging statistics
      */
     public static String getStatistics() {
         if (!initialized) {
             return "Logging not initialized";
         }
         
-        AsyncLoggingManager manager = AsyncLoggingManager.getInstance();
-        return String.format(
-            "Logging stats: queued=%d, processed=%d, overflows=%d, queueSize=%d",
-            manager.getMessagesQueued(),
-            manager.getMessagesProcessed(),
-            manager.getQueueOverflows(),
-            manager.getCurrentQueueSize()
-        );
+        LoggerContext loggerContext = (LoggerContext) LoggerFactory.getILoggerFactory();
+        return String.format("SLF4J logging active, loggers: %d", loggerContext.getLoggerList().size());
     }
     
     /**
-     * Log statistics about the logging system.
-     * Useful for periodic monitoring.
-     * 
-     * @param level The log level to use
+     * Set log level for a specific logger using SLF4J level names
      */
-    public static void logStatistics(Level level) {
+    public static void setLogLevel(String loggerName, String level) {
+        try {
+            LoggerContext loggerContext = (LoggerContext) LoggerFactory.getILoggerFactory();
+            ch.qos.logback.classic.Logger logger = loggerContext.getLogger(loggerName);
+            logger.setLevel(Level.valueOf(level.toUpperCase()));
+            
+            LOGGER.info("Log level for {} set to {}", loggerName, level);
+        } catch (Exception e) {
+            LOGGER.error("Error setting log level for {}: {}", loggerName, e.getMessage());
+        }
+    }
+
+    /**
+     * Set log level for a specific logger - backward compatibility with java.util.logging.Level
+     */
+    public static void setLogLevel(String loggerName, java.util.logging.Level level) {
+        String slf4jLevel = convertJulLevelToSLF4J(level);
+        setLogLevel(loggerName, slf4jLevel);
+    }
+
+    /**
+     * Set log levels for multiple loggers using SLF4J level names
+     */
+    public static void setLogLevels(String level, String... loggerNames) {
+        for (String loggerName : loggerNames) {
+            setLogLevel(loggerName, level);
+        }
+    }
+
+    /**
+     * Set log levels for multiple loggers - backward compatibility
+     */
+    public static void setLogLevels(java.util.logging.Level level, String... loggerNames) {
+        String slf4jLevel = convertJulLevelToSLF4J(level);
+        setLogLevels(slf4jLevel, loggerNames);
+    }
+
+    /**
+     * Set global logging level using SLF4J level names
+     */
+    public static void setGlobalLogLevel(String level) {
+        try {
+            LoggerContext loggerContext = (LoggerContext) LoggerFactory.getILoggerFactory();
+            
+            // Set root logger level
+            ch.qos.logback.classic.Logger rootLogger = loggerContext.getLogger(Logger.ROOT_LOGGER_NAME);
+            rootLogger.setLevel(Level.valueOf(level.toUpperCase()));
+            
+            // Set application package level
+            ch.qos.logback.classic.Logger appLogger = loggerContext.getLogger("com.iontrading.samples.advanced");
+            appLogger.setLevel(Level.valueOf(level.toUpperCase()));
+            
+            LOGGER.info("Global log level set to {}", level);
+        } catch (Exception e) {
+            LOGGER.error("Error setting global log level: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Set global logging level - backward compatibility
+     */
+    public static void setGlobalLogLevel(java.util.logging.Level level) {
+        String slf4jLevel = convertJulLevelToSLF4J(level);
+        setGlobalLogLevel(slf4jLevel);
+    }
+
+    /**
+     * Convert java.util.logging.Level to SLF4J level name
+     */
+    private static String convertJulLevelToSLF4J(java.util.logging.Level level) {
+        if (level.intValue() >= java.util.logging.Level.SEVERE.intValue()) {
+            return "ERROR";
+        } else if (level.intValue() >= java.util.logging.Level.WARNING.intValue()) {
+            return "WARN";
+        } else if (level.intValue() >= java.util.logging.Level.INFO.intValue()) {
+            return "INFO";
+        } else if (level.intValue() >= java.util.logging.Level.FINE.intValue()) {
+            return "DEBUG";
+        } else {
+            return "TRACE";
+        }
+    }
+
+    /**
+     * Async logging method - converts java.util.logging.Level to SLF4J
+     */
+    public static void logAsync(Logger logger, java.util.logging.Level level, String message) {
         if (!initialized) {
+            System.out.println("Logging not initialized: " + message);
             return;
         }
         
-        logAsync(LOGGER, level, getStatistics());
+        if (level.intValue() >= java.util.logging.Level.SEVERE.intValue()) {
+            logger.error(message);
+        } else if (level.intValue() >= java.util.logging.Level.WARNING.intValue()) {
+            logger.warn(message);
+        } else if (level.intValue() >= java.util.logging.Level.INFO.intValue()) {
+            logger.info(message);
+        } else if (level.intValue() >= java.util.logging.Level.FINE.intValue()) {
+            logger.debug(message);
+        } else {
+            logger.trace(message);
+        }
     }
+
+    /**
+     * Async logging method with exception
+     */
+    public static void logAsync(Logger logger, java.util.logging.Level level, String message, Throwable throwable) {
+        if (!initialized) {
+            System.out.println("Logging not initialized: " + message);
+            if (throwable != null) {
+                throwable.printStackTrace();
+            }
+            return;
+        }
+        
+        if (level.intValue() >= java.util.logging.Level.SEVERE.intValue()) {
+            logger.error(message, throwable);
+        } else if (level.intValue() >= java.util.logging.Level.WARNING.intValue()) {
+            logger.warn(message, throwable);
+        } else if (level.intValue() >= java.util.logging.Level.INFO.intValue()) {
+            logger.info(message, throwable);
+        } else if (level.intValue() >= java.util.logging.Level.FINE.intValue()) {
+            logger.debug(message, throwable);
+        } else {
+            logger.trace(message, throwable);
+        }
+    }
+
 }
