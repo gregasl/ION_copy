@@ -199,8 +199,8 @@ public class marketDataSubscriberPROD {
 
     // Fields for subscription
     private String[] fieldsOrder = new String[]{
-        "Active", "Code", "Date", "Desc", "Id", "InstrumentId", "Price", "QtyFill", "QtyStatus", "QtyTot", "TimeInForce", "TimeUpd", 
-        "Trader", "TradingStatus", "Verb" 
+    		"Active", "Code", "CompNameOrigin", "Date", "Desc", "Id", "InstrumentId", "OrderNo", "OrigId", "Price", "QtyFill", "QtyStatus", "QtyTot", "TimeInForce", "TimeUpd", 
+            "Trader", "TradingStatus", "Verb" 
     };
         
     // Thread pools and control flags
@@ -389,7 +389,7 @@ public class marketDataSubscriberPROD {
                         try {
                             int attributeIndex = -1;
                             String prefix = null;
-                            attributeIndex = Integer.parseInt(fieldName.substring(3, fieldName.length()-5));
+                            attributeIndex = Integer.parseInt(fieldName.substring(3, fieldName.length()-6));
                             // Extract the index from the attribute field name
                             if (fieldName.startsWith("Bid")) {
                                 prefix = "Bid";
