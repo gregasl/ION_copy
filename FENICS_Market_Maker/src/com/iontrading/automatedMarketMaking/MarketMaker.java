@@ -98,7 +98,7 @@ public class MarketMaker implements IOrderManager {
      * @param orderManager The parent OrderManagement instance
      */
     public MarketMaker(OrderManagement orderManager) {
-        ApplicationLogging.logMethodEntry("MarketMaker.constructor", "Creating with default config, orderManager=" + orderManager);
+        LOGGER.info("MarketMaker.constructor", "Creating with default config, orderManager=" + orderManager);
         try {
             this.orderManager = orderManager;
             this.config = new MarketMakerConfig();
@@ -120,16 +120,14 @@ public class MarketMaker implements IOrderManager {
             // Register for eligibility change notifications
             this.bondEligibilityListener.addEligibilityChangeListener(new EligibilityChangeListener() {
                 public void onEligibilityChange(String cusip, boolean isEligible, Map<String, Object> bondData) {
-                    ApplicationLogging.logMethodEntry("EligibilityChangeListener.onEligibilityChange", 
-                        "cusip=" + cusip + ", isEligible=" + isEligible);
+                    LOGGER.info("EligibilityChangeListener.onEligibilityChange: cusip={}, isEligible={}", cusip, isEligible);
                     handleEligibilityChange(cusip, isEligible, bondData);
-                    ApplicationLogging.logMethodExit("EligibilityChangeListener.onEligibilityChange", 
-                        "Eligibility change handled");
+                    LOGGER.info("EligibilityChangeListener.onEligibilityChange: Eligibility change handled");
                 }
             });
-            
+
             LOGGER.info("MarketMaker initialized with bond eligibility integration");
-            
+
             // Start periodic market making for eligible bonds
             scheduler.scheduleAtFixedRate(
                 this::makeMarketsForEligibleBonds, 
@@ -148,7 +146,7 @@ public class MarketMaker implements IOrderManager {
             
             // Register shutdown hook
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                ApplicationLogging.logMethodEntry("MarketMaker.shutdownHook", "Shutting down MarketMaker scheduler");
+                LOGGER.info("MarketMaker.shutdownHook: Shutting down MarketMaker scheduler");
                 scheduler.shutdown();
                 try {
                     if (!scheduler.awaitTermination(5, TimeUnit.SECONDS)) {
@@ -157,14 +155,14 @@ public class MarketMaker implements IOrderManager {
                 } catch (InterruptedException e) {
                     scheduler.shutdownNow();
                     Thread.currentThread().interrupt();
-                    ApplicationLogging.logException("MarketMaker.shutdownHook", "Interrupted during shutdown", e);
+                    LOGGER.error("MarketMaker.shutdownHook: Interrupted during shutdown", e);
                 }
-                ApplicationLogging.logMethodExit("MarketMaker.shutdownHook", "Shutdown complete");
+                LOGGER.info("MarketMaker.shutdownHook: Shutdown complete");
             }));
-            
-            ApplicationLogging.logMethodExit("MarketMaker.constructor", "Successfully created MarketMaker instance");
+
+            LOGGER.info("MarketMaker.constructor: Successfully created MarketMaker instance");
         } catch (Exception e) {
-            ApplicationLogging.logException("MarketMaker.constructor", "Error creating MarketMaker", e);
+            LOGGER.error("MarketMaker.constructor: Error creating MarketMaker", e);
             throw e; // Re-throw to maintain original behavior
         }
     }
@@ -176,8 +174,7 @@ public class MarketMaker implements IOrderManager {
      * @param config The market maker configuration
      */
     public MarketMaker(OrderManagement orderManager, MarketMakerConfig config) {
-        ApplicationLogging.logMethodEntry("MarketMaker.constructor", 
-            "Creating with custom config, orderManager=" + orderManager + ", config=" + config);
+        LOGGER.info("MarketMaker.constructor: Creating with custom config, orderManager={}, config={}", orderManager, config);
         try {
             this.orderManager = orderManager;
             this.config = config;
@@ -204,16 +201,14 @@ public class MarketMaker implements IOrderManager {
             // Register for eligibility change notifications
             this.bondEligibilityListener.addEligibilityChangeListener(new EligibilityChangeListener() {
                 public void onEligibilityChange(String cusip, boolean isEligible, Map<String, Object> bondData) {
-                    ApplicationLogging.logMethodEntry("EligibilityChangeListener.onEligibilityChange", 
-                        "cusip=" + cusip + ", isEligible=" + isEligible);
+                    LOGGER.info("EligibilityChangeListener.onEligibilityChange: cusip={}, isEligible={}", cusip, isEligible);
                     handleEligibilityChange(cusip, isEligible, bondData);
-                    ApplicationLogging.logMethodExit("EligibilityChangeListener.onEligibilityChange", 
-                        "Eligibility change handled");
+                    LOGGER.info("EligibilityChangeListener.onEligibilityChange: Eligibility change handled");
                 }
             });
-            
+
             LOGGER.info("MarketMaker initialized with bond eligibility integration");
-            
+
             // Start periodic market making for eligible bonds
             scheduler.scheduleAtFixedRate(
                 this::makeMarketsForEligibleBonds, 
@@ -232,7 +227,7 @@ public class MarketMaker implements IOrderManager {
             
             // Register shutdown hook
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                ApplicationLogging.logMethodEntry("MarketMaker.shutdownHook", "Shutting down MarketMaker scheduler");
+                LOGGER.info("MarketMaker.shutdownHook: Shutting down MarketMaker scheduler");
                 scheduler.shutdown();
                 try {
                     if (!scheduler.awaitTermination(5, TimeUnit.SECONDS)) {
@@ -241,21 +236,21 @@ public class MarketMaker implements IOrderManager {
                 } catch (InterruptedException e) {
                     scheduler.shutdownNow();
                     Thread.currentThread().interrupt();
-                    ApplicationLogging.logException("MarketMaker.shutdownHook", "Interrupted during shutdown", e);
+                    LOGGER.error("MarketMaker.shutdownHook: Interrupted during shutdown", e);
                 }
-                ApplicationLogging.logMethodExit("MarketMaker.shutdownHook", "Shutdown complete");
+                LOGGER.info("MarketMaker.shutdownHook: Shutdown complete");
             }));
-            
-            ApplicationLogging.logMethodExit("MarketMaker.constructor", "Successfully created MarketMaker instance with custom config");
+
+            LOGGER.info("MarketMaker.constructor: Successfully created MarketMaker instance with custom config");
         } catch (Exception e) {
-            ApplicationLogging.logException("MarketMaker.constructor", "Error creating MarketMaker with custom config", e);
+            LOGGER.error("MarketMaker.constructor: Error creating MarketMaker with custom config", e);
             throw e; // Re-throw to maintain original behavior
         }
     }
 
     // Add a new method to initialize MKV subscriptions after MKV is started
     public void initializeMkvSubscriptions() {
-        ApplicationLogging.logMethodEntry("MarketMaker.initializeMkvSubscriptions", "Initializing MKV subscriptions");
+        LOGGER.info("MarketMaker.initializeMkvSubscriptions: Initializing MKV subscriptions");
         try {
             LOGGER.info("Subscribing to MKV data streams...");
             subscribeToBondStaticData();
@@ -269,10 +264,10 @@ public class MarketMaker implements IOrderManager {
             } else {
                 LOGGER.info("DepthListener obtained successfully after MKV initialization");
             }
-            
-            ApplicationLogging.logMethodExit("MarketMaker.initializeMkvSubscriptions", "MKV subscriptions initialized");
+
+            LOGGER.info("MarketMaker.initializeMkvSubscriptions: MKV subscriptions initialized");
         } catch (Exception e) {
-            ApplicationLogging.logException("MarketMaker.initializeMkvSubscriptions", "Error initializing MKV subscriptions", e);
+            LOGGER.error("MarketMaker.initializeMkvSubscriptions: Error initializing MKV subscriptions", e);
         }
     }
 
@@ -280,7 +275,7 @@ public class MarketMaker implements IOrderManager {
      * Subscribe to bond static data
      */
     private void subscribeToBondStaticData() {
-        ApplicationLogging.logMethodEntry("subscribeToBondStaticData", "Subscribing to bond static data");
+        LOGGER.info("subscribeToBondStaticData: Subscribing to bond static data");
         
         try {
             // Get the publish manager to access patterns
@@ -306,18 +301,15 @@ public class MarketMaker implements IOrderManager {
 
                 LOGGER.info("Subscribed to bond static data: {} with {} fields",
                     BOND_STATIC_PATTERN, BOND_STATIC_FIELDS.length);
-                
-                ApplicationLogging.logMethodExit("subscribeToBondStaticData", 
-                    "Successfully subscribed to bond static data");
+
+                LOGGER.info("subscribeToBondStaticData: Successfully subscribed to bond static data");
             } else {
                 LOGGER.error("Bond static pattern not found: {}. MKV object: {}", 
                     BOND_STATIC_PATTERN, obj);
-                ApplicationLogging.logMethodExit("subscribeToBondStaticData", 
-                    "Failed: Bond static pattern not found");
+                LOGGER.error("subscribeToBondStaticData: Failed: Bond static pattern not found");
             }
         } catch (Exception e) {
-            ApplicationLogging.logException("subscribeToBondStaticData", 
-                "Error subscribing to bond static data", e);
+            LOGGER.error("subscribeToBondStaticData: Error subscribing to bond static data", e);
             LOGGER.error("Error subscribing to bond static data: {}", e.getMessage(), e);
         }
     }
@@ -326,8 +318,8 @@ public class MarketMaker implements IOrderManager {
      * Subscribe to firm position data
      */
     private void subscribeToFirmPositionData() {
-        ApplicationLogging.logMethodEntry("subscribeToFirmPositionData", "Subscribing to firm position data");
-        
+        LOGGER.info("subscribeToFirmPositionData: Subscribing to firm position data");
+
         try {
             // Get the publish manager to access patterns
             MkvPublishManager pm = Mkv.getInstance().getPublishManager();
@@ -345,27 +337,23 @@ public class MarketMaker implements IOrderManager {
 
                 LOGGER.info("Subscribed to firm position data: {} with {} fields",
                     FIRM_POSITION_PATTERN, FIRM_POSITION_FIELDS.length);
-                
-                ApplicationLogging.logMethodExit("subscribeToFirmPositionData", 
-                    "Successfully subscribed to firm position data");
+
+                LOGGER.info("subscribeToFirmPositionData: Successfully subscribed to firm position data");
             } else {
                 LOGGER.info("Firm position pattern not found");
-                ApplicationLogging.logMethodExit("subscribeToFirmPositionData", 
-                    "Failed: Firm position pattern not found");
+                LOGGER.error("subscribeToFirmPositionData: Failed: Firm position pattern not found");
             }
         } catch (Exception e) {
-            ApplicationLogging.logException("subscribeToFirmPositionData", 
-                "Error subscribing to firm position data", e);
-            LOGGER.error("Error subscribing to firm position data: {}", e.getMessage(), e);
+            LOGGER.error("subscribeToFirmPositionData: Error subscribing to firm position data", e);
         }
     }
-    
+
     /**
      * Subscribe to SDS information data
      */
     private void subscribeToSdsInformationData() {
-        ApplicationLogging.logMethodEntry("subscribeToSdsInformationData", "Subscribing to SDS information data");
-        
+        LOGGER.info("subscribeToSdsInformationData: Subscribing to SDS information data");
+
         try {
             // Get the publish manager to access patterns
             MkvPublishManager pm = Mkv.getInstance().getPublishManager();
@@ -383,18 +371,14 @@ public class MarketMaker implements IOrderManager {
 
                 LOGGER.info("Subscribed to SDS information data: {} with {} fields",
                     SDS_INFORMATION_PATTERN, SDS_INFORMATION_FIELDS.length);
-                
-                ApplicationLogging.logMethodExit("subscribeToSdsInformationData", 
-                    "Successfully subscribed to SDS information data");
+
+                LOGGER.info("subscribeToSdsInformationData: Successfully subscribed to SDS information data");
             } else {
                 LOGGER.info("SDS information pattern not found");
-                ApplicationLogging.logMethodExit("subscribeToSdsInformationData", 
-                    "Failed: SDS information pattern not found");
+                LOGGER.error("subscribeToSdsInformationData: Failed: SDS information pattern not found");
             }
         } catch (Exception e) {
-            ApplicationLogging.logException("subscribeToSdsInformationData", 
-                "Error subscribing to SDS information data", e);
-            LOGGER.error("Error subscribing to SDS information data: {}", e.getMessage(), e);
+            LOGGER.error("subscribeToSdsInformationData: Error subscribing to SDS information data", e);
         }
     }
 
@@ -403,8 +387,8 @@ public class MarketMaker implements IOrderManager {
      * Used when disabling the market maker.
      */
     private void cancelAllOrders() {
-        ApplicationLogging.logMethodEntry("cancelAllOrders", "Cancelling all market maker orders");
-        
+        LOGGER.info("cancelAllOrders: Cancelling all market maker orders");
+
         try {
             LOGGER.info("Cancelling all market maker orders");
             int cancelledCount = 0;
@@ -423,10 +407,10 @@ public class MarketMaker implements IOrderManager {
                     cancelledCount++;
                 }
             }
-            
-            ApplicationLogging.logMethodExit("cancelAllOrders", "Cancelled " + cancelledCount + " orders");
+
+            LOGGER.info("cancelAllOrders: Cancelled " + cancelledCount + " orders");
         } catch (Exception e) {
-            ApplicationLogging.logException("cancelAllOrders", "Error cancelling all orders", e);
+            LOGGER.error("cancelAllOrders: Error cancelling all orders", e);
         }
     }
 
@@ -435,10 +419,10 @@ public class MarketMaker implements IOrderManager {
      * Removes stale orders from our tracking.
      */
     private void monitorOrders() {
-        ApplicationLogging.logMethodEntry("monitorOrders", "Starting order monitoring");
+        LOGGER.info("monitorOrders: Starting order monitoring");
         
         if (!enabled) {
-            ApplicationLogging.logMethodExit("monitorOrders", "Skipping - market maker not enabled");
+            LOGGER.info("monitorOrders: Skipping - market maker not enabled");
             return;
         }
         
@@ -475,12 +459,10 @@ public class MarketMaker implements IOrderManager {
                     }
                 }
             }
-            
-            ApplicationLogging.logMethodExit("monitorOrders", 
-                String.format("Monitoring complete - found %d expired orders, %d dead orders", expiredCount, deadCount));
+
+            LOGGER.info("monitorOrders: Monitoring complete - found {} expired orders, {} dead orders", expiredCount, deadCount);
         } catch (Exception e) {
-            ApplicationLogging.logException("monitorOrders", "Error monitoring orders", e);
-            LOGGER.error("Error monitoring orders: " + e.getMessage(), e);
+            LOGGER.error("monitorOrders: Error monitoring orders", e);
         }
     }
 
@@ -489,32 +471,29 @@ public class MarketMaker implements IOrderManager {
      * This method is called when one of our orders on the market source is filled.
      */
     private void executeHedgeTrade(String bondId, String side, double size, double hedgePrice, String referenceSource) {
-        ApplicationLogging.logMethodEntry("executeHedgeTrade", 
-            String.format("Bond=%s, Side=%s, Size=%.2f, Price=%.4f, RefSrc=%s", 
-                bondId, side, size, hedgePrice, referenceSource));
+        LOGGER.info("executeHedgeTrade: Bond={}, Side={}, Size={}, Price={}, RefSrc={}", 
+            bondId, side, size, hedgePrice, referenceSource);
         
         // Skip if auto-hedge is disabled
         if (!config.isAutoHedge()) {
             LOGGER.info("Auto-hedge disabled, skipping hedge trade");
-            ApplicationLogging.logMethodExit("executeHedgeTrade", "Auto-hedge disabled");
+            LOGGER.info("executeHedgeTrade: Auto-hedge disabled");
             return;
         }
 
         try {
             if (referenceSource == null || !isTargetVenue(referenceSource)) {
-                ApplicationLogging.logMethodExit("executeHedgeTrade", 
-                    "Invalid reference source: " + referenceSource);
+                LOGGER.info("executeHedgeTrade: Invalid reference source: {}", referenceSource);
                 return;
             }
-            
+
             // Get the instrument ID that corresponds to this bond ID
             String instrumentId = bondEligibilityListener.getInstrumentIdForBond(bondId);
             if (instrumentId == null) {
-                ApplicationLogging.logMethodExit("executeHedgeTrade", 
-                    "No instrument ID found for bond: " + bondId);
+                LOGGER.info("executeHedgeTrade: No instrument ID found for bond: {}", bondId);
                 return;
             }
-            
+
             // Get the native instrument ID for the reference venue
             String referenceInstrument = null;
             if (depthListener != null) {
@@ -525,11 +504,10 @@ public class MarketMaker implements IOrderManager {
             }
             
             if (referenceInstrument == null) {
-                ApplicationLogging.logMethodExit("executeHedgeTrade", 
-                    "No native instrument ID for bond: " + bondId + " on venue: " + referenceSource);
+                LOGGER.info("executeHedgeTrade: No native instrument ID for bond: {} on venue: {}", bondId, referenceSource);
                 return;
             }
-            
+
             // Create a hedge trade (opposite side of our filled order)
             String hedgeSide = "Buy".equals(side) ? "Sell" : "Buy";
 
@@ -553,7 +531,7 @@ public class MarketMaker implements IOrderManager {
             
             if (hedgeOrder != null) {
                 LOGGER.info("Hedge trade executed successfully: {}", hedgeOrder.getOrderId());
-                ApplicationLogging.logOrderEvent(
+                LOGGER.info(
                     "HEDGE_EXECUTED", 
                     hedgeOrder.getOrderId(), 
                     referenceInstrument, 
@@ -566,22 +544,21 @@ public class MarketMaker implements IOrderManager {
                     0, // Status code 
                     "Hedge for order on " + config.getMarketSource()
                 );
-                ApplicationLogging.logMethodExit("executeHedgeTrade", "Hedge trade placed successfully");
+                LOGGER.info("executeHedgeTrade: Hedge trade placed successfully");
             } else {
                 LOGGER.error("Failed to execute hedge trade");
-                ApplicationLogging.logMethodExit("executeHedgeTrade", "Failed to place hedge order");
+                LOGGER.info("executeHedgeTrade: Failed to place hedge order");
             }
         } catch (Exception e) {
-            ApplicationLogging.logException("executeHedgeTrade", "Error executing hedge trade", e);
-            LOGGER.error("Error executing hedge trade: {}", e.getMessage(), e);
+            LOGGER.error("executeHedgeTrade: Error executing hedge trade", e);
         }
     }
         
     @Override
     public void orderDead(MarketOrder order) {
-        ApplicationLogging.logMethodEntry("orderDead", 
-            "Order dead notification: reqId=" + order.getMyReqId() + ", orderId=" + order.getOrderId());
-        
+        LOGGER.info("orderDead: Order dead notification: reqId={}, orderId={}",
+            order.getMyReqId(), order.getOrderId());
+
         try {
             LOGGER.info(
                 "Order dead notification: reqId={}, orderId={}",
@@ -604,28 +581,28 @@ public class MarketMaker implements IOrderManager {
                     break;
                 }
             }
-            
-            ApplicationLogging.logMethodExit("orderDead", "Order dead notification processed");
+
+            LOGGER.info("orderDead: Order dead notification processed");
         } catch (Exception e) {
-            ApplicationLogging.logException("orderDead", "Error processing orderDead", e);
-            LOGGER.error("Error processing orderDead: {}", e.getMessage(), e);
+            LOGGER.error("orderDead: Error processing orderDead", e);
         }
     }
 
     @Override
     public MarketOrder addOrder(String MarketSource, String TraderId, String instrId, 
                               String verb, double qty, double price, String type, String tif) {
-        ApplicationLogging.logMethodEntry("addOrder", 
-            String.format("Source=%s, Trader=%s, Instrument=%s, Side=%s, Qty=%.2f, Price=%.4f, Type=%s, TIF=%s", 
-                MarketSource, TraderId, instrId, verb, qty, price, type, tif));
-        
+        LOGGER.info("addOrder: Starting order creation: Source={}, Trader={}, Instrument={}, Side={}, Qty={}, Price={}, Type={}, TIF={}", 
+            MarketSource, TraderId, instrId, verb, qty, price, type, tif);
+        String.format("Source=%s, Trader=%s, Instrument=%s, Side=%s, Qty=%.2f, Price=%.4f, Type=%s, TIF=%s", 
+            MarketSource, TraderId, instrId, verb, qty, price, type, tif);
+
         // Delegate to the main OrderManagement instance
         MarketOrder order = orderManager.addOrder(MarketSource, TraderId, instrId, verb, qty, price, type, tif);
         
         if (order != null) {
-            ApplicationLogging.logMethodExit("addOrder", "Order created successfully: reqId=" + order.getMyReqId());
+            LOGGER.info("addOrder: Order created successfully: reqId={}", order.getMyReqId());
         } else {
-            ApplicationLogging.logMethodExit("addOrder", "Failed to create order");
+            LOGGER.info("addOrder: Failed to create order");
         }
         
         return order;
@@ -684,12 +661,10 @@ public class MarketMaker implements IOrderManager {
         instrumentUpdateCounters.computeIfAbsent(id, k -> new AtomicInteger(0)).incrementAndGet();
 
         LOGGER.info("MarketMaker:  best() called with Best object: {}", best);
-        if (ApplicationLogging.getDebugMode()) {
-            ApplicationLogging.logMethodEntry("best", 
-                String.format("Received market update for %s: bid=%.4f, ask=%.4f, bidSrc=%s, askSrc=%s", 
-                    id, best.getBid(), best.getAsk(), best.getBidSrc(), best.getAskSrc()));
-        }
+            LOGGER.info("best: Received market update for {}: bid=%.4f, ask=%.4f, bidSrc={}, askSrc={}", 
+                id, best.getBid(), best.getAsk(), best.getBidSrc(), best.getAskSrc());
         
+
         LOGGER.info("Processing market update for instrument: {}", id);
         if (id.endsWith("C_Fixed")) {
             LOGGER.info("Processing market update for CASH instrument: {}", id);
@@ -704,10 +679,9 @@ public class MarketMaker implements IOrderManager {
         
         // Increment processed counter - we made it to processing the update
         processedUpdateCounter.incrementAndGet();
-        
-        if (ApplicationLogging.getDebugMode()) {
-            ApplicationLogging.logMethodExit("best", "Market update processed");
-        }
+
+        LOGGER.info("best: Market update processed");
+
     }
 
     /**
@@ -720,7 +694,7 @@ public class MarketMaker implements IOrderManager {
         LOGGER.info("processMarketUpdate called with Best object: {}", best);
         LOGGER.info("GCBest object: {}", gcBest);        
         if (!enabled) {
-            ApplicationLogging.logMethodExit("processMarketUpdate", "Market maker not enabled, skipping");
+            LOGGER.info("processMarketUpdate: Market maker not enabled, skipping");
             return;
         }
         
@@ -731,7 +705,7 @@ public class MarketMaker implements IOrderManager {
             LOGGER.info("Processing market update for instrument ID: {}", instrumentId);
 
             if (bestId == null || bestId.isEmpty()) {
-                ApplicationLogging.logMethodExit("processMarketUpdate", "Empty instrument ID, skipping");
+                LOGGER.info("processMarketUpdate: Empty instrument ID, skipping");
                 return;
             }
             
@@ -754,25 +728,13 @@ public class MarketMaker implements IOrderManager {
             
             // If we can't find a bond mapping, this instrument isn't eligible for market making
             if (bondId == null) {
-                if (ApplicationLogging.getDebugMode()) {
-                    ApplicationLogging.logMethodExit("processMarketUpdate", 
-                        "No bond mapping found for instrument: " + bestId);
-                } else {
-                    // Periodically log this to help debug missing mappings
-                    if (instrumentUpdateCounters.getOrDefault(bestId, new AtomicInteger(0)).get() % 100 == 1) {
-                        LOGGER.info("No bond mapping found for instrument: {} (received {} updates)", 
-                            bestId, instrumentUpdateCounters.getOrDefault(bestId, new AtomicInteger(0)).get());
-                    }
-                }
+                LOGGER.info("processMarketUpdate: No bond mapping found for instrument: {}", bestId);
                 return;
             }
-            
+
             // Check if this bond is in our tracked instruments
             if (!trackedInstruments.contains(bondId)) {
-                if (ApplicationLogging.getDebugMode()) {
-                    ApplicationLogging.logMethodExit("processMarketUpdate", 
-                        "Bond not in tracked instruments: " + bondId);
-                }
+                LOGGER.info("processMarketUpdate: Bond not in tracked instruments: {}", bondId);
                 return;
             }
 
@@ -780,13 +742,10 @@ public class MarketMaker implements IOrderManager {
 
             // Process with symmetric quoting (simplified for this example)
             processSymmetricQuoting(best, bondId);
-            
-            ApplicationLogging.logMethodExit("processMarketUpdate", 
-                "Market update processed for bond: " + bondId);
+
+            LOGGER.info("processMarketUpdate: Market update processed for bond: {}", bondId);
             
         } catch (Exception e) {
-            ApplicationLogging.logException("processMarketUpdate", 
-                "Error processing market update", e);
             LOGGER.error("Error processing market update: {}", e.getMessage(), e);
         }
     }
@@ -837,8 +796,8 @@ public class MarketMaker implements IOrderManager {
      * Get current status for monitoring - enhanced to include diagnostic counters
      */
     public Map<String, Object> getMarketMakerStatus() {
-        ApplicationLogging.logMethodEntry("getMarketMakerStatus", "Getting current status");
-        
+        LOGGER.info("getMarketMakerStatus: Getting current status");
+
         Map<String, Object> status = new HashMap<>();
         status.put("enabled", enabled);
         status.put("trackedInstruments", trackedInstruments.size());
@@ -880,9 +839,8 @@ public class MarketMaker implements IOrderManager {
             status.put("depthListenerActive", false);
             status.put("instrumentsLoaded", 0);
         }
-        
-        ApplicationLogging.logMethodExit("getMarketMakerStatus", 
-            "Returning status with " + status.size() + " items");
+
+        LOGGER.info("getMarketMakerStatus: Returning status with {} items", status.size());
         return status;
     }
 
@@ -953,8 +911,7 @@ public class MarketMaker implements IOrderManager {
      */
     @Override
     public void mapOrderIdToReqId(String orderId, int reqId) {
-        ApplicationLogging.logMethodEntry("mapOrderIdToReqId", "Mapping orderId: " + orderId + " to reqId: " + reqId);
-        
+       
         LOGGER.info("MarketMaker.mapOrderIdToReqId() - Mapping orderId: {} to reqId: {}", orderId, reqId);
         
         // Store the mapping in a local map for quick lookups
@@ -964,8 +921,8 @@ public class MarketMaker implements IOrderManager {
         if (orderManager != null) {
             orderManager.mapOrderIdToReqId(orderId, reqId);
         }
-        
-        ApplicationLogging.logMethodExit("mapOrderIdToReqId", "Mapping complete");
+
+        LOGGER.info("mapOrderIdToReqId: Mapping complete");
     }
 
     /**
@@ -974,16 +931,16 @@ public class MarketMaker implements IOrderManager {
      * @param enabled Whether market making should be enabled
      */
     public void setEnabled(boolean enabled) {
-        ApplicationLogging.logMethodEntry("setEnabled", "Setting enabled=" + enabled);
-        
+        LOGGER.info("setEnabled: Setting enabled={}", enabled);
+
         boolean previousState = this.enabled;
         this.enabled = enabled;
         
         if (previousState != enabled) {
             if (enabled) {
                 LOGGER.info("Market making enabled");
-                ApplicationLogging.logDiagnostic("MarketMaker", "Market making enabled");
-                
+                LOGGER.info("MarketMaker: Market making enabled");
+
                 // Start market making for eligible bonds
                 makeMarketsForEligibleBonds();
                 
@@ -991,28 +948,26 @@ public class MarketMaker implements IOrderManager {
                 monitorOrders();
             } else {
                 LOGGER.info("Market making disabled");
-                ApplicationLogging.logDiagnostic("MarketMaker", "Market making disabled");
-                
+                LOGGER.info("MarketMaker: Market making disabled");
+
                 // Cancel all pending orders
                 cancelAllOrders();
             }
         }
-        
-        ApplicationLogging.logMethodExit("setEnabled", "Enabled state set to: " + enabled);
+
+        LOGGER.info("setEnabled: Enabled state set to: {}", enabled);
     }
     
     private void handleEligibilityChange(String cusip, boolean isEligible, Map<String, Object> bondData) {
-        ApplicationLogging.logMethodEntry("handleEligibilityChange", 
-            "Bond=" + cusip + ", isEligible=" + isEligible);
-        
+        LOGGER.info("handleEligibilityChange: Bond={} isEligible={}", cusip, isEligible);
+
         if (!enabled) {
-            ApplicationLogging.logMethodExit("handleEligibilityChange", "Market maker not enabled, ignoring change");
+            LOGGER.info("handleEligibilityChange: Market maker not enabled, ignoring change");
             return;
         }
-        
+
         try {
-            LOGGER.info("Bond eligibility changed: " + cusip + " -> " + 
-                (isEligible ? "ELIGIBLE" : "INELIGIBLE"));
+            LOGGER.info("Bond eligibility changed: {} -> {}", cusip, (isEligible ? "ELIGIBLE" : "INELIGIBLE"));
 
             if (isEligible) {
                 // Bond became eligible, add to tracked set and create initial markets
@@ -1020,9 +975,8 @@ public class MarketMaker implements IOrderManager {
                 
                 // Try to create initial markets for this bond
                 tryCreateInitialMarkets(cusip);
-                
-                ApplicationLogging.logMethodExit("handleEligibilityChange", 
-                    "Bond " + cusip + " became eligible, initial markets created");
+
+                LOGGER.info("handleEligibilityChange: Bond {} became eligible, initial markets created", cusip);
             } else {
                 // Bond became ineligible, remove from tracked set and cancel orders
                 trackedInstruments.remove(cusip);
@@ -1030,29 +984,26 @@ public class MarketMaker implements IOrderManager {
                 
                 // Remove from active quotes
                 activeQuotes.remove(cusip);
-                
-                ApplicationLogging.logMethodExit("handleEligibilityChange", 
-                    "Bond " + cusip + " became ineligible, orders cancelled");
+
+                LOGGER.info("handleEligibilityChange: Bond {} became ineligible, orders cancelled", cusip);
             }
         } catch (Exception e) {
-            ApplicationLogging.logException("handleEligibilityChange", 
-                "Error handling eligibility change for " + cusip, e);
-            LOGGER.error("Error handling eligibility change for " + cusip + ": " + e.getMessage(), e);
+            LOGGER.error("Error handling eligibility change for {}: {}", cusip, e.getMessage(), e);
         }
     }
 
     private void makeMarketsForEligibleBonds() {
-        ApplicationLogging.logMethodEntry("makeMarketsForEligibleBonds", "Starting periodic market making");
+        LOGGER.info("makeMarketsForEligibleBonds: Starting periodic market making");
         
         if (!enabled) {
-            ApplicationLogging.logMethodExit("makeMarketsForEligibleBonds", "Market maker not enabled, skipping");
+            LOGGER.info("makeMarketsForEligibleBonds: Market maker not enabled, skipping");
             return;
         }
         
         try {
             Set<String> eligibleBonds = bondEligibilityListener.getEligibleBonds();
 
-            LOGGER.info("Making markets for " + eligibleBonds.size() + " eligible bonds");
+            LOGGER.info("Making markets for {} eligible bonds", eligibleBonds.size());
 
             int marketsCreated = 0;
             int marketsUpdated = 0;
@@ -1087,13 +1038,10 @@ public class MarketMaker implements IOrderManager {
                 marketsRemoved++;
             }
             
-            ApplicationLogging.logMethodExit("makeMarketsForEligibleBonds", 
-                String.format("Market making completed: %d created, %d updated, %d removed", 
-                    marketsCreated, marketsUpdated, marketsRemoved));
+            LOGGER.info("makeMarketsForEligibleBonds: Market making completed: {} created, {} updated, {} removed", 
+                marketsCreated, marketsUpdated, marketsRemoved);
         } catch (Exception e) {
-            ApplicationLogging.logException("makeMarketsForEligibleBonds", 
-                "Error in periodic market making", e);
-            LOGGER.error("Error in periodic market making: " + e.getMessage(), e);
+            LOGGER.error("makeMarketsForEligibleBonds: Error in periodic market making: {}", e.getMessage(), e);
         }
     }
 
@@ -1308,7 +1256,7 @@ public class MarketMaker implements IOrderManager {
 
     @Override
     public void removeOrder(int reqId) {
-        ApplicationLogging.logMethodEntry("removeOrder", "Removing order with reqId: " + reqId);
+        LOGGER.info("removeOrder: Removing order with reqId: {}", reqId);
         
         try {
             LOGGER.info("MarketMaker.removeOrder() - Removing order with reqId: {}", reqId);
@@ -1339,10 +1287,9 @@ public class MarketMaker implements IOrderManager {
                 orderManager.removeOrder(reqId);
             }
             
-            ApplicationLogging.logMethodExit("removeOrder", "Order removed successfully");
+            LOGGER.info("removeOrder: Order removed successfully");
         } catch (Exception e) {
-            ApplicationLogging.logException("removeOrder", "Error removing order with reqId: " + reqId, e);
-            LOGGER.error("Error removing order with reqId {}: {}", reqId, e.getMessage(), e);
+            LOGGER.error("removeOrder: Error removing order with reqId {}: {}", reqId, e.getMessage(), e);
         }
     }
 
@@ -1398,21 +1345,21 @@ public class MarketMaker implements IOrderManager {
      * Update configuration
      */
     public void updateConfiguration(MarketMakerConfig newConfig) {
-        ApplicationLogging.logMethodEntry("updateConfiguration", "Updating configuration: " + newConfig);
-        
+        LOGGER.info("updateConfiguration: Updating configuration: {}", newConfig);
+
         // Note: This should be implemented to safely update config
         // For now, logging that update was requested
         LOGGER.warn("Configuration update requested but not implemented safely");
-        
-        ApplicationLogging.logMethodExit("updateConfiguration", "Configuration update not implemented");
+
+        LOGGER.info("updateConfiguration: Configuration update not implemented");
     }
 
     /**
      * Get configuration summary for monitoring
      */
     public Map<String, Object> getConfigSummary() {
-        ApplicationLogging.logMethodEntry("getConfigSummary", "Getting configuration summary");
-        
+        LOGGER.info("getConfigSummary: Getting configuration summary");
+
         Map<String, Object> summary = new HashMap<>();
         summary.put("enabled", enabled);
         summary.put("marketSource", config.getMarketSource());
@@ -1422,8 +1369,8 @@ public class MarketMaker implements IOrderManager {
         summary.put("autoHedge", config.isAutoHedge());
         summary.put("activeQuotes", activeQuotes.size());
         summary.put("trackedInstruments", trackedInstruments.size());
-        
-        ApplicationLogging.logMethodExit("getConfigSummary", "Returning summary with " + summary.size() + " items");
+
+        LOGGER.info("getConfigSummary: Returning summary with {} items", summary.size());
         return summary;
     }
 
@@ -1488,13 +1435,13 @@ public class MarketMaker implements IOrderManager {
      * @return true if it's a target venue, false otherwise
      */
     private boolean isTargetVenue(String venue) {
-        ApplicationLogging.logMethodEntry("isTargetVenue", "Checking if venue is targeted: " + venue);
+        LOGGER.info("isTargetVenue: Checking if venue is targeted: {}", venue);
         if (venue == null) {
-            ApplicationLogging.logMethodExit("isTargetVenue", "Result: false (venue is null)");
+            LOGGER.info("isTargetVenue: Result: false (venue is null)");
             return false;
         }
         boolean result = config.getTargetVenuesSet().contains(venue);
-        ApplicationLogging.logMethodExit("isTargetVenue", "Result: " + result + " for venue: " + venue);
+        LOGGER.info("isTargetVenue: Result: {} for venue: {}", result, venue);
         return result;
     }
     
@@ -1509,29 +1456,28 @@ public class MarketMaker implements IOrderManager {
      */
     private void placeOrder(String cusip, String nativeInstrument, String verb, 
                         double size, double price, String referenceSource) {
-        ApplicationLogging.logMethodEntry("placeOrder", 
-            String.format("CUSIP=%s, Native=%s, Side=%s, Size=%.2f, Price=%.4f, Source=%s", 
-                cusip, nativeInstrument, verb, size, price, referenceSource));
+        LOGGER.info("placeOrder: CUSIP={}, Native={}, Side={}, Size={}, Price={}, Source={}", 
+            cusip, nativeInstrument, verb, size, price, referenceSource);
         
         try {
             // Additional validation before placing order
             if (size <= 0) {
                 LOGGER.warn("Invalid order size: {}, must be positive", size);
-                ApplicationLogging.logMethodExit("placeOrder", "Failed: Invalid order size");
+                LOGGER.info("placeOrder: Failed: Invalid order size");
                 return;
             }
 
             if (price <= 0 || price < config.getMinPrice() || price > config.getMaxPrice()) {
                 LOGGER.warn("Invalid order price: {} (min={}, max={})", 
                     price, config.getMinPrice(), config.getMaxPrice());
-                ApplicationLogging.logMethodExit("placeOrder", "Failed: Invalid order price");
+                LOGGER.info("placeOrder: Failed: Invalid order price");
                 return;
             }
 
             // Check if we're within trading hours for default markets
             if ("DEFAULT".equals(referenceSource) && !config.isDefaultMarketMakingAllowed()) {
                 LOGGER.info("Default market making not allowed at this time");
-                ApplicationLogging.logMethodExit("placeOrder", "Failed: Default market making not allowed");
+                LOGGER.info("placeOrder: Failed: Default market making not allowed");
                 return;
             }
 
@@ -1557,28 +1503,23 @@ public class MarketMaker implements IOrderManager {
                 
                 if ("Buy".equals(verb)) {
                     quote.setBidOrder(order, referenceSource, price);
-                    ApplicationLogging.logDiagnostic("MarketMaker", 
-                        String.format("Bid quote updated for %s: price=%.4f, source=%s, reqId=%d", 
-                            cusip, price, referenceSource, order.getMyReqId()));
+                    LOGGER.info("MarketMaker: Bid quote updated for {}: price=%.4f, source={}, reqId={}", 
+                        cusip, price, referenceSource, order.getMyReqId());
                 } else {
                     quote.setAskOrder(order, referenceSource, price);
-                    ApplicationLogging.logDiagnostic("MarketMaker", 
-                        String.format("Ask quote updated for %s: price=%.4f, source=%s, reqId=%d", 
-                            cusip, price, referenceSource, order.getMyReqId()));
+                    LOGGER.info("MarketMaker: Ask quote updated for {}: price=%.4f, source={}, reqId={}", 
+                        cusip, price, referenceSource, order.getMyReqId());
                 }
-                
+
                 // Now also track this instrument
                 trackedInstruments.add(cusip);
-                
-                ApplicationLogging.logMethodExit("placeOrder", "Order placed successfully");
+                LOGGER.info("placeOrder: Order placed successfully");
             } else {
                 LOGGER.error("Failed to place {} order for {}", verb, cusip);
-                ApplicationLogging.logMethodExit("placeOrder", "Failed to place order");
+                LOGGER.info("placeOrder: Failed to place order");
             }
         } catch (Exception e) {
-            ApplicationLogging.logException("placeOrder", 
-                "Error placing order for " + cusip, e);
-            LOGGER.error("Error placing order for {}: {}", cusip, e.getMessage(), e);
+            LOGGER.error("placeOrder: Error placing order for {}", cusip, e);
         }
     }
 
@@ -1588,11 +1529,10 @@ public class MarketMaker implements IOrderManager {
      * @param bondId The bond ID
      */
     private void processSymmetricQuoting(Best best, String bondId) {
-        LOGGER.info("processSymmetricQuoting", 
-            "Processing symmetric quoting for bond: " + bondId);
-        
+        LOGGER.info("processSymmetricQuoting: Processing symmetric quoting for bond: {}", bondId);
+
         try {
-             String instrumentId = bondEligibilityListener.getInstrumentIdForBond(bondId);
+            String instrumentId = bondEligibilityListener.getInstrumentIdForBond(bondId);
             // if (instrumentId == null) {
             //     LOGGER.warn("No instrument ID found for bond: {}", bondId);
             //     LOGGER.debug(instrumentId);("processSymmetricQuoting:  Failed: No instrument ID found for bond");
@@ -1622,8 +1562,6 @@ public class MarketMaker implements IOrderManager {
             
             if (!validBidSource && !validAskSource) {
                 LOGGER.debug("Skipping symmetric quoting - no valid source venues");
-                ApplicationLogging.logMethodExit("processSymmetricQuoting", 
-                    "Skipped: No valid source venues");
                 return;
             }
 
@@ -1686,8 +1624,7 @@ public class MarketMaker implements IOrderManager {
             if (nativeInstrument == null) {
                 LOGGER.warn("No native instrument ID found for {} on {}", 
                     instrumentId, config.getMarketSource());
-                ApplicationLogging.logMethodExit("processSymmetricQuoting", 
-                    "Failed: No native instrument ID found");
+                LOGGER.info("processSymmetricQuoting: Failed: No native instrument ID found");
                 return;
             }
 
@@ -1710,21 +1647,17 @@ public class MarketMaker implements IOrderManager {
                         ourAskPrice, referenceAskSource);
                 }
                 
-                ApplicationLogging.logMethodExit("processSymmetricQuoting", 
-                    "New quotes created for bond: " + bondId);
+                LOGGER.info("processSymmetricQuoting: New quotes created for bond: {}", bondId);
             } else {
                 // Update existing quotes
                 updateExistingSymmetricQuotes(existingQuote, bondId, nativeInstrument,
                     validBidSource, ourBidPrice, referenceBidSource,
                     validAskSource, ourAskPrice, referenceAskSource);
                 
-                ApplicationLogging.logMethodExit("processSymmetricQuoting", 
-                    "Updated existing quotes for bond: " + bondId);
+                LOGGER.info("processSymmetricQuoting: Updated existing quotes for bond: {}", bondId);
             }
             
         } catch (Exception e) {
-            ApplicationLogging.logException("processSymmetricQuoting", 
-                "Error processing symmetric quoting for bond " + bondId, e);
             LOGGER.error("Error processing symmetric quoting for bond {}: {}", bondId, e.getMessage(), e);
         }
     }
@@ -1735,8 +1668,7 @@ public class MarketMaker implements IOrderManager {
     private void updateExistingSymmetricQuotes(ActiveQuote existingQuote, String bondId, String nativeInstrument,
                                             boolean validBidSource, double ourBidPrice, String referenceBidSource,
                                             boolean validAskSource, double ourAskPrice, String referenceAskSource) {
-        ApplicationLogging.logMethodEntry("updateExistingSymmetricQuotes", 
-            "Updating quotes for bond: " + bondId);
+        LOGGER.info("updateExistingSymmetricQuotes: Updating quotes for bond: {}", bondId);
         
         try {
             // Define minimum price change threshold to avoid excessive order churn
@@ -1807,14 +1739,11 @@ public class MarketMaker implements IOrderManager {
                 LOGGER.info("Cancelling ask for {} as source is no longer valid", bondId);
                 cancelOrder(existingQuote.getAskOrder(), bondId);
             }
-            
-            ApplicationLogging.logMethodExit("updateExistingSymmetricQuotes", 
-                "Quotes updated for bond: " + bondId);
-            
+
+            LOGGER.info("updateExistingSymmetricQuotes: Quotes updated for bond: {}", bondId);
+
         } catch (Exception e) {
-            ApplicationLogging.logException("updateExistingSymmetricQuotes", 
-                "Error updating symmetric quotes for bond " + bondId, e);
-            LOGGER.error("Error updating symmetric quotes for bond {}: {}", bondId, e.getMessage(), e);
+            LOGGER.error("updateExistingSymmetricQuotes: Error updating symmetric quotes for bond {}: {}", bondId, e.getMessage(), e);
         }
     }
 }
