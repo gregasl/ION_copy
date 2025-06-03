@@ -8,7 +8,7 @@
  * expensive calculations in the onPublish method.
  */
 
-package com.iontrading.samples.advanced.orderManagement;
+package com.iontrading.automatedMarketMaking;
 
 import java.util.Set;
 import java.util.Date;
@@ -104,18 +104,18 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
         
         // Core business logic at INFO
         ApplicationLogging.setLogLevels("INFO",
-            "com.iontrading.samples.advanced.orderManagement.OrderManagement"
+            "com.iontrading.samples.advanced.orderManagement.OrderManagement",
+            "com.iontrading.samples.advanced.orderManagement.MarketOrder",
+            "com.iontrading.samples.advanced.orderManagement.DepthListener"
         );
 
         // Infrastructure at ERROR
         ApplicationLogging.setLogLevels("ERROR",
             "com.iontrading.samples.advanced.orderManagement.AsyncLoggingManager",
             "com.iontrading.samples.advanced.orderManagement.ApplicationLogging",
-            "com.iontrading.samples.advanced.orderManagement.Instrument",
-            "com.iontrading.samples.advanced.orderManagement.MarketOrder",
-            "com.iontrading.samples.advanced.orderManagement.Best",
-            "com.iontrading.samples.advanced.orderManagement.DepthListener",
             "com.iontrading.samples.advanced.orderManagement.MarketDef",
+            "com.iontrading.samples.advanced.orderManagement.Best",
+            "com.iontrading.samples.advanced.orderManagement.Instrument",
             "com.iontrading.samples.advanced.orderManagement.GCBest",
             "com.iontrading.samples.advanced.orderManagement.GCLevelResult"
         );
@@ -160,8 +160,14 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
   // Instance of DepthListener to load and access instrument data
   private static DepthListener depthListener;
 
+  // Market maker instance for automated market making
+  private MarketMaker marketMaker;
+  
+  // Market maker configuration
+  private MarketMakerConfig marketMakerConfig;
+
   //Map to track which instrument pairs we've already traded
-private final Map<String, Long> lastTradeTimeByInstrument = 
+  private final Map<String, Long> lastTradeTimeByInstrument = 
     Collections.synchronizedMap(new LinkedHashMap<String, Long>(16, 0.75f, true) {
         @Override
         protected boolean removeEldestEntry(Map.Entry<String, Long> eldest) {
@@ -174,7 +180,7 @@ private final Map<String, Long> lastTradeTimeByInstrument =
   private boolean continuousTradingEnabled = true;
   //Timer for periodic market rechecks
   private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
-
+  
   private final Map<String, String> venueToTraderMap = new HashMap<>();
   // Pattern identifiers from MarketDef
   private static final String DEPTH_PATTERN = MarketDef.DEPTH_PATTERN;
@@ -200,9 +206,9 @@ private final Map<String, Long> lastTradeTimeByInstrument =
     ThreadLocal.withInitial(() -> new StringBuilder(512));
 
   // Redis connection constants
-  private static final String HEARTBEAT_CHANNEL = "HEARTBEAT:ION:ORDERMANAGEMENT";
-  private static final String ADMIN_CHANNEL = "ADMIN:ION:ORDERMANAGEMENT";
-  private static final String REDIS_HOST = "cacheprod";
+  private static final String HEARTBEAT_CHANNEL = "HEARTBEAT:ION:MARKETMAKER";
+  private static final String ADMIN_CHANNEL = "ADMIN:ION:MARKETMAKER";
+  private static final String REDIS_HOST = "cacheuat";
   private static final int REDIS_PORT = 6379;
   
   public final String hostname = System.getenv("COMPUTERNAME");
@@ -229,9 +235,13 @@ private final Map<String, Long> lastTradeTimeByInstrument =
   private final AtomicReference<Double> latestRegGC = new AtomicReference<>(0.0);
   private final AtomicReference<GCBest> sharedGCBestCash = new AtomicReference<>();
   private final AtomicReference<GCBest> sharedGCBestREG = new AtomicReference<>();
-
+//   private volatile double latestCashGC = 0.0;
+//   private volatile double latestRegGC = 0.0;
+//   private volatile GCBest sharedGCBestCash = null;
+//   private volatile GCBest sharedGCBestREG = null;
   private final Map<String, Best> latestBestByInstrument = new ConcurrentHashMap<String, Best>() {
     private static final int MAX_SIZE = 5000;
+    
     @Override
     public Best put(String key, Best value) {
         if (size() >= MAX_SIZE) {
@@ -324,7 +334,7 @@ private final Map<String, Long> lastTradeTimeByInstrument =
       // Initialize centralized logging before anything else
       try {
           System.out.println("### STARTUP: Beginning application initialization");
-    	  if (!ApplicationLogging.initialize("orderManagement")) {
+    	  if (!ApplicationLogging.initialize("MarketMaker")) {
     		  System.err.println("Failed to initialize logging, exiting");
     		  System.exit(1);
     	  }
@@ -378,6 +388,9 @@ private final Map<String, Long> lastTradeTimeByInstrument =
       // DepthListener now handles instrument data loading internally
       // and reports status through its health monitoring methods
       LOGGER.info("Instrument data will be loaded by DepthListener automatically");
+
+      // Initialize the market maker component
+      om.initializeMarketMaker();
 
       // Set up depth subscriptions - this will trigger the instrument data loading
       LOGGER.info("Setting up depths subscriptions");
@@ -445,11 +458,6 @@ private final Map<String, Long> lastTradeTimeByInstrument =
     // Initialize heartbeats
     initializeHeartbeat();
 
-    // Initialize the market recheck scheduler
-    initializeMarketRechecks();
-   
-    // Initialize the order expiration checker
-    initializeOrderExpirationChecker();
 }
 
   /**
@@ -472,16 +480,113 @@ private final Map<String, Long> lastTradeTimeByInstrument =
   
   // Initialize the mapping of venues to trader IDs
   private void initializeTraderMap() {
-      venueToTraderMap.put("BTEC_REPO_US", "EGEI");
-      venueToTraderMap.put("DEALERWEB_REPO", "aslegerhard01");
-      venueToTraderMap.put("FENICS_USREPO", "frosevan");
-//    venueToTraderMap.put("BTEC_REPO_US", "TEST2");
-//    venueToTraderMap.put("DEALERWEB_REPO", "asldevtrd1");
-//    venueToTraderMap.put("FENICS_USREPO", "frosasl1");
+    //  venueToTraderMap.put("BTEC_REPO_US", "EGEI");
+    //  venueToTraderMap.put("DEALERWEB_REPO", "aslegerhard01");
+    //  venueToTraderMap.put("FENICS_USREPO", "frosevan");
+    venueToTraderMap.put("BTEC_REPO_US", "TEST2");
+    venueToTraderMap.put("DEALERWEB_REPO", "asldevtrd1");
+    venueToTraderMap.put("FENICS_USREPO", "frosasl1");
       // Add more venue-trader mappings as needed
 
       LOGGER.info("Venue to trader mapping initialized with {} entries", venueToTraderMap.size());
   }
+
+    /**
+     * Initializes the market maker component with default configuration
+     */
+    private void initializeMarketMaker() {
+        try {
+            // Create default market maker configuration
+            marketMakerConfig = new MarketMakerConfig();
+            marketMakerConfig.setDefaultSpreadBps(5);
+            marketMakerConfig.setDefaultSize(25);
+            marketMakerConfig.setAutoEnabled(false); // Start disabled by default
+            marketMakerConfig.setQuoteUpdateIntervalSeconds(30);
+            LOGGER.info("Default market maker configuration created: {}", marketMakerConfig);
+            // Create the market maker instance
+            marketMaker = new MarketMaker(this, marketMakerConfig);
+            LOGGER.info("Market maker initialized with default configuration: {}", marketMakerConfig);
+
+            // Add a shutdown hook for the market maker
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                if (marketMaker != null) {
+                    LOGGER.info("Shutting down market maker");
+                    marketMaker.shutdown();
+                }
+            }));
+        } catch (Exception e) {
+            LOGGER.error("Error initializing market maker", e);
+        }
+    }
+
+    /**
+     * Starts the automated market making process
+     * 
+     * @return true if started successfully, false otherwise
+     */
+    public boolean startMarketMaking() {
+        try {
+            if (marketMaker != null) {
+                marketMaker.startAutomatedMarketMaking();
+                LOGGER.info("Market making started");
+                return true;
+            }
+            return false;
+        } catch (Exception e) {
+            LOGGER.error("Error starting market making", e);
+            return false;
+        }
+    }
+
+    /**
+     * Stops the automated market making process
+     * 
+     * @return true if stopped successfully, false otherwise
+     */
+    public boolean stopMarketMaking() {
+        try {
+            if (marketMaker != null) {
+                marketMaker.stopAutomatedMarketMaking();
+                LOGGER.info("Market making stopped");
+                return true;
+            }
+            return false;
+        } catch (Exception e) {
+            LOGGER.error("Error stopping market making", e);
+            return false;
+        }
+    }
+
+    /**
+     * Updates the market maker configuration
+     * 
+     * @param config The new configuration
+     */
+    public void updateMarketMakerConfig(MarketMakerConfig config) {
+        if (marketMaker != null && config != null) {
+            marketMaker.updateConfiguration(config);
+            this.marketMakerConfig = config;
+            LOGGER.info("Market maker configuration updated: {}", config);
+        }
+    }
+
+    /**
+     * Gets the market maker instance
+     * 
+     * @return The market maker instance
+     */
+    public MarketMaker getMarketMaker() {
+        return marketMaker;
+    }
+
+    /**
+     * Gets the current market maker configuration
+     * 
+     * @return The market maker configuration
+     */
+    public MarketMakerConfig getMarketMakerConfig() {
+        return marketMakerConfig;
+    }
 
   public static long getOrderTtlForCurrentTime() {
 	    // Get the current time
@@ -497,31 +602,9 @@ private final Map<String, Long> lastTradeTimeByInstrument =
 	        return SHORT_ORDER_TTL_MS;
 	    }
 	}
-  
-  /**
-   * Initializes the order expiration checker to automatically cancel orders
-   * that have been in the market for too long.
-   */
-  private void initializeOrderExpirationChecker() {
-      // Schedule a task to check for expired orders every 10 seconds
-      orderExpirationScheduler.scheduleAtFixedRate(
-          this::checkForExpiredOrders, 
-          30,  // Initial delay (30 seconds)
-          10,  // Check every 10 seconds
-          TimeUnit.SECONDS
-      );
-      
-      // Add a shutdown hook to clean up the scheduler
-      Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-          LOGGER.info("Shutting down order expiration scheduler");
-          shutdownExecutor(orderExpirationScheduler, "Order expiration scheduler");
-      }));
-
-      LOGGER.info("Order expiration checker initialized (TTL: 60 secs before 7:15, 15 secs after)");
-  }
 
 	//Helper method to get trader ID for a venue
-	private String getTraderForVenue(String venue) {
+	public String getTraderForVenue(String venue) {
 	   String traderId = venueToTraderMap.get(venue);
 	   if (traderId == null) {
 	       LOGGER.warn("No trader configured for venue: {}", venue);
@@ -597,13 +680,19 @@ private final Map<String, Long> lastTradeTimeByInstrument =
 	            Map<String, Object> controlMessage = parseControlMessage(message);
 	            String command = (String) controlMessage.getOrDefault("command", "");
 	            
-	            if ("STOP".equalsIgnoreCase(command)) {
-	                handleStopCommand(controlMessage);
-	            } else if ("RESUME".equalsIgnoreCase(command)) {
-	                handleResumeCommand(controlMessage);
-	            } else {
-	                LOGGER.warn("Unknown control command received: {}", command);
-	            }
+                if ("STOP".equalsIgnoreCase(command)) {
+                    handleStopCommand(controlMessage);
+                } else if ("RESUME".equalsIgnoreCase(command)) {
+                    handleResumeCommand(controlMessage);
+                } else if ("MM_START".equalsIgnoreCase(command)) {
+                    handleMarketMakerStartCommand(controlMessage);
+                } else if ("MM_STOP".equalsIgnoreCase(command)) {
+                    handleMarketMakerStopCommand(controlMessage);
+                } else if ("MM_CONFIG".equalsIgnoreCase(command)) {
+                    handleMarketMakerConfigCommand(controlMessage);
+                } else {
+                    LOGGER.warn("Unknown control command received: {}", command);
+                }
 	        } catch (Exception e) {
 	            LOGGER.error("Error processing control message: {}", e.getMessage(), e);
 	        }
@@ -620,88 +709,178 @@ private final Map<String, Long> lastTradeTimeByInstrument =
 	    }
 	}
 	
+    /**
+     * Parses a control message string into a Map.
+     * 
+     * @param message The message string to parse
+     * @return A Map containing the parsed message data
+     */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> parseControlMessage(String message) {
+        try {
+            // Parse message as JSON
+            return OBJECT_MAPPER.readValue(message, Map.class);
+        } catch (Exception e) {
+            // If not valid JSON, create a simple command map
+            LOGGER.warn("Failed to parse control message as JSON, treating as plain command: {}", message);
+            
+            Map<String, Object> result = new HashMap<>();
+            result.put("command", message.trim());
+            return result;
+        }
+    }
 
-/**
- * Parses a control message string into a Map.
- * 
- * @param message The message string to parse
- * @return A Map containing the parsed message data
- */
-@SuppressWarnings("unchecked")
-private Map<String, Object> parseControlMessage(String message) {
-    try {
-        // Parse message as JSON
-        return OBJECT_MAPPER.readValue(message, Map.class);
-    } catch (Exception e) {
-        // If not valid JSON, create a simple command map
-        LOGGER.warn("Failed to parse control message as JSON, treating as plain command: {}", message);
+    /**
+     * Handles the STOP command, cancelling existing orders and preventing new ones.
+     * 
+     * @param controlMessage The control message containing command parameters
+     */
+    private void handleStopCommand(Map<String, Object> controlMessage) {
+        // Skip if already stopped
+        if (isSystemStopped) {
+            LOGGER.info("System already in STOPPED state, ignoring redundant STOP command");
+            return;
+        }
+
+        LOGGER.warn("Executing STOP command - cancelling orders and preventing new submissions");
+
+        // Set the system to stopped state
+        isSystemStopped = true;
+
+        // Disable continuous trading to prevent auto-trading
+        continuousTradingEnabled = false;
         
-        Map<String, Object> result = new HashMap<>();
-        result.put("command", message.trim());
-        return result;
-    }
-}
+        // Cancel all existing orders
+        cancelAllOrders();
+        
+        // Publish status update
+    //    publishSystemStatus();
 
-/**
- * Handles the STOP command, cancelling existing orders and preventing new ones.
- * 
- * @param controlMessage The control message containing command parameters
- */
-private void handleStopCommand(Map<String, Object> controlMessage) {
-    // Skip if already stopped
-    if (isSystemStopped) {
-        LOGGER.info("System already in STOPPED state, ignoring redundant STOP command");
-        return;
-    }
+        LOGGER.warn("STOP command executed - system is now STOPPED");
+    }   
 
-    LOGGER.warn("Executing STOP command - cancelling orders and preventing new submissions");
+    /**
+     * Handles the RESUME command, allowing new orders to be submitted.
+     * 
+     * @param controlMessage The control message containing command parameters
+     */
+    private void handleResumeCommand(Map<String, Object> controlMessage) {
+        // Skip if not stopped
+        if (!isSystemStopped) {
+            LOGGER.info("System already in RUNNING state, ignoring redundant RESUME command");
+            return;
+        }
 
-    // Set the system to stopped state
-    isSystemStopped = true;
+        LOGGER.warn("Executing RESUME command - allowing new order submissions");
 
-    // Disable continuous trading to prevent auto-trading
-    continuousTradingEnabled = false;
-    
-    // Cancel all existing orders
-    cancelAllOrders();
-    
-    // Publish status update
-//    publishSystemStatus();
+        // Set the system back to running state
+        isSystemStopped = false;
 
-    LOGGER.warn("STOP command executed - system is now STOPPED");
-}
+        // Re-enable continuous trading if requested
+        Boolean enableTrading = (Boolean) controlMessage.getOrDefault("enableTrading", Boolean.TRUE);
+        if (enableTrading) {
+            continuousTradingEnabled = true;
+            LOGGER.info("Continuous trading re-enabled as part of RESUME command");
+        } else {
+            LOGGER.info("Continuous trading remains disabled after RESUME command");
+        }
+        
+        // Publish status update
+    //    publishSystemStatus();
 
-/**
- * Handles the RESUME command, allowing new orders to be submitted.
- * 
- * @param controlMessage The control message containing command parameters
- */
-private void handleResumeCommand(Map<String, Object> controlMessage) {
-    // Skip if not stopped
-    if (!isSystemStopped) {
-        LOGGER.info("System already in RUNNING state, ignoring redundant RESUME command");
-        return;
+        LOGGER.warn("RESUME command executed - system is now RUNNING");
     }
 
-    LOGGER.warn("Executing RESUME command - allowing new order submissions");
-
-    // Set the system back to running state
-    isSystemStopped = false;
-
-    // Re-enable continuous trading if requested
-    Boolean enableTrading = (Boolean) controlMessage.getOrDefault("enableTrading", Boolean.TRUE);
-    if (enableTrading) {
-        continuousTradingEnabled = true;
-        LOGGER.info("Continuous trading re-enabled as part of RESUME command");
-    } else {
-        LOGGER.info("Continuous trading remains disabled after RESUME command");
+        /**
+     * Handles the MM_START command to start market making.
+     * 
+     * @param controlMessage The control message containing command parameters
+     */
+    private void handleMarketMakerStartCommand(Map<String, Object> controlMessage) {
+        LOGGER.info("Executing MM_START command - starting market maker");
+        
+        boolean success = startMarketMaking();
+        
+        Map<String, Object> status = new HashMap<>();
+        status.put("command", "MM_START");
+        status.put("success", success);
+        status.put("status", success ? "RUNNING" : "FAILED");
+        status.put("timestamp", new Date().getTime());
+        
+        publishToRedis(ADMIN_CHANNEL + "_RESPONSE", status);
+        
+        LOGGER.info("Market maker start command executed - result: {}", success ? "SUCCESS" : "FAILED");
     }
-    
-    // Publish status update
-//    publishSystemStatus();
 
-    LOGGER.warn("RESUME command executed - system is now RUNNING");
-}
+    /**
+     * Handles the MM_STOP command to stop market making.
+     * 
+     * @param controlMessage The control message containing command parameters
+     */
+    private void handleMarketMakerStopCommand(Map<String, Object> controlMessage) {
+        LOGGER.info("Executing MM_STOP command - stopping market maker");
+        
+        boolean success = stopMarketMaking();
+        
+        Map<String, Object> status = new HashMap<>();
+        status.put("command", "MM_STOP");
+        status.put("success", success);
+        status.put("status", success ? "STOPPED" : "FAILED");
+        status.put("timestamp", new Date().getTime());
+        
+        publishToRedis(ADMIN_CHANNEL + "_RESPONSE", status);
+        
+        LOGGER.info("Market maker stop command executed - result: {}", success ? "SUCCESS" : "FAILED");
+    }
+
+    /**
+     * Handles the MM_CONFIG command to update market maker configuration.
+     * 
+     * @param controlMessage The control message containing configuration parameters
+     */
+    private void handleMarketMakerConfigCommand(Map<String, Object> controlMessage) {
+        LOGGER.info("Executing MM_CONFIG command - updating market maker configuration");
+        
+        try {
+            // Extract configuration parameters
+            Number spreadBps = (Number) controlMessage.getOrDefault("spreadBps", marketMakerConfig.getDefaultSpreadBps());
+            Number size = (Number) controlMessage.getOrDefault("size", marketMakerConfig.getDefaultSize());
+            Boolean autoEnabled = (Boolean) controlMessage.getOrDefault("autoEnabled", marketMakerConfig.isAutoEnabled());
+            Number updateInterval = (Number) controlMessage.getOrDefault("updateInterval", 
+                                                                    marketMakerConfig.getQuoteUpdateIntervalSeconds());
+            
+            // Create new configuration
+            MarketMakerConfig newConfig = new MarketMakerConfig(
+                spreadBps.intValue(),
+                size.intValue(),
+                autoEnabled,
+                updateInterval.intValue()
+            );
+            
+            // Update the configuration
+            updateMarketMakerConfig(newConfig);
+            
+            Map<String, Object> status = new HashMap<>();
+            status.put("command", "MM_CONFIG");
+            status.put("success", true);
+            status.put("config", marketMaker.getConfigSummary());
+            status.put("timestamp", new Date().getTime());
+            
+            publishToRedis(ADMIN_CHANNEL + "_RESPONSE", status);
+            
+            LOGGER.info("Market maker configuration updated: {}", newConfig);
+        } catch (Exception e) {
+            LOGGER.error("Error updating market maker configuration: {}", e.getMessage(), e);
+            
+            Map<String, Object> status = new HashMap<>();
+            status.put("command", "MM_CONFIG");
+            status.put("success", false);
+            status.put("error", e.getMessage());
+            status.put("timestamp", new Date().getTime());
+            
+            publishToRedis(ADMIN_CHANNEL + "_RESPONSE", status);
+        }
+    }
 
   /**
    * Called when a publication event occurs.
@@ -1003,6 +1182,7 @@ private void trySubscribeAndRemoveListener(MkvObject mkvObject, MkvPublishManage
         return null;
     }
 
+
   /**
    * The component doesn't need to listen to partial updates for records.
    */
@@ -1024,11 +1204,11 @@ private void trySubscribeAndRemoveListener(MkvObject mkvObject, MkvPublishManage
       boolean isSnap) {
     try {
       // Get the UserData (contains our request ID) and FreeText (contains our application ID)
-      String CompNameOrigin = mkvRecord.getValue("CompNameOrigin").getString();
-      String orderId = mkvRecord.getValue("OrigID").getString();
+      String userData = mkvRecord.getValue("UserData").getString();
+      String freeText = mkvRecord.getValue("FreeText").getString();
       
       // If this order wasn't placed by us, ignore it
-      if ("".equals(orderId) || !"orderManagement".equals(CompNameOrigin)) {
+      if ("".equals(userData) || !freeText.equals(getApplicationId())) {
         if (LOGGER.isDebugEnabled()) {
           LOGGER.debug("Ignoring order update for non-matching order: {}",
               mkvRecord.getName());
@@ -1038,24 +1218,26 @@ private void trySubscribeAndRemoveListener(MkvObject mkvObject, MkvPublishManage
         // This is an order we placed - forward the update to the MarketOrder
         try {
           // Parse the request ID from the UserData
+          int reqId = Integer.parseInt(userData);
           if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("Processing order update: orderId={}", orderId);
+            LOGGER.debug("Processing order update: reqId={}", reqId);
           }
           // Get the corresponding MarketOrder from the cache
-          MarketOrder order = getOrderByOrderId(orderId);
+          MarketOrder order = getOrder(reqId);
           
           if (order != null) {
             // Forward the update to the order
             if (LOGGER.isDebugEnabled()) {
-              LOGGER.debug("Forwarding update to order: orderId={}", orderId);
+              LOGGER.debug("Forwarding update to order: reqId={}", reqId);
             }
             order.onFullUpdate(mkvRecord, mkvSupply, isSnap);
-            int orderStatus = mkvRecord.getValue("TradingStatus").getInt();
-            if (!(orderStatus == 2) || !(orderStatus == 1)) {
+            String orderStatus = mkvRecord.getValue("Status").getString();
+            if ("Canceled".equals(orderStatus) || "Filled".equals(orderStatus) || 
+                "Rejected".equals(orderStatus)) {
                 removeOrder(order.getMyReqId());
             }
           } else {
-            LOGGER.debug("Order not found in cache: orderId={}", orderId);
+            LOGGER.debug("Order not found in cache: reqId={}", reqId);
           }
         } catch (Exception e) {
           LOGGER.error("Error processing order update: {}", e.getMessage(), e);
@@ -1202,604 +1384,41 @@ private void trySubscribeAndRemoveListener(MkvObject mkvObject, MkvPublishManage
    */
   @Override
     public void best(Best best, double cash_gc, double reg_gc, GCBest gcBestCash, GCBest gcBestREG) {
-            LOGGER.info("best() called: instrument={}, ask= ({}), asksrc= ({}), bid= ({}), bidsrc= ({}), cash_gc=({}), reg_gc=({})", 
+        if (LOGGER.isDebugEnabled()) {
+            LOGGER.debug("best() called: instrument={}, ask=%.6f ({}), bid=%.6f ({}), cash_gc=%.6f, reg_gc=%.6f", 
                 best.getId(), 
                 best.getAsk(), best.getAskSrc(), 
                 best.getBid(), best.getBidSrc(),
                 cash_gc, reg_gc);
+        }
 
         // Store the latest best for this instrument
-        synchronized(gcDataLock) {
-            // latestCashGC = cash_gc;
-            // latestRegGC = reg_gc;
-            // if (gcBestCash != null) sharedGCBestCash = gcBestCash;
-            // if (gcBestREG != null) sharedGCBestREG = gcBestREG;
-            latestCashGC.set(cash_gc);
-            latestRegGC.set(reg_gc);
-            if (gcBestCash != null) sharedGCBestCash.set(gcBestCash);
-            if (gcBestREG != null) sharedGCBestREG.set(gcBestREG);
-            latestBestByInstrument.put(best.getInstrumentId(), best);
+        latestCashGC.set(cash_gc);
+        latestRegGC.set(reg_gc);
+        if (gcBestCash != null) sharedGCBestCash.set(gcBestCash);
+        if (gcBestREG != null) sharedGCBestREG.set(gcBestREG);
+        latestBestByInstrument.put(best.getInstrumentId(), best);
+
+        // Call marketMaker.best() if it's available and initialized
+        if (marketMaker != null) {
+            try {
+                // Get the latest GC rates safely
+                double currentCashGC = latestCashGC.get();
+                double currentRegGC = latestRegGC.get();
+                GCBest gcBestCashCopy = sharedGCBestCash.get();
+                GCBest gcBestREGCopy = sharedGCBestREG.get();
+                
+                // Pass the best information to the market maker
+                marketMaker.best(best, currentCashGC, currentRegGC, gcBestCashCopy, gcBestREGCopy);
+            } catch (Exception e) {
+                LOGGER.error("Error forwarding best price to market maker: {}", e.getMessage(), e);
+            }
         }
-
-        LOGGER.info("Calling processMarketOpportunity for {}", best.getId());
-
-        processMarketOpportunity(best, cash_gc, reg_gc, gcBestCash, gcBestREG);
     }
 
-	//Add this method to initialize the scheduled market rechecks
-	private void initializeMarketRechecks() {
-	   // Schedule a task to recheck the market every 1 second
-	   scheduler.scheduleAtFixedRate(this::recheckMarket, 1, 2, TimeUnit.SECONDS);
-	   
-	   // Add a shutdown hook to clean up the scheduler
-	   Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-	       LOGGER.info("Shutting down market recheck scheduler");
-	       scheduler.shutdown();
-	       try {
-	           if (!scheduler.awaitTermination(5, TimeUnit.SECONDS)) {
-	               scheduler.shutdownNow();
-	           }
-	       } catch (InterruptedException e) {
-	           scheduler.shutdownNow();
-	           Thread.currentThread().interrupt();
-	       }
-	   }));
-	   LOGGER.info("Market recheck scheduler initialized");
-       scheduler.scheduleAtFixedRate(this::cleanupOldEntries,
-           30,     // Initial delay (30 minutes)
-            60,    // Period (60 minutes)
-            TimeUnit.MINUTES);
-	}
-	
-	//Add this method to periodically recheck the market
-	private void recheckMarket() {
-	   if (!continuousTradingEnabled || isSystemStopped) {
-	       return;
-	   }
-  	   
-	   // Process each instrument's latest best price
-        for (Best best : latestBestByInstrument.values()) {
-            processMarketOpportunity(best, latestCashGC.get(), latestRegGC.get(),
-                sharedGCBestCash.get(), sharedGCBestREG.get());
-         } 
-	}
-
-    private void cleanupOldEntries() {
-        try {
-            long cutoffTime = System.currentTimeMillis() - TimeUnit.HOURS.toMillis(2);
-            int removedTrades = 0;
-            
-            // Use iterator to avoid ConcurrentModificationException
-            Iterator<Map.Entry<String, Long>> tradeIterator = 
-                lastTradeTimeByInstrument.entrySet().iterator();
-            while (tradeIterator.hasNext()) {
-                Map.Entry<String, Long> entry = tradeIterator.next();
-                if (entry.getValue() < cutoffTime) {
-                    tradeIterator.remove();
-                    removedTrades++;
-                    
-                    // Batch removal - check every 100 entries
-                    if (removedTrades % 100 == 0) {
-                        Thread.yield(); // Allow other threads to work
-                    }
-                }
-            }
-            
-            // More efficient Best map cleanup
-            if (latestBestByInstrument.size() > 3000) {
-                List<String> keysToRemove = new ArrayList<>();
-                int count = 0;
-                for (String key : latestBestByInstrument.keySet()) {
-                    if (count++ > 1000) break; // Remove oldest 1000 entries
-                    keysToRemove.add(key);
-                }
-                keysToRemove.forEach(latestBestByInstrument::remove);
-            }
-            
-        } catch (Exception e) {
-            LOGGER.warn("Error during cleanup", e);
-        }
+    public Map<String, Best> getLatestBestByInstrument() {
+        return latestBestByInstrument;
     }
-	/**
-	 * Determines if we should use a dynamic spread threshold based on the current time.
-	 * 
-	 * @return true if the current time is in the threshold adjustment period, false otherwise
-	 */
-	private boolean isDynamicThresholdPeriod() {
-	    // Get the current time
-	    LocalTime currentTime = LocalTime.now();
-	    
-	    // Define the start time for dynamic thresholds (e.g., 11:00am)
-	    LocalTime dynamicStartTime = LocalTime.of(11, 0); 
-	    
-	    // Only use dynamic threshold calculation during the active trading period
-	    return currentTime.isAfter(dynamicStartTime);
-	}
-	
-	/**
-	 * Calculates the spread threshold based on the current time.
-	 * The threshold starts at 2.0 and gradually decreases to 0.10 by 2:50pm local time.
-	 * 
-	 * @return The calculated threshold value
-	 */
-	private double calculateSpreadThreshold() {
-	    // If we're not in the dynamic threshold period, return the default value
-	    if (!isDynamicThresholdPeriod()) {
-	        return 2.0;
-	    }
-	    
-	    // Get the current time
-	    LocalTime currentTime = LocalTime.now();
-	    
-	    // Define the start time for dynamic calculation
-	    LocalTime dynamicStartTime = LocalTime.of(7, 00);
-	    
-	    // Define the end time (2:50pm)
-	    LocalTime endTime = LocalTime.of(14, 50);
-	    
-	    // If it's after the end time, use the minimum threshold
-	    if (currentTime.isAfter(endTime)) {
-	        return 0.10;
-	    }
-	    
-	    // Calculate the total minutes between dynamic start and end times
-	    int totalMinutes = (endTime.getHour() - dynamicStartTime.getHour()) * 60 + 
-	                        (endTime.getMinute() - dynamicStartTime.getMinute());
-	    
-	    // Calculate the elapsed minutes since dynamic start time
-	    int elapsedMinutes = (currentTime.getHour() - dynamicStartTime.getHour()) * 60 + 
-	                         (currentTime.getMinute() - dynamicStartTime.getMinute());
-	    
-	    // Calculate the proportion of time elapsed (from 0 to 1)
-	    double timeElapsedProportion = (double) elapsedMinutes / totalMinutes;
-	    
-	    // Calculate the threshold - linear interpolation from 2.0 to 0.10
-	    double threshold = 2.0 - (timeElapsedProportion * (2.0 - 0.10));
-	    
-	    // Round to 2 decimal places for cleaner values
-	    threshold = Math.round(threshold * 100) / 100.0;
-	    
-	    return threshold;
-	}
-	
-	// Method to evaluate and execute on market opportunities, crosses and GC crosses
-	private void processMarketOpportunity(Best best, double cash_gc, double reg_gc, GCBest gcBestCash, GCBest gcBestREG) {
-
-	    // Skip if the system is in stopped state
-	    if (isSystemStopped) {
-	        if (LOGGER.isDebugEnabled()) {
-	            LOGGER.debug("Skipping market opportunity processing - system is in STOPPED state");
-	        }
-	        return;
-	    }
-		
-		// Skip if the best object is null
-	    if (best == null) {
-	        LOGGER.warn("processMarketOpportunity called with null best object");
-	        return;
-	    }
-
-	    String askSrc = best.getAskSrc();
-  	    String bidSrc = best.getBidSrc();
-        // ApplicationLogging.logAsync(LOGGER, Level.FINE, 
-        // "Checking if askSrc is valid venue: " + askSrc);
-  	    
-        // Only proceed with order checks if we might actually place an order
-        if (!validVenues.contains(askSrc)) 
-        {
-            return;
-        }
-	    
-	    double bid = best.getBid();
-  	    double ask = best.getAsk();
-
-        LOGGER.debug("Price check: ask={}, bid={}, spread={}", 
-            ask, bid, ask - bid);
-
-        String id = best.getId();
-        boolean isStrip = (id.startsWith("91283") || id.startsWith("912800") || id.startsWith("912815") || id.startsWith("912820") || id.startsWith("912821") || id.startsWith("912803"));
-        
-        if (isStrip) {
-        	return;
-        }
-        
-  	    boolean isCash = id.contains("C_Fixed");
-  	    boolean isREG = id.contains("REG_Fixed");
-  	    
-  	    //do not process term trades
-  	    if (!isCash && !isREG) {
-  	    	return;
-  	    }
-  	      	    
-        GCLevelResult gcLevelResult = null;
-
-        if (isCash) {
-        	if (gcBestCash == null) {
-        		gcLevelResult = null;
-        	} else {
-        		gcLevelResult = gcBestCash.getGCLevel();
-        	}
-        } else if (isREG) {
-        	if (gcBestREG == null) {
-        		gcLevelResult = null;
-        	} else {
-        		gcLevelResult = gcBestREG.getGCLevel();
-        	}
-        }
-
-  	    //Make sure that the ASK is AT LEAST equal to the BID, this is the arb
-	  	if ((ask-0.01 < bid) || (bidSrc == null) || (!validVenues.contains(bidSrc))) {
-	  		
-	  		double orderAskSizeTotal = best.getAskSize();
-	  		if (orderAskSizeTotal <= 0) {
-	  			return;
-	  		}
-	  		
-	  		if (gcLevelResult == null) {
-	  			LOGGER.debug("No GC market available for comparison - Type: {}, Instrument: {}", 
-                    (id.contains("C_Fixed") ? "CASH" : "REG"), id);
-	  			return;
-        	} else if (gcLevelResult != null) {
-	  			
-                // Add null safety for the gcLevelResult methods
-                Double gcBidPrice = null;
-                Double gcAskPrice = null;
-                
-                try {
-                    gcBidPrice = gcLevelResult.getBidPrice();
-                    gcAskPrice = gcLevelResult.getAskPrice();
-                } catch (Exception e) {
-                    LOGGER.warn("Error accessing GC level prices for {}: {}", id, e.getMessage());
-                    return;
-                }
-                if (gcBidPrice == null) {
-                    LOGGER.debug("Skipping trade: Missing GC level bid price - Instrument: {}, Type: {}, Current Ask: {}", 
-                        id, (id.contains("C_Fixed") ? "CASH" : "REG"), ask);
-                    return;
-                }
-                
-                if (ask < gcBidPrice) {
-                     LOGGER.debug("Skipping trade: ask {} is less than GC level bid {} - Type: {}, Instrument: {}", 
-                         ask, gcBidPrice, (id.contains("C_Fixed") ? "CASH" : "REG"), id);
-                    return;
-                }
-                
-                if (gcAskPrice != null && ask < gcAskPrice) {
-                     LOGGER.debug("Skipping trade: ask {} is less than GC level ask {} - Type: {}, Instrument: {}", 
-                         ask, gcAskPrice, (id.contains("C_Fixed") ? "CASH" : "REG"), id);
-                    return;
-                }
-                
-                // If we get here, process the opportunity
-                processGCOpportunity(best, gcLevelResult);
-                return;
-	  		}
-	  	}
-  	
-        if (!validVenues.contains(bidSrc)) {
-                return;
-        }
-        
-	    boolean skipSelfMatch = (best.isMinePrice(best.getAskStatus()) || best.isMinePrice(best.getBidStatus()));
-	    
-	      // Self-match detection
-	    if  (skipSelfMatch) {
-			LOGGER.info("Failed self-match prevention check");
-			return;
-	    }
-
-        double orderBidSize = best.getBidSizeMin();
-        double orderAskSize = best.getAskSizeMin();
-        
-        double orderBidSizeTotal = best.getBidSize(); 
-        double orderAskSizeTotal = best.getAskSize();
-        
-        double sizeDiff = Math.round((orderAskSizeTotal - orderBidSize)*100)/100;
-        double minsizeDiff = Math.round((orderAskSize - orderBidSize)*100)/100;
-        // Do not process if shown size difference is too large
-        if ((sizeDiff < 0) || (minsizeDiff > 45)) {
-        	return;
-        }
-        
-        int multiplier = (int)Math.ceil(orderBidSize / orderAskSize);
-        orderAskSize = orderAskSize * multiplier;
-        
-  	    boolean sameSource = askSrc.equals(bidSrc);
-  	    
-  	    double cashRegAdjustment = 0.00;
-	  	// adjust spread for cash versus reg
-  	    if (isCash) {
-  		  	if (cash_gc != 0) {
-  		        double threshold = isDynamicThresholdPeriod() ? calculateSpreadThreshold() : 2.0;
-  		  		if ((cash_gc - ask) > threshold) {
-  		            if (LOGGER.isDebugEnabled() && isDynamicThresholdPeriod()) {
-  		                // Only log during the dynamic threshold period to reduce overhead
-  		                LOGGER.debug("Skipping trade: spread {} exceeds time-based threshold {}", (cash_gc - ask), threshold);
-  		            }
-  		            return;
-  		  		}
-  		  	}
-  	    	cashRegAdjustment = 0.00;
-  	    } else if (isREG) {
-  	    	// for REG, we're not applying the avoid specials crosses logic
-//  		  	if (reg_gc != 0) {
-//  		  		if ((reg_gc - ask) > 2.0) {
-//  		  			return;
-//  		  		}
-//  		  	}
-  	    	cashRegAdjustment = 0.02;
-  	    }
-  	    
-        String reason = "";
-  	    double spread = ask - bid;
-  	    String securityType = isCash ? "CASH" : (isREG ? "REG" : "UNKNOWN");
-  	    if (LOGGER.isInfoEnabled()) {
-        // Build detailed reason message
-            if ((minsizeDiff == 0) && sameSource && (ask-(0.03 + cashRegAdjustment) < bid)) {
-                reason = "Equal size, same source, spread < 0.03 + adjustment";
-            } else if (minsizeDiff > 25 && (ask-(0.04 + cashRegAdjustment) < bid)) {
-                reason = "Size difference > 25, spread < 0.04 + adjustment";
-            } else if (minsizeDiff == 25 && orderAskSizeTotal == 50 && orderBidSizeTotal == 25 
-                    && (ask-(0.02 + cashRegAdjustment) < bid)) {
-                reason = "Size exactly 25 (50/25 pattern), spread < 0.02 + adjustment";
-            } else if (minsizeDiff > 15 && minsizeDiff < 25 && (ask-(0.03 + cashRegAdjustment) < bid)) {
-                reason = "Size difference 15-25, spread < 0.03 + adjustment";
-            } else if (minsizeDiff >= 9 && minsizeDiff <= 15 && (ask-(0.02 + cashRegAdjustment) < bid)) {
-                reason = "Size difference 9-15, spread < 0.02 + adjustment";
-            } else if (minsizeDiff < 9 && minsizeDiff > 5 && (ask-0.02 < bid)) {
-                reason = "Size difference 5-9, spread < 0.02";
-            } else if (minsizeDiff <= 5 && (ask-0.01 < bid)) {
-                reason = "Size difference <= 5, spread < 0.01";
-            } else if (minsizeDiff == 0 && (ask-0.02 < bid)) {
-                reason = "Equal size, spread < 0.02";
-            }
-  	    }
-
-	  	if (((minsizeDiff == 0) && sameSource && (ask-(0.03 + cashRegAdjustment) < bid)) || 
-	  		    ((minsizeDiff > 25) && (ask-(0.04 + cashRegAdjustment) < bid)) || 
-	  		    ((minsizeDiff == 25) && (orderAskSizeTotal == 50) && (orderBidSizeTotal == 25) && 
-	  		        (ask-(0.02 + cashRegAdjustment) < bid)) ||
-	  		    ((minsizeDiff > 15 && minsizeDiff < 25) && (ask-(0.03 + cashRegAdjustment) < bid)) ||
-	  		    ((minsizeDiff >= 9 && minsizeDiff <= 15) && (ask-(0.02 + cashRegAdjustment) < bid)) || 
-	  		    ((minsizeDiff < 9) && (minsizeDiff > 5) && ((ask-0.02) < bid)) ||
-	  		    ((minsizeDiff <= 5) && ((ask-0.01) < bid)) || 
-	  		    ((minsizeDiff == 0) && ((ask-0.02) < bid))
-	  		) {
-	        LOGGER.info("ID: {} - Skipping trade: Details: [{}] ask={} ({}), bid={} ({}), " +
-  		        "sizeDiff={}, minSizeDiff={}, spread={}, " +
-  		        "askSize={}/{}, bidSize={}/{}, multiplier={}, adjustment={}",
-  		        id, reason, securityType,
-  		        ask, askSrc, bid, bidSrc,
-  		        sizeDiff, minsizeDiff, spread,
-  		        orderAskSize, orderAskSizeTotal,
-  		        orderBidSize, orderBidSizeTotal,
-  		        multiplier, cashRegAdjustment);
-                return;
-	  		}
-        
-  	    String idFull = best.getInstrumentId();
- 	    
-  	    boolean AskIsAON = best.getAskIsAON();
- 	    boolean BidIsAON = best.getBidIsAON();
-
-        if (LOGGER.isDebugEnabled()) {
-            StringBuilder sb = messageBuilder.get();
-            sb.setLength(0);
-            sb.append("Processing trading opportunity for instrument id: ").append(idFull)
-            .append(" id: ").append(id)
-            .append(": askSize=").append(orderAskSizeTotal).append(" (").append(orderAskSize).append(")")
-            .append(", bidSize=").append(orderBidSizeTotal).append(" (").append(orderBidSize).append(")")
-            .append(": ask=").append(ask).append(" (").append(askSrc).append(")")
-            .append(", bid=").append(bid).append(" (").append(bidSrc).append(")");
-            LOGGER.debug(sb.toString());
-        }
-    	
-        // Create a unique key for this instrument pair to track trades
-        String tradingKey = id + "|" + askSrc + "|" + bidSrc;
-        
-        // Check if we've traded this instrument recently
-        long currentTime = System.currentTimeMillis();
-        Long lastTradeTime = lastTradeTimeByInstrument.get(tradingKey);
-        
-        if (lastTradeTime != null && (currentTime - lastTradeTime) < MIN_TRADE_INTERVAL_MS) {
-            // Too soon to trade this instrument again
-          if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("Skipping trade for {} last trade was too recent: {}ms since last trade", tradingKey, (currentTime - lastTradeTime));
-          }
-            return;
-        }
-        
-        // Log that we found an opportunity
-      if (LOGGER.isDebugEnabled()) {
-        LOGGER.debug("Found trading opportunity for {}: IsAON={} ask={} ({})", id, AskIsAON, ask, askSrc);
-        LOGGER.debug(", IsAON={} bid={} ({})", BidIsAON, bid, bidSrc);
-      }
-
-      // Get the native instrument IDs
-      String askVenueInstrument = depthListener.getInstrumentFieldBySourceString(id, askSrc, AskIsAON);
-      String bidVenueInstrument = depthListener.getInstrumentFieldBySourceString(id, bidSrc, BidIsAON);
-      
-   // Add null checks
-      if (askVenueInstrument == null || bidVenueInstrument == null) {
-          if (LOGGER.isWarnEnabled()) {
-              LOGGER.warn("Missing instrument mapping for {}, ask source: {}, bid source: {}", id, askSrc, bidSrc);
-          }
-          return; // Skip this opportunity
-      }
-
-      // Get the trader IDs for each venue
-      String askTrader = getTraderForVenue(askSrc);
-      String bidTrader = getTraderForVenue(bidSrc);
-        
-   // Add protection against zero or negative sizes
-      if (orderAskSizeTotal <= 0 || orderBidSizeTotal <= 0) {
-          LOGGER.warn("Invalid sizes detected for {}: ask={}, bid={}", id, orderAskSizeTotal, orderBidSizeTotal);
-          return;
-      }
-
-      // Calculate the order size
-  	  String ordertypeAsk = null;
-  	  String ordertypeBid = null;
-  	  ordertypeBid = "FAS";
-  	  ordertypeAsk = "FAS";
-  	  //need to further examine the DEALERWEB ordertypes
-//	  if ((BidIsAON && bidSrc.equals("DEALERWEB_REPO")) || bidSrc.equals("DEALERWEB_REPO")) {
-//		  ordertypeBid = "FAS";
-//	  } else if (BidIsAON) {
-//		  ordertypeBid = "FOK";
-//	  } else {
-//		  ordertypeBid = "FAK";
-//	  };
-//	  
-//  	  //need to further examine the DEALERWEB ordertypes
-//	  if ((AskIsAON && askSrc.equals("DEALERWEB_REPO")) || askSrc.equals("DEALERWEB_REPO")) {
-//		  ordertypeAsk = "FAS";
-//	  } else if (AskIsAON) {
-//		  ordertypeAsk = "FOK";
-//	  } else {
-//		  ordertypeAsk = "FAK";
-//    	  }
-      // Before checking trader information (pre self-match check)
-      if (LOGGER.isDebugEnabled()) {
-    	    LOGGER.debug("Checking for self-match: " +
-    	        "ASK: src=" + askSrc + ", trader=" + askTrader + ", venue=" + askVenueInstrument + 
-    	        ", size=" + orderAskSize + ", price=" + ask + ", type=" + ordertypeAsk + ", IsAON=" + AskIsAON + 
-    	        " | BID: src=" + bidSrc + ", trader=" + bidTrader + ", venue=" + bidVenueInstrument + 
-    	        ", size=" + orderBidSize + ", price=" + bid + ", type=" + ordertypeBid + ", IsAON=" + BidIsAON);
-    	}
-
-
-	  if (LOGGER.isDebugEnabled()) {
-          LOGGER.debug("### BUY ORDER BEING SENT: src: {}, trader: {}, venue: {}, direction: Buy, size: {}, prc: {}, Limit, ordertype: {}, IsAON: {}", askSrc, askTrader, askVenueInstrument, orderAskSize, ask, ordertypeAsk, AskIsAON);
-          LOGGER.debug("### SELL ORDER BEING SENT: src: {}, trader: {}, venue: {}, direction: Sell, size: {}, prc: {}, Limit, ordertype: {}, IsAON: {}", bidSrc, bidTrader, bidVenueInstrument, orderBidSize, bid, ordertypeBid, BidIsAON);
-	  }
-
-  	   // Placing active orders
-        addOrder(askSrc, askTrader, askVenueInstrument, "Buy", orderAskSize, 
-                ask, "Limit", ordertypeAsk);
-        addOrder(bidSrc, bidTrader, bidVenueInstrument, "Sell", orderBidSize, 
-                bid, "Limit", ordertypeBid);
-
-        // Record that we've traded this instrument
-        lastTradeTimeByInstrument.put(tradingKey, currentTime);
-      if (LOGGER.isDebugEnabled()) {
-        LOGGER.debug("Recorded trade for {} at {}", tradingKey, new java.util.Date(currentTime));
-      }
-    }
-	
-	/**
-	 * Determines if we should use a dynamic spread threshold based on the current time.
-	 * 
-	 * @return true if the current time is in the threshold adjustment period, false otherwise
-	 */
-  	  private boolean isAfterEightThirtyFive() {
-	    // Get the current time
-	    LocalTime currentTime = LocalTime.now();
-	    
-	    // Define the start time for dynamic thresholds (e.g., 8:35am)
-	    LocalTime dynamicStartTime = LocalTime.of(8, 35); 
-	    
-	    // Only use dynamic threshold calculation during the active trading period
-	    return currentTime.isAfter(dynamicStartTime);
-	}
-	
-    private void processGCOpportunity(Best best, GCLevelResult gclvlResult) {
-        // electronic venue lines versus aggregated GC lines arbitrage
-        String id = best.getId();
-        
-        // Log that we're starting GC opportunity processing
-        LOGGER.info("Processing GC opportunity - checking for potential GC-level arbitrage for id: {}", id);
-
-        boolean skipSelfMatch = (best.isMinePrice(best.getAskStatus()));
-
-        // Self-match detection
-        if (skipSelfMatch) {
-            LOGGER.info("Failed self-match prevention for Processing GC check");
-            return;
-        }
-        
-        double ask = best.getAsk();
-        Double gcBidPrice = gclvlResult.getBidPrice();
-        
-        // Log that we found a GC bid price
-        LOGGER.info("Found GC bid price for arbitrage: {}", gcBidPrice);
-
-        double threshold = isAfterEightThirtyFive() ? 0.05 : 0.03;
-        // Skip if spread is insufficient for the time
-        if ((ask - threshold) < gcBidPrice) {
-            LOGGER.debug("Skipping GC trade for id: {} - insufficient spread - ask={}, gcBid={}, threshold={}, spread={}",
-                id, ask, gcBidPrice, threshold, ask - gcBidPrice);
-            return;
-        }
-
-        String askSrc = best.getAskSrc();
-        boolean AskIsAON = best.getAskIsAON();
-        
-        // Get the full instrument ID from the Best object
-        String fullInstrumentId = best.getInstrumentId();
-        
-        // Get the native instrument ID for this venue
-        String askVenueInstrument = depthListener.getInstrumentFieldBySourceString(id, askSrc, AskIsAON);
-        
-        // If the venue instrument is null, log an error and return
-        if (askVenueInstrument == null) {
-            LOGGER.warn("Missing instrument mapping for GC trade: {}, source: {}", id, askSrc);
-            return;
-        }
-
-        double orderAskSize = best.getAskSize();
-        String askTrader = getTraderForVenue(askSrc);
-
-        String ordertypeAsk = "FAS";
-
-        if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("### GC BUY ORDER BEING SENT: src: {}, trader: {}, venue: {}, direction: Buy, size: {}, prc: {}, Limit, ordertype: {}, IsAON: {}",
-                askSrc, askTrader, askVenueInstrument, orderAskSize, ask, ordertypeAsk, AskIsAON);
-        }
-
-        // Add more detailed debugging output
-        LOGGER.debug("Detailed order info - id: {}, fullId: {}, venueId: {}, source: {}, trader: {}",
-            id, fullInstrumentId, askVenueInstrument, askSrc, askTrader);
-
-        // Send the order with the correct venue instrument ID
-        addOrder(askSrc, askTrader, askVenueInstrument, "Buy", orderAskSize, 
-                ask, "Limit", ordertypeAsk);
-		
-	    try {
-	        boolean isGcCash = id.contains("C_Fixed");
-	        String type = isGcCash ? "CASH" : "REG";
-	        
-	        StringBuilder sb = new StringBuilder();
-	        sb.append("\n------- GC ARBITRAGE MARKET DETAILS -------\n");
-	        
-	        // Basic information
-	        sb.append("Instrument: ").append(id).append(" (").append(best.getInstrumentId()).append(")\n");
-	        sb.append("Type: ").append(type).append("\n");
-	        
-	        // Price information from Best
-	        sb.append(String.format("Ask: {} ({}) IsAON={}, Size={}/{}\n", 
-	                  best.getAsk(), best.getAskSrc(), best.getAskIsAON(), 
-	                  best.getAskSizeMin(), best.getAskSize()));
-	        sb.append(String.format("Bid: {} ({}) IsAON={}, Size={}/{}\n", 
-	                  best.getBid(), best.getBidSrc(), best.getBidIsAON(), 
-	                  best.getBidSizeMin(), best.getBidSize()));
-	        sb.append(String.format("Spread: {}\n", best.getAsk() - best.getBid()));
-	        
-	        
-	    } catch (Exception e) {
-	        // Make sure logging errors don't disrupt trading
-	        LOGGER.warn("Error logging market details: {}", e.getMessage());
-	    }
-	}
-
-
-	// Add this method to enable/disable continuous trading
-	public void setContiguousTradingEnabled(boolean enabled) {
-	    this.continuousTradingEnabled = enabled;
-      if (LOGGER.isDebugEnabled()) {
-	      LOGGER.debug("Continuous trading " + (enabled ? "enabled" : "disabled"));
-      }
-	}
   /**
    * Handles changes to the order chain.
    * For new records, sets up subscriptions to receive updates.
@@ -1860,10 +1479,16 @@ private void initializeHeartbeat() {
         	
             Map<String, Object> status = new HashMap<>();
             status.put("hostname", hostname);
-            status.put("application", "OrderManagement");
+            status.put("application", "OrderManagementUAT");
             status.put("state", isSystemStopped ? "STOPPED" : "RUNNING");
             status.put("continuousTrading", continuousTradingEnabled);
             status.put("activeOrders", orders.size());
+
+            // Add market maker status
+            if (marketMaker != null) {
+                status.put("marketMaker", marketMaker.isRunning() ? "RUNNING" : "STOPPED");
+                status.put("marketMakerConfig", marketMaker.getConfigSummary());
+            }
 
             // Gather trading statistics
             int instrumentCount = depthListener != null ? 
@@ -2028,7 +1653,7 @@ private void setupPatternSubscriptionMonitor() {
 
                 // Check if the order is in a valid state for cancellation
                 if (orderId == null || orderId.isEmpty()) {
-                    LOGGER.warn("Order ID is null or empty for reqId: {}", order.getMyReqId());
+                    LOGGER.warn("Order ID is null or empty for order: {}", order);
                     continue;
                 }
 
@@ -2093,6 +1718,16 @@ public void shutdown() {
     // Cancel all pending orders
     cancelAllOrders();
     
+    // Shutdown market maker if active
+    if (marketMaker != null) {
+        try {
+            LOGGER.info("Shutting down market maker");
+            marketMaker.shutdown();
+        } catch (Exception e) {
+            LOGGER.warn("Error shutting down market maker: {}", e.getMessage());
+        }
+    }
+
     // Shutdown Redis connection pool
     if (jedisPool != null) {
         try {
