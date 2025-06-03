@@ -9,12 +9,12 @@ if NOT "%1"=="SimplePublisher" goto a
 goto END_LIST
 
 :a
-if NOT "%1"=="AdvOrderManagement" goto END_LIST
-	set SAMPLE_NAME=orderManagement
+if NOT "%1"=="automatedMarketMaking" goto END_LIST
+	set SAMPLE_NAME=automatedMarketMaking
 	set BUILD_PATH=advanced
 	set WORKINGDIR=RUN_OrderManagement
-	set MAINCLASS=com.iontrading.samples.advanced.orderManagement.OrderManagement
-	set SRC=src\com\iontrading\samples\advanced\orderManagement
+	set MAINCLASS=com.iontrading.automatedMarketMaking.OrderManagement
+	set SRC=src\com\iontrading\automatedMarketMaking
 goto END_LIST
 
 :END_LIST
@@ -46,7 +46,7 @@ cd "%WORKINGDIR%"
 echo Running Java class: %MAINCLASS%
 echo Classpath: lib\jmkv*.jar;lib\*;..\build\classes
 echo cmd /k java -cp "lib/*;..\build\classes" %MAINCLASS%
-REM start cmd /k java -cp "../lib/*;..\build\classes" %MAINCLASS%
+start cmd /k java -cp "../lib/*;..\build\classes" %MAINCLASS%
 
 cd ..
 
