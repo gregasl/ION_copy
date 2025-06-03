@@ -163,10 +163,12 @@ public class marketDataSubscriberUAT {
     private static final String PATTERNINSTRUMENT = "USD.CM_INSTRUMENT." + SOURCE + ".";
     private static final String PATTERNTRADE = "USD.CM_TRADE." + SOURCE + ".";
     private static final String PATTERNORDER = "USD.CM_ORDER." + SOURCE + ".";
+    private static final String BTECREFERENCEPRICE = "USD.CM_BOND.BTEC_REPO_US.";
     private static final String REDIS_CHANNEL = "ION:ION_MARKET_DATA_UAT";
     private static final String REDIS_CHANNEL_INSTRUMENT = "ION:ION_INSTRUMENT_DATA_UAT";
     private static final String REDIS_CHANNEL_TRADE = "ION:ION_TRADE_DATA_UAT";
     private static final String REDIS_CHANNEL_ORDER = "ION:ION_ORDER_DATA_UAT";
+    private static final String REDIS_CHANNEL_REF_PRICE = "ION:ION_REF_PRICE_DATA_UAT";
     private static final String REDIS_HOST = "cacheuat";
     private static final int REDIS_PORT = 6379;
     private static final int TIMEOUT = 5000;
@@ -216,6 +218,10 @@ public class marketDataSubscriberUAT {
     private String[] fieldsOrder = new String[]{
         "Active", "Code", "CompNameOrigin", "Date", "Desc", "Id", "InstrumentId", "OrderNo", "OrigId", "Price", "QtyFill", "QtyStatus", "QtyTot", "TimeInForce", "TimeUpd", 
         "Trader", "TradingStatus", "Verb" 
+    };
+
+    private String[] fieldsRefPrice = new String[]{
+        "Id", "Desc", "Code",  "ReferencePrice", "ReferencePriceUpdDate", "ReferencePriceUpdTime"
     };
 
     
@@ -575,6 +581,47 @@ public class marketDataSubscriberUAT {
         }
     }
     
+    private class ReferencePriceListener implements MkvRecordListener {
+        private final Map<String, Map<String, Object>> recordDataMap = new ConcurrentHashMap<>();
+        private final List<String> fieldsList = Arrays.asList(fieldsRefPrice);
+
+        public void onPartialUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolean isSnapshot) {
+            updateRecord(mkvRecord, mkvSupply);
+        }
+
+        public void onFullUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolean isSnapshot) {
+            updateRecord(mkvRecord, mkvSupply);
+        }
+
+        private void updateRecord(MkvRecord mkvRecord, MkvSupply mkvSupply) {
+            try {
+                String recordName = mkvRecord.getName();
+                recordName = recordName.replace(":", "_");
+                int cursor = mkvSupply.firstIndex();
+
+                recordDataMap.putIfAbsent(recordName, new HashMap<>());
+                Map<String, Object> recordData = recordDataMap.get(recordName);
+
+                while (cursor != -1) {
+                    String fieldName = mkvRecord.getMkvType().getFieldName(cursor);
+                    Object fieldValue = mkvSupply.getObject(cursor);
+                    
+                    if (fieldsList.contains(fieldName)) {
+                        recordData.put(fieldName, fieldValue != null ? fieldValue : "null");
+                    }
+                    cursor = mkvSupply.nextIndex(cursor);
+                }
+
+                // Publish trade data to Redis
+                String key = REDIS_CHANNEL_REF_PRICE+ ":" + recordName;
+                publishToRedis(key, recordName, recordData);
+
+            } catch (Exception e) {
+                LOGGER.log(Level.SEVERE, "Error processing trade data update", e);
+            }
+        }
+    }
+
     // Platform Listener inner class
     private class PlatformListener implements MkvPlatformListener {
         public void onComponent(MkvComponent component, boolean start) {}
@@ -593,11 +640,13 @@ public class marketDataSubscriberUAT {
         private final MkvRecordListener instrumentListener = new InstrumentListener();
         private final MkvRecordListener tradeListener = new TradeDataListener();
         private final MkvRecordListener orderListener = new OrderDataListener();
+        private final MkvRecordListener referencePriceListener = new ReferencePriceListener();
         private volatile boolean isDepthSubscribed = false;
         private volatile boolean isInstrumentSubscribed = false;
         private volatile boolean isTradeSubscribed = false;
         private volatile boolean isOrderSubscribed = false;
-        
+        private volatile boolean isReferencePriceSubscribed = false;
+
         private synchronized void safeSubscribe(MkvPattern pattern) {
             // Check which pattern we're dealing with
             if (pattern.getName().startsWith("USD.CM_DEPTH")) {
@@ -644,12 +693,26 @@ public class marketDataSubscriberUAT {
                         isOrderSubscribed = false;
                     }
                 }
+            } else if (pattern.getName().startsWith("USD.CM_BOND.BTEC_REPO_US.")) {
+                if (!isReferencePriceSubscribed) {
+                    try {
+                        pattern.subscribe(fieldsRefPrice, referencePriceListener);
+                        isReferencePriceSubscribed = true;
+                        LOGGER.info("Subscribed to reference price pattern: " + pattern.getName());
+                    } catch (Exception e) {
+                        LOGGER.log(Level.SEVERE, "Error subscribing to reference price data", e);
+                        isReferencePriceSubscribed = false;
+                    }
+                }
             }
         }
-        
-        public void onPublish(MkvObject mkvObject, boolean start, boolean download) {
-            if (start && !download && mkvObject.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
-                safeSubscribe((MkvPattern) mkvObject);
+
+        // Add this method to implement the abstract method from MkvPublishListener
+        @Override
+        public void onPublish(MkvObject mkvObject, boolean added, boolean subscribed) {
+            if (added && mkvObject.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
+                MkvPattern pattern = (MkvPattern) mkvObject;
+                safeSubscribe(pattern);
             }
         }
 
@@ -673,6 +736,11 @@ public class marketDataSubscriberUAT {
             MkvObject orderObj = Mkv.getInstance().getPublishManager().getMkvObject(PATTERNORDER);
             if (orderObj != null && orderObj.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
                 safeSubscribe((MkvPattern) orderObj);
+            }
+
+            MkvObject refPriceObj = Mkv.getInstance().getPublishManager().getMkvObject(BTECREFERENCEPRICE);
+            if (refPriceObj != null && refPriceObj.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
+                safeSubscribe((MkvPattern) refPriceObj);
             }
         }
 
