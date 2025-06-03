@@ -72,24 +72,24 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
         
         // Only critical business events at WARN level
         ApplicationLogging.setLogLevels("WARN",
-            "com.iontrading.samples.advanced.orderManagement.OrderManagement"
+            "com.iontrading.automatedMarketMaking.OrderManagement"
         );
         
         // Keep order tracking at WARN for business monitoring
         ApplicationLogging.setLogLevels("WARN",
-            "com.iontrading.samples.advanced.orderManagement.MarketOrder"
+            "com.iontrading.automatedMarketMaking.MarketOrder"
         );
         
         // All infrastructure components at ERROR only
         ApplicationLogging.setLogLevels("ERROR",
-            "com.iontrading.samples.advanced.orderManagement.DepthListener",
-            "com.iontrading.samples.advanced.orderManagement.AsyncLoggingManager",
-            "com.iontrading.samples.advanced.orderManagement.ApplicationLogging",
-            "com.iontrading.samples.advanced.orderManagement.MarketDef",
-            "com.iontrading.samples.advanced.orderManagement.Best",
-            "com.iontrading.samples.advanced.orderManagement.Instrument",
-            "com.iontrading.samples.advanced.orderManagement.GCBest",
-            "com.iontrading.samples.advanced.orderManagement.GCLevelResult"
+            "com.iontrading.automatedMarketMaking.DepthListener",
+            "com.iontrading.automatedMarketMaking.AsyncLoggingManager",
+            "com.iontrading.automatedMarketMaking.ApplicationLogging",
+            "com.iontrading.automatedMarketMaking.MarketDef",
+            "com.iontrading.automatedMarketMaking.Best",
+            "com.iontrading.automatedMarketMaking.Instrument",
+            "com.iontrading.automatedMarketMaking.GCBest",
+            "com.iontrading.automatedMarketMaking.GCLevelResult"
         );
 
         System.out.println("PRODUCTION logging configured - minimal output mode");
@@ -104,20 +104,22 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
         
         // Core business logic at INFO
         ApplicationLogging.setLogLevels("INFO",
-            "com.iontrading.samples.advanced.orderManagement.OrderManagement",
-            "com.iontrading.samples.advanced.orderManagement.MarketOrder",
-            "com.iontrading.samples.advanced.orderManagement.DepthListener"
+            "com.iontrading.automatedMarketMaking.OrderManagement",
+            "com.iontrading.automatedMarketMaking.MarketOrder",
+
+            "com.iontrading.automatedMarketMaking.MarketMaker"
         );
 
         // Infrastructure at ERROR
         ApplicationLogging.setLogLevels("ERROR",
-            "com.iontrading.samples.advanced.orderManagement.AsyncLoggingManager",
-            "com.iontrading.samples.advanced.orderManagement.ApplicationLogging",
-            "com.iontrading.samples.advanced.orderManagement.MarketDef",
-            "com.iontrading.samples.advanced.orderManagement.Best",
-            "com.iontrading.samples.advanced.orderManagement.Instrument",
-            "com.iontrading.samples.advanced.orderManagement.GCBest",
-            "com.iontrading.samples.advanced.orderManagement.GCLevelResult"
+            "com.iontrading.automatedMarketMaking.AsyncLoggingManager",
+            "com.iontrading.automatedMarketMaking.ApplicationLogging",
+            "com.iontrading.automatedMarketMaking.MarketDef",
+            "com.iontrading.automatedMarketMaking.Best",
+            "com.iontrading.automatedMarketMaking.DepthListener",
+            "com.iontrading.automatedMarketMaking.Instrument",
+            "com.iontrading.automatedMarketMaking.GCBest",
+            "com.iontrading.automatedMarketMaking.GCLevelResult"
         );
     }
 
@@ -129,7 +131,7 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
         
         if (focusComponent != null && !focusComponent.isEmpty()) {
             ApplicationLogging.setLogLevel(
-                "com.iontrading.samples.advanced.orderManagement." + focusComponent,
+                "com.iontrading.automatedMarketMaking." + focusComponent,
                 "DEBUG"
             );
             System.out.println("DEBUG logging enabled for " + focusComponent);
@@ -390,11 +392,16 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
       LOGGER.info("Instrument data will be loaded by DepthListener automatically");
 
       // Initialize the market maker component
+      LOGGER.info("Initializing market maker component");
       om.initializeMarketMaker();
 
       // Set up depth subscriptions - this will trigger the instrument data loading
       LOGGER.info("Setting up depths subscriptions");
       om.subscribeToDepths();
+
+      LOGGER.info("Completing market maker initialization");
+      om.completeMarketMakerInitialization();
+
     } catch (MkvException e) {
       LOGGER.error("Failed to start MKV API: {}", e.getMessage(), e);
       LOGGER.error("Error details", e);
@@ -516,6 +523,18 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
             }));
         } catch (Exception e) {
             LOGGER.error("Error initializing market maker", e);
+        }
+    }
+
+    // Add this method to complete market maker initialization after MKV is ready
+    private void completeMarketMakerInitialization() {
+        if (marketMaker != null) {
+            try {
+                LOGGER.info("Completing market maker initialization with MKV subscriptions");
+                marketMaker.initializeMkvSubscriptions();
+            } catch (Exception e) {
+                LOGGER.error("Error completing market maker initialization", e);
+            }
         }
     }
 
@@ -1384,13 +1403,12 @@ private void trySubscribeAndRemoveListener(MkvObject mkvObject, MkvPublishManage
    */
   @Override
     public void best(Best best, double cash_gc, double reg_gc, GCBest gcBestCash, GCBest gcBestREG) {
-        if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("best() called: instrument={}, ask=%.6f ({}), bid=%.6f ({}), cash_gc=%.6f, reg_gc=%.6f", 
+            LOGGER.debug("OrderManagement.best() called: instrument={}, ask=%.6f ({}), bid=%.6f ({}), cash_gc=%.6f, reg_gc=%.6f", 
                 best.getId(), 
                 best.getAsk(), best.getAskSrc(), 
                 best.getBid(), best.getBidSrc(),
                 cash_gc, reg_gc);
-        }
+
 
         // Store the latest best for this instrument
         latestCashGC.set(cash_gc);
@@ -1408,6 +1426,8 @@ private void trySubscribeAndRemoveListener(MkvObject mkvObject, MkvPublishManage
                 GCBest gcBestCashCopy = sharedGCBestCash.get();
                 GCBest gcBestREGCopy = sharedGCBestREG.get();
                 
+                LOGGER.info("Forwarding best price to market maker: instrument={}, ask=({}), bid=({})",
+                    best.getId(), best.getAsk(), best.getBid());    
                 // Pass the best information to the market maker
                 marketMaker.best(best, currentCashGC, currentRegGC, gcBestCashCopy, gcBestREGCopy);
             } catch (Exception e) {
