@@ -296,9 +296,58 @@ public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener {
     orderCallback.orderDead(this);
   }
 
-  public void onResult(MkvFunctionCallEvent mkvFunctionCallEvent, MkvSupply mkvSupply) {
-	   // not needed for this implementation
-	}
+public void onResult(MkvFunctionCallEvent mkvFunctionCallEvent, MkvSupply mkvSupply) {
+    try {
+        if (mkvSupply == null) {
+            LOGGER.warn("onResult received null supply for reqId={}", myReqId);
+            return;
+        }
+        
+        // Get the full string representation of the supply
+        String resultString = mkvSupply.getString(mkvSupply.firstIndex());
+        LOGGER.debug("Raw order result for reqId={}: {}", myReqId, resultString);
+        
+        // Parse the string to extract the order ID
+        // The format is typically: "0:OK -Result {-Id {5697620189428842553_20250603} -OrderTmpId {...} }"
+        String orderId = null;
+        int idIndex = resultString.indexOf("-Id {");
+        
+        if (idIndex >= 0) {
+            // Extract the string between "-Id {" and the next "}"
+            int startIndex = idIndex + 5; // Length of "-Id {"
+            int endIndex = resultString.indexOf("}", startIndex);
+            
+            if (endIndex > startIndex) {
+                orderId = resultString.substring(startIndex, endIndex).trim();
+                
+                // Set the order ID in this object
+                setOrderId(orderId);
+                
+                // Map the order ID to our request ID in the order manager
+                if (orderCallback != null) {
+                    orderCallback.mapOrderIdToReqId(orderId, myReqId);
+                }
+                
+                // Log the successful order creation
+                LOGGER.info("Order successfully created: reqId={}, orderId={}", myReqId, orderId);
+                
+                // Log to machine-readable format for auditing
+                ApplicationLogging.logOrderUpdate(
+                    "ORDER_CREATED", 
+                    myReqId,
+                    orderId,
+                    "Order created successfully"
+                );
+            } else {
+                LOGGER.warn("Could not parse order ID - invalid format: reqId={}", myReqId);
+            }
+        } else {
+            LOGGER.warn("Could not find -Id in result string: reqId={}", myReqId);
+        }
+    } catch (Exception e) {
+        LOGGER.error("Error processing order creation result: reqId={}, error={}", myReqId, e.getMessage(), e);
+    }
+}
 
   /**
    * @return The instrument ID for this order
