@@ -24,6 +24,7 @@ import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
@@ -35,6 +36,7 @@ import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.iontrading.lowlatency.net.bytebuddy.dynamic.TypeResolutionStrategy.Active;
 import com.iontrading.mkv.Mkv;
 import com.iontrading.mkv.MkvChain;
 import com.iontrading.mkv.MkvObject;
@@ -105,8 +107,9 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
         // Core business logic at INFO
         ApplicationLogging.setLogLevels("INFO",
             "com.iontrading.automatedMarketMaking.OrderManagement",
+            "com.iontrading.automatedMarketMaking.BondEligibilityListener",
+            "com.iontrading.automatedMarketMaking.EligibilityChangeListener",
             "com.iontrading.automatedMarketMaking.MarketOrder",
-
             "com.iontrading.automatedMarketMaking.MarketMaker"
         );
 
@@ -116,10 +119,14 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
             "com.iontrading.automatedMarketMaking.ApplicationLogging",
             "com.iontrading.automatedMarketMaking.MarketDef",
             "com.iontrading.automatedMarketMaking.Best",
+            "com.iontrading.automatedMarketMaking.BondConsolidatedData",
             "com.iontrading.automatedMarketMaking.DepthListener",
             "com.iontrading.automatedMarketMaking.Instrument",
             "com.iontrading.automatedMarketMaking.GCBest",
-            "com.iontrading.automatedMarketMaking.GCLevelResult"
+            "com.iontrading.automatedMarketMaking.GCLevelResult",
+            "com.iontrading.automatedMarketMaking.Instrument",
+            "com.iontrading.automatedMarketMaking.IOrderManager",
+            "com.iontrading.automatedMarketMaking.MarketMakerConfig"
         );
     }
 
@@ -237,10 +244,10 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
   private final AtomicReference<Double> latestRegGC = new AtomicReference<>(0.0);
   private final AtomicReference<GCBest> sharedGCBestCash = new AtomicReference<>();
   private final AtomicReference<GCBest> sharedGCBestREG = new AtomicReference<>();
-//   private volatile double latestCashGC = 0.0;
-//   private volatile double latestRegGC = 0.0;
-//   private volatile GCBest sharedGCBestCash = null;
-//   private volatile GCBest sharedGCBestREG = null;
+
+  // Map to track the last known fill quantity for each order
+  private final Map<Integer, Double> orderFillQuantities = new ConcurrentHashMap<>();
+
   private final Map<String, Best> latestBestByInstrument = new ConcurrentHashMap<String, Best>() {
     private static final int MAX_SIZE = 5000;
     
@@ -375,14 +382,18 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
 
       LOGGER.info("Starting MKV API");
       // Start the MKV API if it hasn't been started already
-      Mkv existingMkv = Mkv.getInstance();
-      if (existingMkv == null) {
-          Mkv.start(qos);
-      } else {
-          LOGGER.info("MKV API already started");
-          existingMkv.getPublishManager().addPublishListener(om);
-      }
-
+      try {
+          Mkv existingMkv = Mkv.getInstance();
+          if (existingMkv == null) {
+              Mkv.start(qos);
+              LOGGER.info("Mkv started successfully.");
+          } else {
+              LOGGER.info("MKV API already started");
+              existingMkv.getPublishManager().addPublishListener(om);
+        }
+        } catch (Exception e) {
+            LOGGER.warn("Failed to start Mkv", e);
+        }
       // Initialize DepthListener after MKV is started
       depthListener = new DepthListener(om);
       LOGGER.info("DepthListener initialized");
@@ -402,9 +413,9 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
       LOGGER.info("Completing market maker initialization");
       om.completeMarketMakerInitialization();
 
-    } catch (MkvException e) {
-      LOGGER.error("Failed to start MKV API: {}", e.getMessage(), e);
-      LOGGER.error("Error details", e);
+    } catch (Exception e) {
+      LOGGER.warn("Failed to start MKV API: {}", e.getMessage(), e);
+      LOGGER.warn("Error details", e);
     }
   }
     
@@ -465,6 +476,9 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
     // Initialize heartbeats
     initializeHeartbeat();
 
+    initializeSignalHandlers();
+
+
 }
 
   /**
@@ -524,6 +538,74 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
         } catch (Exception e) {
             LOGGER.error("Error initializing market maker", e);
         }
+    }
+
+    /**
+     * Initialize signal handlers to ensure proper shutdown sequence
+     */
+    private void initializeSignalHandlers() {
+        LOGGER.info("Initializing signal handlers for graceful shutdown");
+        
+        // Create a special handler for SIGINT (Ctrl+C)
+        final Thread ctrlCHandler = new Thread(() -> {
+            LOGGER.info("SIGINT (Ctrl+C) received, starting controlled shutdown");
+            
+            try {
+                // Create a countdown latch to block the shutdown process
+                final CountDownLatch shutdownLatch = new CountDownLatch(1);
+                
+                // Start the cancellation in a separate thread
+                Thread cancelThread = new Thread(() -> {
+                    try {
+                        LOGGER.info("Cancelling all orders before shutdown");
+                        
+                        // First cancel market maker orders
+                        if (marketMaker != null) {
+                            try {
+                                LOGGER.info("Cancelling market maker orders");
+                                marketMaker.cancelAllOrders(10000);
+                            } catch (Exception e) {
+                                LOGGER.error("Error cancelling market maker orders: {}", e.getMessage());
+                            }
+                        }
+                        
+                        // Then cancel any remaining orders
+                        try {
+                            cancelAllOrders();
+                        } catch (Exception e) {
+                            LOGGER.error("Error cancelling orders: {}", e.getMessage());
+                        }
+                        
+                        LOGGER.info("All cancellations complete, releasing shutdown latch");
+                    } finally {
+                        // Always release the latch to avoid deadlock
+                        shutdownLatch.countDown();
+                    }
+                });
+                
+                // Make this a daemon thread so it doesn't prevent JVM exit if it hangs
+                cancelThread.setDaemon(true);
+                cancelThread.setName("Ctrl+C-CancellationThread");
+                cancelThread.start();
+                
+                // Wait for cancellations to complete with a timeout
+                if (!shutdownLatch.await(15, TimeUnit.SECONDS)) {
+                    LOGGER.warn("Timeout waiting for order cancellations, proceeding with shutdown anyway");
+                }
+                
+                LOGGER.info("Controlled shutdown sequence completed");
+            } catch (Exception e) {
+                LOGGER.error("Error during controlled shutdown: {}", e.getMessage());
+            }
+        });
+        
+        // Set the name for easier identification
+        ctrlCHandler.setName("Ctrl+C-ShutdownHandler");
+        
+        // Register our handler to run before the JVM shutdown hooks
+        Runtime.getRuntime().addShutdownHook(ctrlCHandler);
+        
+        LOGGER.info("Signal handlers initialized");
     }
 
     // Add this method to complete market maker initialization after MKV is ready
@@ -1213,59 +1295,114 @@ private void trySubscribeAndRemoveListener(MkvObject mkvObject, MkvPublishManage
     }
   }
 
-  /**
-   * Processes full updates for CM_ORDER records.
-   * If the update is for an order placed by this component
-   * (based on UserData and FreeText), forwards the update to the
-   * appropriate MarketOrder object.
-   */
-  public void onFullUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply,
-      boolean isSnap) {
-    try {
-      // Get the UserData (contains our request ID) and FreeText (contains our application ID)
-      String userData = mkvRecord.getValue("UserData").getString();
-      String freeText = mkvRecord.getValue("FreeText").getString();
-      
-      // If this order wasn't placed by us, ignore it
-      if ("".equals(userData) || !freeText.equals(getApplicationId())) {
-        if (LOGGER.isDebugEnabled()) {
-          LOGGER.debug("Ignoring order update for non-matching order: {}",
-              mkvRecord.getName());
-        }
-        return;
-      } else {
-        // This is an order we placed - forward the update to the MarketOrder
+    /**
+     * Process full updates for CM_ORDER records.
+     * Detects order fills and triggers hedge trades when appropriate.
+     */
+    @Override
+    public void onFullUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolean isSnap) {
         try {
-          // Parse the request ID from the UserData
-          int reqId = Integer.parseInt(userData);
-          if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("Processing order update: reqId={}", reqId);
-          }
-          // Get the corresponding MarketOrder from the cache
-          MarketOrder order = getOrder(reqId);
-          
-          if (order != null) {
-            // Forward the update to the order
-            if (LOGGER.isDebugEnabled()) {
-              LOGGER.debug("Forwarding update to order: reqId={}", reqId);
+            // Check if this is our order by looking at CompNameOrigin (should match our app ID)
+            String appName = mkvRecord.getValue("CompNameOrigin").getString();
+            if (!"MarketMaker".equals(appName)) {
+                return; // Not our order
             }
-            order.onFullUpdate(mkvRecord, mkvSupply, isSnap);
-            String orderStatus = mkvRecord.getValue("Status").getString();
-            if ("Canceled".equals(orderStatus) || "Filled".equals(orderStatus) || 
-                "Rejected".equals(orderStatus)) {
-                removeOrder(order.getMyReqId());
+            
+            // Get order details
+            String orderId = mkvRecord.getValue("Id").getString();
+            String userData = mkvRecord.getValue("UserData").getString();
+            String tradeStatus = mkvRecord.getValue("TradeStatus").getString();
+            double qtyFill = mkvRecord.getValue("QtyFill").getReal();
+            double price = mkvRecord.getValue("Price").getReal();
+
+            // If no userData, we can't find the request ID
+            if (userData == null || userData.isEmpty()) {
+                LOGGER.debug("Order update missing UserData: {}", orderId);
+                return;
             }
-          } else {
-            LOGGER.debug("Order not found in cache: reqId={}", reqId);
-          }
+            
+            // Parse request ID from UserData
+            int reqId;
+            try {
+                reqId = Integer.parseInt(userData);
+            } catch (NumberFormatException e) {
+                LOGGER.warn("Invalid request ID in UserData: {}", userData);
+                return;
+            }
+            
+            LOGGER.debug("Processing order update: reqId={}, orderId={}, status={}, fill={}", 
+                reqId, orderId, tradeStatus, qtyFill);
+            
+            // Get the corresponding MarketOrder from our cache
+            MarketOrder order = getOrder(reqId);
+            if (order == null) {
+                LOGGER.debug("Order not found in cache: reqId={}", reqId);
+                return;
+            }
+            
+            // Check if this update indicates a fill
+            if (qtyFill > 0 && ("Filled".equals(tradeStatus) || "PartiallyFilled".equals(tradeStatus))) {
+                // Get current fill quantity tracked for this order
+                double currentFill = order.getQtyFilled();
+                
+                // If we have new fill quantity
+                if (qtyFill > currentFill) {
+                    double newFillQty = qtyFill - currentFill;
+                    
+                    LOGGER.info("Order fill detected: orderId={}, reqId={}, newQty={}, price={}, status={}",
+                        orderId, reqId, newFillQty, price, tradeStatus);
+                    
+                    // Now find the active quote that contains this order
+                    if (marketMaker != null) {
+                        // Find the ActiveQuote containing this order
+                        for (MarketMaker.ActiveQuote quote : marketMaker.getActiveQuotes().values()) {
+                            MarketOrder bidOrder = quote.getBidOrder();
+                            MarketOrder askOrder = quote.getAskOrder();
+                            
+                            String side = null;
+                            String referenceSource = null;
+                            
+                            if (bidOrder != null && bidOrder.getOrderId() != null && 
+                                bidOrder.getOrderId().equals(orderId)) {
+                                side = "Buy";
+                                referenceSource = quote.getBidReferenceSource();
+                                LOGGER.info("Fill was on a bid for {}", quote.getCusip());
+                            } else if (askOrder != null && askOrder.getOrderId() != null && 
+                                    askOrder.getOrderId().equals(orderId)) {
+                                side = "Sell";
+                                referenceSource = quote.getAskReferenceSource();
+                                LOGGER.info("Fill was on an ask for {}", quote.getCusip());
+                            }
+                            
+                            if (side != null) {
+                                // Update our tracking of filled quantity
+                                // Since MarketOrder doesn't have updateFilled, we'll need to track this elsewhere
+                                // For now, we'll just execute the hedge trade with the new fill amount
+                                
+                                // Execute hedge trade for the new fill quantity
+                                marketMaker.executeHedgeTrade(
+                                    quote.getCusip(), 
+                                    side, 
+                                    newFillQty, 
+                                    price,
+                                    referenceSource
+                                );
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Handle order completion/cancellation
+            if ("Canceled".equals(tradeStatus) || "Filled".equals(tradeStatus) || 
+                "Rejected".equals(tradeStatus)) {
+                removeOrder(reqId);
+            }
         } catch (Exception e) {
-          LOGGER.error("Error processing order update: {}", e.getMessage(), e);
+            LOGGER.error("Error processing order update: {}", e.getMessage(), e);
         }
-      }
-    } catch (Exception e) {
-      LOGGER.error("Error accessing order fields: {}", e.getMessage(), e);
     }
-  }
 
   /**
    * Notification that an order is no longer able to trade.
@@ -1717,6 +1854,21 @@ private void setupPatternSubscriptionMonitor() {
     }
 }
 
+
+    /**
+     * Get the current tracked fill quantity for an order
+     */
+    private double getTrackedFillQty(int reqId) {
+        return orderFillQuantities.getOrDefault(reqId, 0.0);
+    }
+
+    /**
+     * Update the tracked fill quantity for an order
+     */
+    private void updateTrackedFillQty(int reqId, double fillQty) {
+        orderFillQuantities.put(reqId, fillQty);
+    }
+
 /**
  * Initiates shutdown process for the application.
  */
@@ -1726,45 +1878,6 @@ public void initiateShutdown() {
     
     // Trigger the full shutdown process
     shutdown();
-}
-
-/**
- * Performs a complete shutdown of the application.
- */
-public void shutdown() {
-    // Mark as shutting down
-    isShuttingDown = true;
-    
-    // Cancel all pending orders
-    cancelAllOrders();
-    
-    // Shutdown market maker if active
-    if (marketMaker != null) {
-        try {
-            LOGGER.info("Shutting down market maker");
-            marketMaker.shutdown();
-        } catch (Exception e) {
-            LOGGER.warn("Error shutting down market maker: {}", e.getMessage());
-        }
-    }
-
-    // Shutdown Redis connection pool
-    if (jedisPool != null) {
-        try {
-            LOGGER.info("Closing Redis connection pool");
-            jedisPool.destroy(); // Use destroy() for older Jedis versions
-        } catch (Exception e) {
-            LOGGER.warn("Error closing Redis connection pool: {}", e.getMessage());
-        }
-    }
-
-    // Shutdown all executors
-    shutdownExecutor(heartbeatScheduler, "Heartbeat scheduler");
-    shutdownExecutor(scheduler, "Market recheck scheduler");
-    shutdownExecutor(orderExpirationScheduler, "Order expiration scheduler");
-    
-    // Log successful shutdown
-    LOGGER.info("OrderManagement shutdown complete");
 }
 
 /**
@@ -1780,25 +1893,15 @@ public boolean isShuttingDown() {
  * Helper method to shutdown an executor service
  */
 private void shutdownExecutor(ExecutorService executor, String name) {
-    isShuttingDown = true;
-    cancelAllOrders();
-
-    shutdownExecutorGracefully(heartbeatScheduler, "Heartbeat", 2);
-    shutdownExecutorGracefully(orderExpirationScheduler, "Order expiration", 5);
-    shutdownExecutorGracefully(scheduler, "Market recheck", 10);
-    if (jedisPool != null) {
-        jedisPool.close();
+    if (executor == null) {
+        return;
     }
     
-    LOGGER.info("OrderManagement shutdown complete");
-}
-
-private void shutdownExecutorGracefully(ExecutorService executor, String name, int timeoutSeconds) {
     try {
         LOGGER.info("Shutting down {} executor", name);
         executor.shutdown();
         
-        if (!executor.awaitTermination(timeoutSeconds, TimeUnit.SECONDS)) {
+        if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
             LOGGER.warn("{} executor did not terminate gracefully, forcing shutdown", name);
             List<Runnable> pendingTasks = executor.shutdownNow();
             LOGGER.warn("Cancelled {} pending tasks for {}", pendingTasks.size(), name);
@@ -1811,8 +1914,120 @@ private void shutdownExecutorGracefully(ExecutorService executor, String name, i
         LOGGER.warn("Interrupted while shutting down {} executor", name);
         executor.shutdownNow();
         Thread.currentThread().interrupt();
+    } catch (Exception e) {
+        LOGGER.error("Error shutting down {} executor: {}", name, e.getMessage(), e);
     }
 }
+
+    /**
+     * Performs a complete shutdown of the application with explicit MKV lifecycle control.
+     * Uses Thread.join() to ensure order cancellations complete before MKV shutdown.
+     */
+    public void shutdown() {
+        // Mark as shutting down
+        isShuttingDown = true;
+        
+        LOGGER.info("Starting application shutdown sequence");
+        
+        // First notify the market maker to prepare for shutdown 
+        // (disable but don't cancel orders yet)
+        if (marketMaker != null) {
+            try {
+                LOGGER.info("Preparing market maker for shutdown");
+                marketMaker.prepareForShutdown();
+            } catch (Exception e) {
+                LOGGER.warn("Error preparing market maker for shutdown: {}", e.getMessage());
+            }
+        }
+        
+        // Create a dedicated thread for order cancellation that we can join
+        final Thread cancellationThread = new Thread(() -> {
+            try {
+                LOGGER.info("Order cancellation thread started");
+                
+                // Cancel market maker orders first
+                if (marketMaker != null) {
+                    try {
+                        LOGGER.info("Cancelling all market maker orders");
+                        boolean allCancelled = marketMaker.cancelAllOrders(10000);
+                        if (!allCancelled) {
+                            LOGGER.warn("Not all market maker orders were cancelled before timeout");
+                        }
+                    } catch (Exception e) {
+                        LOGGER.error("Error cancelling market maker orders: {}", e.getMessage(), e);
+                    }
+                }
+                
+                // Now cancel all pending orders (our own orders, not via market maker)
+                try {
+                    LOGGER.info("Cancelling all order management orders");
+                    cancelAllOrders();
+                } catch (Exception e) {
+                    LOGGER.warn("Error cancelling orders during shutdown: {}", e.getMessage());
+                }
+                
+                LOGGER.info("Order cancellation thread completed");
+            } catch (Exception e) {
+                LOGGER.error("Error in order cancellation thread: {}", e.getMessage(), e);
+            }
+        });
+        
+        // Set a name for the thread for easier debugging
+        cancellationThread.setName("OrderCancellationThread");
+        
+        try {
+            // Start the cancellation thread
+            cancellationThread.start();
+            
+            // Wait for the cancellation thread to complete with a timeout
+            LOGGER.info("Waiting for order cancellation thread to complete (max 15 seconds)");
+            cancellationThread.join(15000); // 15 second timeout
+            
+            if (cancellationThread.isAlive()) {
+                // Thread is still running after timeout
+                LOGGER.warn("Order cancellation thread did not complete within timeout");
+                // Interrupt the thread
+                cancellationThread.interrupt();
+            } else {
+                LOGGER.info("Order cancellation thread completed successfully");
+            }
+        } catch (InterruptedException e) {
+            LOGGER.warn("Interrupted while waiting for order cancellation thread");
+            // Interrupt the cancellation thread
+            cancellationThread.interrupt();
+            // Restore the interrupt
+            Thread.currentThread().interrupt();
+        }
+        
+        // Complete market maker shutdown (cleanup without MKV operations)
+        if (marketMaker != null) {
+            try {
+                LOGGER.info("Completing market maker shutdown");
+                marketMaker.completeShutdown();
+            } catch (Exception e) {
+                LOGGER.warn("Error completing market maker shutdown: {}", e.getMessage());
+            }
+        }
+
+        // Shutdown Redis connection pool
+        if (jedisPool != null) {
+            try {
+                LOGGER.info("Closing Redis connection pool");
+                jedisPool.destroy(); // Use destroy() for older Jedis versions
+            } catch (Exception e) {
+                LOGGER.warn("Error closing Redis connection pool: {}", e.getMessage());
+            }
+        }
+
+        // Shutdown all executors
+        shutdownExecutor(heartbeatScheduler, "Heartbeat scheduler");
+        shutdownExecutor(scheduler, "Market recheck scheduler");
+        shutdownExecutor(orderExpirationScheduler, "Order expiration scheduler");
+        
+        // Log successful shutdown
+        LOGGER.info("OrderManagement shutdown complete");
+    }
+
 /**
  * Cancels all outstanding orders currently tracked by this OrderManagement instance.
  */

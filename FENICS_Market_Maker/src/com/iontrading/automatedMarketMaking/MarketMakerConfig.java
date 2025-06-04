@@ -28,8 +28,8 @@ public class MarketMakerConfig {
     private double askAdjustment = 0.01;
     private double minSpread = 0.02;
     private double defaultSpread = 0.05;
-    private double minPrice = 50.0;
-    private double maxPrice = 200.0;
+    private double minPrice = 0;
+    private double maxPrice = 5.0;
 
 
     private String orderType = "Limit";

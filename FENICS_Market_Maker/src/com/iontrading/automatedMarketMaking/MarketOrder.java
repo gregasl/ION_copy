@@ -81,8 +81,9 @@ public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener {
    * @param tif Time in force (e.g., "Day", "IOC", "FOK", "FAS", "FAK")
    * @param orderManager The order manager that will be notified of order events
    * @return A new MarketOrder object or null if creation failed
+   * Syntax	<source>_VCMIOrderAdd181 (<User>, <InstrumentId>, <Verb>, <Price>, <QtyShown>, <QtyTot>, <Type>, <TimeInForce>, <IsSoft>, <Attribute>, <CustomerInfo>, <FreeText>, <StopCond>, <StopId>, <StopPrice>, ... )
    */
-  		  
+
   public static MarketOrder orderCreate(String MarketSource, String TraderId, String instrId, String verb,
       double qty, double price, String type, String tif,
       IOrderManager orderManager) {
@@ -148,6 +149,83 @@ public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener {
     return null;
   }
 
+
+  /**
+   * Updates an existing order in the market
+   *
+   * @param MarketSource The source market (e.g., "DEALERWEB_REPO")
+   * @param TraderId The trader ID for the order
+   * @param instrId The instrument ID for the order
+   * @param verb The order direction ("Buy" or "Sell")
+   * @param qty The quantity of the order
+   * @param price The price of the order
+   * @param type The order type (e.g., "Limit", "Market")
+   * @param tif Time in force (e.g., "Day", "IOC", "FOK", "FAS", "FAK")
+   * @param orderManager The order manager that will be notified of order events
+   * @return A new MarketOrder object or null if creation failed
+   * Syntax	<source>_VCMIOrderRwt181 (<User>, <OrderId>, <Verb>, <Price>, <QtyShown>, <QtyTot>, <IsSoft>, <Attribute>, <StopCond>, <StopId>, <StopPrice>, ... )
+   */
+
+  public static MarketOrder orderUpdate(String MarketSource, String TraderId, String orderId, String instrId, String verb,
+      double qty, double price, IOrderManager orderManager) {
+
+    // Increment the request ID to ensure uniqueness
+    reqId++;
+    
+    // Log the order update attempt
+    if (LOGGER.isInfoEnabled()) {
+      LOGGER.info("Creating order update request #{} for {} {} @ {}", reqId, verb, instrId, qty, price);
+    }
+
+    // Get the publish manager to access functions
+    MkvPublishManager pm = Mkv.getInstance().getPublishManager();
+    
+    marketSource = MarketSource;
+    
+    // Get the order add function from the ION gateway
+    MkvFunction fn = pm.getMkvFunction(MarketSource + "VCMIOrderRwt181");
+    
+    if (fn == null) {
+      LOGGER.error("Failed to get VCMIOrderRwt181 function from gateway");
+      return null;
+    }
+    
+    try {
+      // The free text will contain the application ID to identify orders from this component
+      String freeText = orderManager.getApplicationId();
+      
+      // Create a new MarketOrder object that will track this order
+      MarketOrder order = new MarketOrder(reqId, instrId, verb, qty, price, "UPDATE", orderManager);
+     
+      // Create the function arguments for the order creation
+      // This is specific to the VCMIOrderRwt181 function interface
+      MkvSupply args = MkvSupplyFactory.create(new Object[] {
+        TraderId,                                 // User                  
+        orderId,                                        // OrderId
+        verb,                                           // Verb (Buy/Sell)                 
+        Double.valueOf(price),                          // Price                 
+        Double.valueOf(qty),                            // QtyShown (visible quantity)             
+        Double.valueOf(qty),                            // QtyTot (total quantity)               
+        Integer.valueOf(0),                             // IsSoft                
+        Integer.valueOf(0),                             // Attribute             
+        Integer.valueOf(0),                                 // StopCond              
+        "",                                             // StopId                
+        Double.valueOf(0)                               // StopPrice             
+      });
+        
+      if (LOGGER.isInfoEnabled()) {
+        LOGGER.info("UUpdating order with args: {}", args);
+      }
+      // Call the function with this MarketOrder as the listener for the response
+      fn.call(args, order);
+      
+      return order;
+    } catch (MkvException e) {
+      LOGGER.error("Error creating order: {}", e.getMessage());
+    }
+    return null;
+  }
+
   /**
    * Cancels an existing order in the market
    * 
@@ -186,7 +264,6 @@ public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener {
           // Create a new MarketOrder object that will track this cancel request
           // Using special values for a cancel request
           MarketOrder order = new MarketOrder(reqId, orderId, "Cancel", 0, 0, "CANCEL", orderManager);
-          order.setOrderId(orderId);
           
           // Create the function arguments for the order cancellation
           // This is specific to the VCMIOrderDel function interface
@@ -202,14 +279,6 @@ public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener {
           
           // Call the function with this MarketOrder as the listener for the response
           fn.call(args, order);
-          
-          // Log to machine-readable format
-          ApplicationLogging.logOrderUpdate(
-              "CANCEL_SENT", 
-              order.getMyReqId(),
-              orderId,
-              "Cancel request sent"
-          );
           
           return order;
       } catch (MkvException e) {
@@ -279,6 +348,8 @@ public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener {
       if (LOGGER.isInfoEnabled()) {
           if ("Cancel".equals(verb)) {
               LOGGER.info("Cancel request created: reqId={}, instrId={}", _reqId, instrId);
+          } else if ("UPDATE".equals(tif)) {
+              LOGGER.info("Update request created: reqId={}, instrId={}", _reqId, instrId);
           } else {
               LOGGER.info("MarketOrder created: reqId={}, instrId={}, verb={}", _reqId, instrId, verb);
           }
