@@ -1,5 +1,6 @@
 package com.iontrading.automatedMarketMaking;
 
+import com.iontrading.commons.compiler.m;
 import com.iontrading.mkv.Mkv;
 import com.iontrading.mkv.MkvObject;
 import com.iontrading.mkv.MkvPattern;
@@ -13,6 +14,7 @@ import com.iontrading.mkv.exceptions.MkvException;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.Map;
@@ -83,8 +85,6 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
         }));
     }
    
-
-
     /**
      * Add eligibility change listener
      */
@@ -92,7 +92,7 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
         synchronized (eligibilityListeners) {
             eligibilityListeners.add(listener);
         }
-        LOGGER.debug("Added eligibility change listener: {}", listener.getClass().getSimpleName());
+        LOGGER.info("Added eligibility change listener: {}", listener.getClass().getSimpleName());
     }
     
     /**
@@ -102,7 +102,7 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
         synchronized (eligibilityListeners) {
             eligibilityListeners.remove(listener);
         }
-        LOGGER.debug("Removed eligibility change listener: {}", listener.getClass().getSimpleName());
+        LOGGER.info("Removed eligibility change listener: {}", listener.getClass().getSimpleName());
     }
     
     /**
@@ -209,12 +209,37 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
     }
     
     /**
+     * Container for bond eligibility results by term code
+     */
+    public static class EligibilityResult {
+        private final boolean eligibleForTermC;
+        private final boolean eligibleForTermREG;
+        
+        public EligibilityResult(boolean eligibleForTermC, boolean eligibleForTermREG) {
+            this.eligibleForTermC = eligibleForTermC;
+            this.eligibleForTermREG = eligibleForTermREG;
+        }
+
+        public boolean isEligibleForTermC() {
+            return eligibleForTermC;
+        }
+        
+        public boolean isEligibleForTermREG() {
+            return eligibleForTermREG;
+        }
+    }
+
+    /**
      * Determine if a bond should be eligible based on criteria
      */
-    private boolean shouldBondBeEligible(String cusip, Object bondDataObj) {
+    private EligibilityResult shouldBondBeEligible(String cusip, Object bondDataObj) {
         try {
             Map<String, Object> bondData;
-            
+            boolean eligibleC = true;   
+            boolean eligibleREG = true;   
+
+            LOGGER.info("Evaluating eligibility for bond & bondDataObj: {} {}", cusip, bondDataObj);
+
             // Handle different input types
             if (bondDataObj instanceof BondConsolidatedData) {
                 // Extract consolidated view from BondConsolidatedData
@@ -225,66 +250,84 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
                 Map<String, Object> typedMap = (Map<String, Object>) bondDataObj;
                 bondData = typedMap;
             } else {
-                LOGGER.warn("Unsupported bond data type for eligibility check: {}", 
+                LOGGER.info("Unsupported bond data type for eligibility check: {}", 
                     bondDataObj != null ? bondDataObj.getClass().getName() : "null");
-                return false;
+                return new EligibilityResult(false, false);
             }
             
             // Check if bond has required data
             if (bondData == null || bondData.isEmpty()) {
                 LOGGER.debug("Bond {} ineligible: no bond data", cusip);
-                return false;
+                return new EligibilityResult(false, false);
             }
-            
+
             // Check maturity date (must be at least 2 months from now)
-            Object maturityObj = bondData.get("Maturity");
-            if (maturityObj == null) {
-                maturityObj = bondData.get("STATIC_Maturity");
-            }
+            Object maturityObj = bondData.get("STATIC_DateMaturity");
+            LOGGER.info("Checking maturity date for bond {}: {}", cusip, maturityObj);
+            java.time.LocalDate maturityDate = null;
+            java.time.LocalDate twoMonthsFromNow = java.time.LocalDate.now().plusMonths(2);
             if (maturityObj != null) {
                 try {
-                    // Parse the maturity date - adapt format as needed
-                    String maturityStr = maturityObj.toString();
-                    
-                    // Try different date formats
-                    java.time.LocalDate maturityDate = null;
-                    
-                    try {
-                        // Try yyyy-MM-dd format
-                        maturityDate = java.time.LocalDate.parse(maturityStr);
-                    } catch (Exception e1) {
+                    // First check if it's an integer (MKV date format)
+                    if (maturityObj instanceof Integer || maturityObj instanceof Long) {
+                        // Convert integer YYYYMMDD format to LocalDate
+                        int dateInt = Integer.parseInt(maturityObj.toString());
+                        int year = dateInt / 10000;
+                        int month = (dateInt % 10000) / 100;
+                        int day = dateInt % 100;
+                        maturityDate = java.time.LocalDate.of(year, month, day);
+                        // Check if maturity date is at least 2 months from now
+                        if (maturityDate.isBefore(twoMonthsFromNow)) {
+                            LOGGER.info("Bond {} ineligible: maturity date {} is less than 2 months away", 
+                                cusip, maturityDate);
+                            return new EligibilityResult(false, false);
+                        }
+                        LOGGER.info("Parsed maturity date from integer: {} → {}", dateInt, maturityDate);
+                    } else {
+                        String maturityStr = maturityObj.toString();
+                        // Try different string date formats in sequence
                         try {
-                            // Try MM/dd/yyyy format
-                            java.time.format.DateTimeFormatter formatter = java.time.format.DateTimeFormatter.ofPattern("MM/dd/yyyy");
-                            maturityDate = java.time.LocalDate.parse(maturityStr, formatter);
-                        } catch (Exception e2) {
+                            // Try yyyy-MM-dd format
+                            maturityDate = java.time.LocalDate.parse(maturityStr);
+                        } catch (Exception e1) {
                             try {
-                                // Try yyyyMMdd format
-                                java.time.format.DateTimeFormatter formatter = java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd");
+                                // Try MM/dd/yyyy format
+                                java.time.format.DateTimeFormatter formatter = 
+                                    java.time.format.DateTimeFormatter.ofPattern("MM/dd/yyyy");
                                 maturityDate = java.time.LocalDate.parse(maturityStr, formatter);
-                            } catch (Exception e3) {
-                                LOGGER.debug("Could not parse maturity date for bond {}: {}", cusip, maturityStr);
+                                // Check if maturity date is at least 2 months from now
+                                if (maturityDate.isBefore(twoMonthsFromNow)) {
+                                    LOGGER.info("Bond {} ineligible: maturity date {} is less than 2 months away", 
+                                        cusip, maturityDate);
+                                    return new EligibilityResult(false, false);
+                                }
+                            } catch (Exception e2) {
+                                try {
+                                    // Try yyyyMMdd format as string
+                                    java.time.format.DateTimeFormatter formatter = 
+                                        java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd");
+                                    maturityDate = java.time.LocalDate.parse(maturityStr, formatter);
+                                    // Check if maturity date is at least 2 months from now
+                                    if (maturityDate.isBefore(twoMonthsFromNow)) {
+                                        LOGGER.info("Bond {} ineligible: maturity date {} is less than 2 months away", 
+                                            cusip, maturityDate);
+                                        return new EligibilityResult(false, false);
+                                    }
+                                } catch (Exception e3) {
+                                    LOGGER.info("Could not parse maturity date for bond {}: {}", 
+                                        cusip, maturityStr);
+                                }
                             }
                         }
                     }
-                    
-                    if (maturityDate != null) {
-                        // Calculate if maturity is at least 2 months away
-                        java.time.LocalDate twoMonthsFromNow = java.time.LocalDate.now().plusMonths(2);
-                        
-                        if (maturityDate.isBefore(twoMonthsFromNow)) {
-                            LOGGER.debug("Bond {} ineligible: maturity date {} is less than 2 months away", 
-                                cusip, maturityDate);
-                            return false;
-                        }
-                    }
                 } catch (Exception e) {
-                    LOGGER.warn("Error checking maturity for bond {}: {}", cusip, e.getMessage());
+                    LOGGER.warn("Error parsing maturity date: {}", e.getMessage());
                 }
             }
             
             // Check SOMA holdings (must be at least $1 billion)
-            Object somaObj = bondData.get("SOMA");
+            Object somaObj = bondData.get("SDS_SOMA");
+            LOGGER.info("Checking SOMA holdings for bond {}: {}", cusip, somaObj);
             if (somaObj == null) {
                 somaObj = bondData.get("SDS_SOMA");
             }
@@ -292,93 +335,51 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
             if (somaObj != null) {
                 try {
                     double soma = Double.parseDouble(somaObj.toString());
-                    
+                    LOGGER.info("Parsed SOMA value: {} → ${}", somaObj, String.format("%,.2f", soma));
+
                     // Check if SOMA is less than $1 billion
                     if (soma < 1_000_000_000) {
-                        LOGGER.debug("Bond {} ineligible: SOMA holdings {} is less than $1 billion", 
+                        LOGGER.info("Bond {} ineligible: SOMA holdings {} is less than $1 billion", 
                             cusip, soma);
-                        return false;
+                        return new EligibilityResult(false, false);
                     }
                 } catch (Exception e) {
                     LOGGER.warn("Error checking SOMA for bond {}: {}", cusip, e.getMessage());
                 }
             }
             
+            // Check POS for C (must be at least -$200 million)
             // Check CalcNetExtPos for the current date (must be at least -$200 million)
-            Object calcNetExtPosObj = bondData.get("CalcNetExtPos");
-            if (calcNetExtPosObj == null) {
-                calcNetExtPosObj = bondData.get("POS_CalcNetExtPos");
-            }
-            
-            if (calcNetExtPosObj != null) {
+            Object termCodeObj = bondData.get("POS_TermCode");
+            Object calcNetExtPosObj = bondData.get("POS_CalcNetExtPos");
+            LOGGER.info("Checking CalcNetExtPos for bond {}: {}", cusip, calcNetExtPosObj);
+
+            if (calcNetExtPosObj != null && termCodeObj != null) {
                 try {
                     double calcNetExtPos = Double.parseDouble(calcNetExtPosObj.toString());
-                    
+                    String termCode = termCodeObj.toString();
+                    LOGGER.info("Parsed CalcNetExtPos value, TermCode: {} → ${}, {}", calcNetExtPosObj, String.format("%,.2f", calcNetExtPos), termCode);
                     // Check if CalcNetExtPos is less than -$200 million
-                    if (calcNetExtPos < -200_000_000) {
-                        LOGGER.debug("Bond {} ineligible: CalcNetExtPos {} is less than -$200 million", 
+                    if (calcNetExtPos < -200_000_000 && "C".equals(termCode)) {
+                        LOGGER.info("Bond {} ineligible: CalcNetExtPos {} is less than -$200 million for C term", 
                             cusip, calcNetExtPos);
-                        return false;
+                        eligibleC = false;
+                    } else if (calcNetExtPos < -500_000_000 && "REG".equals(termCode)) {
+                        LOGGER.info("Bond {} ineligible: CalcNetExtPos {} is greater than or equal to -$200 million for REG term", 
+                            cusip, calcNetExtPos);
+                        eligibleREG = false;
                     }
                 } catch (Exception e) {
                     LOGGER.warn("Error checking CalcNetExtPos for bond {}: {}", cusip, e.getMessage());
                 }
             }
             
-            // Check DateStart matches current date if available
-            Object dateStartObj = bondData.get("DateStart");
-            if (dateStartObj == null) {
-                dateStartObj = bondData.get("SDS_DateStart");
-            }
-            
-            if (dateStartObj != null && calcNetExtPosObj != null) {
-                try {
-                    String dateStartStr = dateStartObj.toString();
-                    
-                    // Try to parse the DateStart using various formats
-                    java.time.LocalDate dateStart = null;
-                    
-                    try {
-                        // Try yyyy-MM-dd format
-                        dateStart = java.time.LocalDate.parse(dateStartStr);
-                    } catch (Exception e1) {
-                        try {
-                            // Try MM/dd/yyyy format
-                            java.time.format.DateTimeFormatter formatter = java.time.format.DateTimeFormatter.ofPattern("MM/dd/yyyy");
-                            dateStart = java.time.LocalDate.parse(dateStartStr, formatter);
-                        } catch (Exception e2) {
-                            try {
-                                // Try yyyyMMdd format
-                                java.time.format.DateTimeFormatter formatter = java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd");
-                                dateStart = java.time.LocalDate.parse(dateStartStr, formatter);
-                            } catch (Exception e3) {
-                                LOGGER.debug("Could not parse DateStart for bond {}: {}", cusip, dateStartStr);
-                            }
-                        }
-                    }
-                    
-                    // If we successfully parsed the date, check if it's current
-                    if (dateStart != null) {
-                        java.time.LocalDate today = java.time.LocalDate.now();
-                        
-                        // If DateStart is more than 1 day off from today, position data might be stale
-                        if (java.time.temporal.ChronoUnit.DAYS.between(dateStart, today) > 1) {
-                            LOGGER.debug("Bond {} position data may be stale - DateStart is {}", 
-                                cusip, dateStart);
-                            // Don't return false here, just log a warning - you can make this stricter if needed
-                        }
-                    }
-                } catch (Exception e) {
-                    LOGGER.warn("Error checking DateStart for bond {}: {}", cusip, e.getMessage());
-                }
-            }
-            
             // Bond passes all criteria
-            return true;
-            
+            return new EligibilityResult(eligibleC, eligibleREG);
+
         } catch (Exception e) {
             LOGGER.error("Error evaluating eligibility for bond {}: {}", cusip, e.getMessage(), e);
-            return false;
+            return new EligibilityResult(false, false);
         }
     }
 
@@ -387,7 +388,7 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
      */
     private void performPeriodicEligibilityCheck() {
         try {
-            LOGGER.debug("Performing periodic eligibility check for {} bonds", consolidatedBondData.size());
+            LOGGER.info("Performing periodic eligibility check for {} bonds", consolidatedBondData.size());
             
             int eligibleCount = 0;
             int ineligibleCount = 0;
@@ -396,11 +397,11 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
             for (Map.Entry<String, BondConsolidatedData> entry : consolidatedBondData.entrySet()) {
                 String cusip = entry.getKey();
                 BondConsolidatedData bondData = entry.getValue();
-                
-                boolean shouldBeEligible = shouldBondBeEligible(cusip, bondData);
+
+                EligibilityResult shouldBeEligible = shouldBondBeEligible(cusip, bondData);
                 boolean currentlyEligible = eligibleBonds.contains(cusip);
                 
-                if (shouldBeEligible && !currentlyEligible) {
+                if (shouldBeEligible.eligibleForTermC && !currentlyEligible) {
                     // Bond became eligible
                     String instrumentId = extractInstrumentId(cusip, bondData);
                     if (instrumentId != null) {
@@ -412,8 +413,24 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
                         
                         LOGGER.info("Bond {} added to eligible list (instrument: {})", cusip, instrumentId);
                     }
-                } else if (!shouldBeEligible && currentlyEligible) {
+                } else if (!shouldBeEligible.eligibleForTermC && currentlyEligible) {
                     // Bond became ineligible
+                    removeEligibleBond(cusip);
+                    ineligibleCount++;
+                } 
+                
+                if (shouldBeEligible.eligibleForTermREG && !currentlyEligible) {
+                    String instrumentId = extractInstrumentId(cusip, bondData);
+                    if (instrumentId != null) {
+                        eligibleBonds.add(cusip);
+                        bondToInstrumentMap.put(cusip, instrumentId);
+                        notifyEligibilityChange(cusip, true, bondData.getConsolidatedView());
+                        eligibleCount++;
+
+                        LOGGER.info("Bond {} added to eligible list (instrument: {})", cusip, instrumentId);
+                    }
+                } else if (!shouldBeEligible.eligibleForTermREG && currentlyEligible) {
+                    // Bond remains ineligible
                     removeEligibleBond(cusip);
                     ineligibleCount++;
                 }
@@ -432,10 +449,8 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
     /**
      * Create instrument ID for CUSIP
      */
-    private String createInstrumentIdForCusip(String cusip) {
-        
-        //return cusip + "_REG_Fixed";
-        return cusip + "_C_Fixed";
+    private String createInstrumentIdForCusip(String cusip, String termCode) {
+        return cusip + "_" + termCode +  "_Fixed";
     }
 
     /**
@@ -552,13 +567,15 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
     @Override
     public void onFullUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply,
             boolean isSnapshot) {
+        LOGGER.info("BondEligibilityListener received MKV record"); 
+            
         try {
             // Update monitoring counters
             LOGGER.info("Received full update in BondEligibilityListener for record: {}", mkvRecord.getName());
             lastUpdateTimestamp.set(System.currentTimeMillis());
             
             String recordName = mkvRecord.getName();
-            LOGGER.debug("Received record update: {} (snapshot: {})", recordName, isSnapshot);
+            LOGGER.info("Received record update: {} (snapshot: {})", recordName, isSnapshot);
             
             // Extract CUSIP based on record type
             String cusip = null;
@@ -599,14 +616,15 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
             // Update appropriate section based on record type
             switch (recordType) {
                 case "SDS":
-                    LOGGER.debug("Updating SDS data for CUSIP: {}", cusip);
+                    LOGGER.info("Updating SDS data for CUSIP: {}", cusip);
                     bondData.updateSdsData(extractedData);
+                    LOGGER.info("Extracted SDS data for CUSIP {}: {}", cusip, extractedData);
                     break;
                     
                 case "BOND":
-                    LOGGER.debug("Updating static bond data for CUSIP: {}", cusip);
+                    LOGGER.info("Updating static bond data for CUSIP: {}", cusip);
                     bondData.updateStaticData(extractedData);
-                    
+                    LOGGER.info("Extracted static bond data for CUSIP {}: {}", cusip, extractedData);
                     // Extract instrument ID if available
                     Object instrumentId = extractedData.get("InstrumentId");
                     if (instrumentId != null) {
@@ -615,8 +633,9 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
                     break;
                     
                 case "POSITION":
-                    LOGGER.debug("Updating position data for CUSIP: {}", cusip);
+                    LOGGER.info("Updating position data for CUSIP: {}", cusip);
                     bondData.updatePositionData(extractedData);
+                    LOGGER.info("Extracted position data for CUSIP {}: {}", cusip, extractedData);
                     break;
             }
             
@@ -799,14 +818,14 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
      */
     private void evaluateBondEligibility(String cusip, BondConsolidatedData bondData) {
         try {
-            boolean shouldBeEligible = shouldBondBeEligible(cusip, bondData);
+            EligibilityResult shouldBeEligible = shouldBondBeEligible(cusip, bondData);
             boolean currentlyEligible = eligibleBonds.contains(cusip);
             
-            if (shouldBeEligible && !currentlyEligible) {
+            if (shouldBeEligible.eligibleForTermC && !currentlyEligible) {
                 // Get instrument ID from mapped data or create one
                 String instrumentId = bondToInstrumentMap.get(cusip);
                 if (instrumentId == null) {
-                    instrumentId = createInstrumentIdForCusip(cusip);
+                    instrumentId = createInstrumentIdForCusip(cusip, "C");
                     bondToInstrumentMap.put(cusip, instrumentId);
                 }
                 
@@ -816,16 +835,33 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
                 
                 // Notify listeners with consolidated data
                 notifyEligibilityChange(cusip, true, bondData.getConsolidatedView());
-                
-            } else if (!shouldBeEligible && currentlyEligible) {
+
+            } else if (!shouldBeEligible.eligibleForTermC && currentlyEligible) {
                 // Remove from eligible list
                 eligibleBonds.remove(cusip);
                 LOGGER.info("Bond {} removed from eligible list", cusip);
                 
                 // Notify listeners
                 notifyEligibilityChange(cusip, false, bondData.getConsolidatedView());
+            } else if (shouldBeEligible.eligibleForTermREG && !currentlyEligible) {
+                // Handle REG term eligibility
+                String instrumentId = bondToInstrumentMap.get(cusip);
+                if (instrumentId == null) {
+                    instrumentId = createInstrumentIdForCusip(cusip, "REG");
+                    bondToInstrumentMap.put(cusip, instrumentId);
+                }
+                
+                eligibleBonds.add(cusip);
+                LOGGER.info("Bond {} added to eligible REG list (instrument: {})", cusip, instrumentId);
+                
+                notifyEligibilityChange(cusip, true, bondData.getConsolidatedView());
+            } else if (!shouldBeEligible.eligibleForTermREG && currentlyEligible) {
+                // Remove from eligible REG list
+                eligibleBonds.remove(cusip);
+                LOGGER.info("Bond {} removed from eligible REG list", cusip);
+                notifyEligibilityChange(cusip, false, bondData.getConsolidatedView());
             }
-            
+
         } catch (Exception e) {
             LOGGER.error("Error evaluating eligibility for bond {}: {}", cusip, e.getMessage(), e);
         }

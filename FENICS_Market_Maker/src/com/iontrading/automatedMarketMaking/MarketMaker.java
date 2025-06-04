@@ -2,8 +2,13 @@ package com.iontrading.automatedMarketMaking;
 
 import java.util.Map;
 import java.util.Set;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Executors;
@@ -17,6 +22,8 @@ import com.iontrading.mkv.MkvObject;
 import com.iontrading.mkv.MkvPattern;
 import com.iontrading.mkv.MkvPublishManager;
 import com.iontrading.mkv.enums.MkvObjectType;
+import com.iontrading.mkv.events.MkvPublishListener;
+import com.iontrading.mkv.events.MkvRecordListener;
 import com.iontrading.mkv.exceptions.MkvException;
 
 /**
@@ -46,7 +53,7 @@ public class MarketMaker implements IOrderManager {
     
     // Store our active orders by instrument ID
     private final Map<String, ActiveQuote> activeQuotes = new ConcurrentHashMap<>();
-    
+
     // Store the trader ID to use for FENICS
     private final String fenicsTrader;
     
@@ -55,7 +62,8 @@ public class MarketMaker implements IOrderManager {
     
     // Track whether market making is enabled
     private volatile boolean enabled = true;
-    
+
+    private final Object subscriptionLock = new Object();
     private boolean isBondStaticSubscribed = false;
     private boolean isFirmPositionSubscribed = false;
     private boolean isSdsInformationSubscribed = false;
@@ -68,18 +76,20 @@ public class MarketMaker implements IOrderManager {
 
     private static final String BOND_STATIC_PATTERN = "USD.CM_BOND.VMO_REPO_US.";
     private static final String[] BOND_STATIC_FIELDS = {
-        "Id", "Code", "Maturity"
+        "Id", "DateMaturity"
     };
     
     private static final String FIRM_POSITION_PATTERN = "USD.IU_POSITION.VMO_REPO_US.";
     private static final String[] FIRM_POSITION_FIELDS = {
-        "Id", "VirtualId", "Isin", "CalcNetExtPos", "StartDate"
+        "Id", "VirtualId", "Isin", "CalcNetExtPos", "StartCode", "StartDate"
     };
 
     private static final String SDS_INFORMATION_PATTERN = "ALL.POSITION_US.SDS.";
     private static final String[] SDS_INFORMATION_FIELDS = {
         "Id", "Code", "DateStart", "SOMA"
     };
+
+    private volatile boolean shutdownHandled = false;
 
     // Use DepthListener
     private DepthListener depthListener = null;
@@ -143,22 +153,7 @@ public class MarketMaker implements IOrderManager {
                 60, // Run every minute
                 TimeUnit.SECONDS
             );
-            
-            // Register shutdown hook
-            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                LOGGER.info("MarketMaker.shutdownHook: Shutting down MarketMaker scheduler");
-                scheduler.shutdown();
-                try {
-                    if (!scheduler.awaitTermination(5, TimeUnit.SECONDS)) {
-                        scheduler.shutdownNow();
-                    }
-                } catch (InterruptedException e) {
-                    scheduler.shutdownNow();
-                    Thread.currentThread().interrupt();
-                    LOGGER.error("MarketMaker.shutdownHook: Interrupted during shutdown", e);
-                }
-                LOGGER.info("MarketMaker.shutdownHook: Shutdown complete");
-            }));
+
 
             LOGGER.info("MarketMaker.constructor: Successfully created MarketMaker instance");
         } catch (Exception e) {
@@ -224,22 +219,6 @@ public class MarketMaker implements IOrderManager {
                 60, // Run every minute
                 TimeUnit.SECONDS
             );
-            
-            // Register shutdown hook
-            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                LOGGER.info("MarketMaker.shutdownHook: Shutting down MarketMaker scheduler");
-                scheduler.shutdown();
-                try {
-                    if (!scheduler.awaitTermination(5, TimeUnit.SECONDS)) {
-                        scheduler.shutdownNow();
-                    }
-                } catch (InterruptedException e) {
-                    scheduler.shutdownNow();
-                    Thread.currentThread().interrupt();
-                    LOGGER.error("MarketMaker.shutdownHook: Interrupted during shutdown", e);
-                }
-                LOGGER.info("MarketMaker.shutdownHook: Shutdown complete");
-            }));
 
             LOGGER.info("MarketMaker.constructor: Successfully created MarketMaker instance with custom config");
         } catch (Exception e) {
@@ -251,166 +230,453 @@ public class MarketMaker implements IOrderManager {
     // Add a new method to initialize MKV subscriptions after MKV is started
     public void initializeMkvSubscriptions() {
         LOGGER.info("MarketMaker.initializeMkvSubscriptions: Initializing MKV subscriptions");
+        
         try {
-            LOGGER.info("Subscribing to MKV data streams...");
-            subscribeToBondStaticData();
-            subscribeToFirmPositionData();
-            subscribeToSdsInformationData();
+            // Get the publish manager
+            final MkvPublishManager pm = Mkv.getInstance().getPublishManager();
             
-            // Update DepthListener reference now that it should be available
+            // Try immediate subscription first
+            boolean bondSubscribed = subscribeToBondStaticData();
+            boolean firmSubscribed = subscribeToFirmPositionData();
+            boolean sdsSubscribed = subscribeToSdsInformationData();
+            
+            // If any subscription failed, set up a listener for pattern discovery
+            if (!bondSubscribed || !firmSubscribed || !sdsSubscribed) {
+                LOGGER.info("Some patterns not available yet, setting up a publish listener");
+                
+                // Create a single shared listener for all patterns
+                MkvPublishListener patternListener = new MkvPublishListener() {
+                    @Override
+                    public void onPublish(MkvObject mkvObject, boolean pub_unpub, boolean dwl) {
+                        // Only proceed if this is a pattern publication
+                        if (pub_unpub && mkvObject.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
+                            String name = mkvObject.getName();
+                            
+                            // Try to subscribe to the pattern if it's one we're looking for
+                            if (!isBondStaticSubscribed && BOND_STATIC_PATTERN.equals(name)) {
+                                trySubscribeToPattern(BOND_STATIC_PATTERN, BOND_STATIC_FIELDS,
+                                    bondEligibilityListener, mkvObject, pm, this);
+                            }
+                            else if (!isFirmPositionSubscribed && FIRM_POSITION_PATTERN.equals(name)) {
+                                trySubscribeToPattern(FIRM_POSITION_PATTERN, FIRM_POSITION_FIELDS,
+                                    bondEligibilityListener, mkvObject, pm, this);
+                            }
+                            else if (!isSdsInformationSubscribed && SDS_INFORMATION_PATTERN.equals(name)) {
+                                trySubscribeToPattern(SDS_INFORMATION_PATTERN, SDS_INFORMATION_FIELDS,
+                                    bondEligibilityListener, mkvObject, pm, this);
+                            }
+                        }
+                    }
+                    
+                    @Override
+                    public void onPublishIdle(String component, boolean start) {
+                        // At idle time, check for patterns again
+                        if (!isBondStaticSubscribed) {
+                            MkvObject obj = pm.getMkvObject(BOND_STATIC_PATTERN);
+                            if (obj != null && obj.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
+                                trySubscribeToPattern(BOND_STATIC_PATTERN, BOND_STATIC_FIELDS,
+                                    bondEligibilityListener, obj, pm, this);
+                            }
+                        }
+                        
+                        if (!isFirmPositionSubscribed) {
+                            MkvObject obj = pm.getMkvObject(FIRM_POSITION_PATTERN);
+                            if (obj != null && obj.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
+                                trySubscribeToPattern(FIRM_POSITION_PATTERN, FIRM_POSITION_FIELDS,
+                                    bondEligibilityListener, obj, pm, this);
+                            }
+                        }
+                        
+                        if (!isSdsInformationSubscribed) {
+                            MkvObject obj = pm.getMkvObject(SDS_INFORMATION_PATTERN);
+                            if (obj != null && obj.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
+                                trySubscribeToPattern(SDS_INFORMATION_PATTERN, SDS_INFORMATION_FIELDS,
+                                    bondEligibilityListener, obj, pm, this);
+                            }
+                        }
+                    }
+                    
+                    @Override
+                    public void onSubscribe(MkvObject mkvObject) {
+                        // Not needed
+                    }
+                };
+                
+                // Register the listener
+                pm.addPublishListener(patternListener);
+                LOGGER.info("Pattern discovery listener registered");
+                
+                // Also set up a timeout to eventually give up
+                Thread timeoutThread = new Thread(() -> {
+                    try {
+                        // Wait for up to 3 minutes
+                        Thread.sleep(3 * 60 * 1000);
+                        
+                        // Check if we're still waiting for patterns
+                        boolean stillWaiting = false;
+                        synchronized (subscriptionLock) {
+                            stillWaiting = !isBondStaticSubscribed || 
+                                        !isFirmPositionSubscribed || 
+                                        !isSdsInformationSubscribed;
+                            
+                            if (stillWaiting) {
+                                LOGGER.warn("Pattern subscription timeout reached. Status: Bond={}, Firm={}, SDS={}",
+                                    isBondStaticSubscribed, isFirmPositionSubscribed, isSdsInformationSubscribed);
+                                
+                                // Remove the listener to avoid leaks
+                                pm.removePublishListener(patternListener);
+                            }
+                        }
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    } catch (Exception e) {
+                        LOGGER.error("Error in pattern subscription timeout thread", e);
+                    }
+                });
+                
+                timeoutThread.setDaemon(true);
+                timeoutThread.setName("PatternSubscriptionTimeout");
+                timeoutThread.start();
+            }
+            
+            // Update DepthListener reference
             this.depthListener = OrderManagement.getDepthListener();
             if (depthListener == null) {
                 LOGGER.error("CRITICAL ERROR: DepthListener is still null after MKV initialization!");
             } else {
                 LOGGER.info("DepthListener obtained successfully after MKV initialization");
             }
-
-            LOGGER.info("MarketMaker.initializeMkvSubscriptions: MKV subscriptions initialized");
+            
+            LOGGER.info("MKV subscriptions initialized - will continue discovery asynchronously");
         } catch (Exception e) {
-            LOGGER.error("MarketMaker.initializeMkvSubscriptions: Error initializing MKV subscriptions", e);
+            LOGGER.error("Error setting up MKV subscriptions", e);
         }
     }
 
     /**
      * Subscribe to bond static data
      */
-    private void subscribeToBondStaticData() {
+    private boolean subscribeToBondStaticData() {
         LOGGER.info("subscribeToBondStaticData: Subscribing to bond static data");
         
         try {
-            // Get the publish manager to access patterns
+            // Get the publish manager
             MkvPublishManager pm = Mkv.getInstance().getPublishManager();
             LOGGER.info("Got publish manager: {}", pm);
-       
+    
             // Look up the pattern object
             MkvObject obj = pm.getMkvObject(BOND_STATIC_PATTERN);
             LOGGER.info("Looking up pattern: {}, result: {}", BOND_STATIC_PATTERN, obj);
             
             if (obj != null && obj.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
-                // Subscribe within a synchronized block
-                LOGGER.info("Found bond static pattern, subscribing: {}", (Object) BOND_STATIC_PATTERN);
-                try {
+                synchronized (subscriptionLock) {
+                    // Check again inside synchronized block
+                    if (isBondStaticSubscribed) {
+                        return true;
+                    }
+                    
+                    LOGGER.info("Found bond static pattern, subscribing: {}", BOND_STATIC_PATTERN);
                     ((MkvPattern) obj).subscribe(BOND_STATIC_FIELDS, bondEligibilityListener);
-                    LOGGER.info("Subscribe call completed for bond static data");
-                } catch (Exception e) {
-                    LOGGER.error("Error during pattern subscription: {}", e.getMessage(), e);
+                    
+                    isBondStaticSubscribed = true;
+                    LOGGER.info("Successfully subscribed to bond static data: {} with {} fields",
+                        BOND_STATIC_PATTERN, BOND_STATIC_FIELDS.length);
+                    return true;
                 }
-                
-                // Mark that we've successfully subscribed
-                isBondStaticSubscribed = true;
-
-                LOGGER.info("Subscribed to bond static data: {} with {} fields",
-                    BOND_STATIC_PATTERN, BOND_STATIC_FIELDS.length);
-
-                LOGGER.info("subscribeToBondStaticData: Successfully subscribed to bond static data");
             } else {
-                LOGGER.error("Bond static pattern not found: {}. MKV object: {}", 
-                    BOND_STATIC_PATTERN, obj);
-                LOGGER.error("subscribeToBondStaticData: Failed: Bond static pattern not found");
+                LOGGER.info("Bond static pattern not found: {}. MKV object: {}", BOND_STATIC_PATTERN, obj);
+                return false;
             }
         } catch (Exception e) {
-            LOGGER.error("subscribeToBondStaticData: Error subscribing to bond static data", e);
-            LOGGER.error("Error subscribing to bond static data: {}", e.getMessage(), e);
+            LOGGER.warn("subscribeToBondStaticData: Failed: {}", e.getMessage(), e);
+            return false;
         }
     }
     
     /**
      * Subscribe to firm position data
      */
-    private void subscribeToFirmPositionData() {
+    private boolean subscribeToFirmPositionData() {
         LOGGER.info("subscribeToFirmPositionData: Subscribing to firm position data");
 
         try {
             // Get the publish manager to access patterns
             MkvPublishManager pm = Mkv.getInstance().getPublishManager();
-       
+            LOGGER.info("Got publish manager: {}", pm);
+
             // Look up the pattern object
             MkvObject obj = pm.getMkvObject(FIRM_POSITION_PATTERN);
+            LOGGER.info("Looking up pattern: {}, result: {}", FIRM_POSITION_PATTERN, obj);
 
             if (obj != null && obj.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
-                // Subscribe within a synchronized block
-                LOGGER.info("Found firm position pattern, subscribing: {}", (Object) FIRM_POSITION_FIELDS);
-                ((MkvPattern) obj).subscribe(FIRM_POSITION_FIELDS, bondEligibilityListener);
-                
-                // Mark that we've successfully subscribed
-                isFirmPositionSubscribed = true;
+                synchronized (subscriptionLock) {
+                    // Check again inside synchronized block
+                    if (isFirmPositionSubscribed) {
+                        return true;
+                    }
 
-                LOGGER.info("Subscribed to firm position data: {} with {} fields",
-                    FIRM_POSITION_PATTERN, FIRM_POSITION_FIELDS.length);
-
-                LOGGER.info("subscribeToFirmPositionData: Successfully subscribed to firm position data");
+                    // Subscribe within a synchronized block
+                    LOGGER.info("Found firm position pattern, subscribing: {}", (Object) FIRM_POSITION_FIELDS);
+                    ((MkvPattern) obj).subscribe(FIRM_POSITION_FIELDS, bondEligibilityListener);
+                    
+                    // Mark that we've successfully subscribed
+                    isFirmPositionSubscribed = true;
+                    LOGGER.info("Successfully subscribed to firm position data: {} with {} fields",
+                        FIRM_POSITION_PATTERN, FIRM_POSITION_FIELDS.length);
+                    return true;
+                } 
             } else {
-                LOGGER.info("Firm position pattern not found");
-                LOGGER.error("subscribeToFirmPositionData: Failed: Firm position pattern not found");
+                LOGGER.info("Firm position pattern not found: {}. MKV object: {}", FIRM_POSITION_PATTERN, obj);
+                return false;
             }
         } catch (Exception e) {
-            LOGGER.error("subscribeToFirmPositionData: Error subscribing to firm position data", e);
+            LOGGER.warn("subscribeToFirmPositionData: Error subscribing to firm position data", e);
+            return false;
         }
     }
 
     /**
      * Subscribe to SDS information data
      */
-    private void subscribeToSdsInformationData() {
+    private boolean subscribeToSdsInformationData() {
         LOGGER.info("subscribeToSdsInformationData: Subscribing to SDS information data");
 
         try {
             // Get the publish manager to access patterns
             MkvPublishManager pm = Mkv.getInstance().getPublishManager();
+            LOGGER.info("Got publish manager: {}", pm);
        
             // Look up the pattern object
             MkvObject obj = pm.getMkvObject(SDS_INFORMATION_PATTERN);
+            LOGGER.info("Looking up pattern: {}, result: {}", SDS_INFORMATION_PATTERN, obj);
 
             if (obj != null && obj.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
-                // Subscribe within a synchronized block
-                LOGGER.info("Found SDS information pattern, subscribing: {}", (Object) SDS_INFORMATION_FIELDS);
-                ((MkvPattern) obj).subscribe(SDS_INFORMATION_FIELDS, bondEligibilityListener);
-                
-                // Mark that we've successfully subscribed
-                isSdsInformationSubscribed = true;
+                synchronized (this.subscriptionLock) {
+                    // Check again inside synchronized block
+                    if (isSdsInformationSubscribed) {
+                        return true;
+                    
+                    }
+                    // Subscribe within a synchronized block
+                    LOGGER.info("Found SDS information pattern, subscribing: {}", (Object) SDS_INFORMATION_FIELDS);
+                    ((MkvPattern) obj).subscribe(SDS_INFORMATION_FIELDS, bondEligibilityListener);
+                    
+                    // Mark that we've successfully subscribed
+                    isSdsInformationSubscribed = true;
 
-                LOGGER.info("Subscribed to SDS information data: {} with {} fields",
-                    SDS_INFORMATION_PATTERN, SDS_INFORMATION_FIELDS.length);
-
-                LOGGER.info("subscribeToSdsInformationData: Successfully subscribed to SDS information data");
+                    LOGGER.info("Subscribed to SDS information data: {} with {} fields",
+                        SDS_INFORMATION_PATTERN, SDS_INFORMATION_FIELDS.length);
+                    return true;
+                }
             } else {
-                LOGGER.info("SDS information pattern not found");
                 LOGGER.error("subscribeToSdsInformationData: Failed: SDS information pattern not found");
+                return false;
             }
         } catch (Exception e) {
             LOGGER.error("subscribeToSdsInformationData: Error subscribing to SDS information data", e);
+            return false;
         }
+    }
+
+    /**
+     * Helper method to safely subscribe to a pattern when it becomes available
+     */
+    private boolean trySubscribeToPattern(String patternName, String[] fields, MkvRecordListener listener, 
+                                        MkvObject mkvObject, MkvPublishManager pm, MkvPublishListener publishListener) {
+        synchronized (subscriptionLock) {
+            // Determine which subscription flag to check
+            boolean isAlreadySubscribed = false;
+            if (BOND_STATIC_PATTERN.equals(patternName)) {
+                isAlreadySubscribed = isBondStaticSubscribed;
+            } else if (FIRM_POSITION_PATTERN.equals(patternName)) {
+                isAlreadySubscribed = isFirmPositionSubscribed;
+            } else if (SDS_INFORMATION_PATTERN.equals(patternName)) {
+                isAlreadySubscribed = isSdsInformationSubscribed;
+            }
+            
+            // Check if already subscribed
+            if (isAlreadySubscribed) {
+                return true;
+            }
+            
+            try {
+                LOGGER.info("Pattern found, subscribing to: {}", patternName);
+
+                ((MkvPattern) mkvObject).subscribe(fields, listener);
+                
+                // Update subscription flag
+                if (BOND_STATIC_PATTERN.equals(patternName)) {
+                    isBondStaticSubscribed = true;
+                } else if (FIRM_POSITION_PATTERN.equals(patternName)) {
+                    isFirmPositionSubscribed = true;
+                } else if (SDS_INFORMATION_PATTERN.equals(patternName)) {
+                    isSdsInformationSubscribed = true;
+                }
+
+                LOGGER.info("Successfully subscribed to pattern: {}", patternName);
+
+                // Remove the listener if we're done with all subscriptions
+                if (isBondStaticSubscribed && isFirmPositionSubscribed && isSdsInformationSubscribed) {
+                    LOGGER.info("All patterns subscribed, removing publish listener");
+                    pm.removePublishListener(publishListener);
+                }
+                
+                return true;
+            } catch (Exception e) {
+                LOGGER.error("Error subscribing to pattern {}: {}", patternName, e.getMessage(), e);
+                return false;
+            }
+        }
+    }
+
+    public Map<String, ActiveQuote> getActiveQuotes() {
+        return Collections.unmodifiableMap(activeQuotes); // Return unmodifiable to prevent external modification
     }
 
     /**
      * Cancel all active orders.
      * Used when disabling the market maker.
      */
-    private void cancelAllOrders() {
+    public boolean cancelAllOrders(long timeoutMs) {
         LOGGER.info("cancelAllOrders: Cancelling all market maker orders");
 
+        // Disable market maker to prevent new orders
+        this.enabled = false;
+        
+        // Check if we have any active quotes to cancel
+        if (activeQuotes.isEmpty()) {
+            LOGGER.info("No active quotes to cancel");
+            return true;
+        }
+        
+        int totalOrderCount = 0;
+        
+        // Count the active orders that need cancellation
+        for (ActiveQuote quote : activeQuotes.values()) {
+            if (quote.getBidOrder() != null && !quote.getBidOrder().isDead()) {
+                totalOrderCount++;
+            }
+            if (quote.getAskOrder() != null && !quote.getAskOrder().isDead()) {
+                totalOrderCount++;
+            }
+        }
+        
+        LOGGER.info("Found {} active orders to cancel", totalOrderCount);
+        
+        if (totalOrderCount == 0) {
+            return true;
+        }
+        
+        // Begin the cancellation process
         try {
-            LOGGER.info("Cancelling all market maker orders");
-            int cancelledCount = 0;
+            // Check MKV availability first
+            boolean mkvAvailable = false;
+            try {
+                MkvPublishManager pm = Mkv.getInstance().getPublishManager();
+                mkvAvailable = (pm != null);
+            } catch (Exception e) {
+                LOGGER.warn("Error checking MKV availability: {}", e.getMessage());
+                return false;
+            }
             
-            for (ActiveQuote quote : activeQuotes.values()) {
+            if (!mkvAvailable) {
+                LOGGER.warn("MKV not available, cannot cancel orders properly");
+                return false;
+            }
+            
+            // Start tracking cancelled orders
+            final Set<String> pendingCancellations = ConcurrentHashMap.newKeySet();
+            int cancelRequestsSent = 0;
+            
+            // Send cancel requests for all active orders
+            LOGGER.info("Sending cancel requests for all active orders");
+            for (ActiveQuote quote : new ArrayList<>(activeQuotes.values())) {
                 MarketOrder bidOrder = quote.getBidOrder();
-                MarketOrder askOrder = quote.getAskOrder();
-                
-                if (bidOrder != null) {
-                    cancelOrder(bidOrder, quote.getCusip());
-                    cancelledCount++;
+                if (bidOrder != null && !bidOrder.isDead() && bidOrder.getOrderId() != null) {
+                    pendingCancellations.add(bidOrder.getOrderId());
+                    try {
+                        LOGGER.info("Cancelling bid order: {}", bidOrder.getOrderId());
+                        cancelOrder(bidOrder, quote.getCusip());
+                        cancelRequestsSent++;
+                    } catch (Exception e) {
+                        LOGGER.error("Error cancelling bid order {}: {}", 
+                            bidOrder.getOrderId(), e.getMessage());
+                    }
                 }
                 
-                if (askOrder != null) {
-                    cancelOrder(askOrder, quote.getCusip());
-                    cancelledCount++;
+                MarketOrder askOrder = quote.getAskOrder();
+                if (askOrder != null && !askOrder.isDead() && askOrder.getOrderId() != null) {
+                    pendingCancellations.add(askOrder.getOrderId());
+                    try {
+                        LOGGER.info("Cancelling ask order: {}", askOrder.getOrderId());
+                        cancelOrder(askOrder, quote.getCusip());
+                        cancelRequestsSent++;
+                    } catch (Exception e) {
+                        LOGGER.error("Error cancelling ask order {}: {}", 
+                            askOrder.getOrderId(), e.getMessage());
+                    }
                 }
             }
-
-            LOGGER.info("cancelAllOrders: Cancelled " + cancelledCount + " orders");
+            
+            LOGGER.info("Sent {} cancel requests, waiting for confirmation...", cancelRequestsSent);
+            
+            // Now wait until timeout or all orders are cancelled
+            long startTime = System.currentTimeMillis();
+            long endTime = startTime + timeoutMs;
+            
+            while (!pendingCancellations.isEmpty() && System.currentTimeMillis() < endTime) {
+                // Check if any of the pending cancellations are no longer in the active quotes
+                for (Iterator<String> it = pendingCancellations.iterator(); it.hasNext();) {
+                    String orderId = it.next();
+                    boolean stillActive = false;
+                    
+                    // Check if this order is still in any active quote
+                    for (ActiveQuote quote : activeQuotes.values()) {
+                        MarketOrder bidOrder = quote.getBidOrder();
+                        MarketOrder askOrder = quote.getAskOrder();
+                        
+                        if ((bidOrder != null && orderId.equals(bidOrder.getOrderId())) ||
+                            (askOrder != null && orderId.equals(askOrder.getOrderId()))) {
+                            stillActive = true;
+                            break;
+                        }
+                    }
+                    
+                    if (!stillActive) {
+                        // Order is no longer active, remove from pending list
+                        it.remove();
+                        LOGGER.info("Order cancellation confirmed: {}", orderId);
+                    }
+                }
+                
+                // Log progress every second
+                if (System.currentTimeMillis() - startTime > 1000) {
+                    startTime = System.currentTimeMillis(); // Reset for next interval
+                    LOGGER.info("Waiting for {} order cancellations to complete...", 
+                        pendingCancellations.size());
+                }
+                
+                // Sleep briefly to avoid CPU spinning
+                try {
+                    Thread.sleep(50);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    LOGGER.warn("Interrupted while waiting for order cancellations");
+                    break;
+                }
+            }
+            
+            boolean success = pendingCancellations.isEmpty();
+            LOGGER.info("Order cancellation completed: {} of {} orders confirmed cancelled{}",
+                cancelRequestsSent - pendingCancellations.size(),
+                cancelRequestsSent,
+                success ? "" : " (TIMEOUT OCCURRED)");
+            
+            return success;
+            
         } catch (Exception e) {
-            LOGGER.error("cancelAllOrders: Error cancelling all orders", e);
+            LOGGER.error("Error in cancelAllOrders: {}", e.getMessage(), e);
+            return false;
         }
     }
 
@@ -470,7 +736,7 @@ public class MarketMaker implements IOrderManager {
      * Execute a hedge trade on the reference venue.
      * This method is called when one of our orders on the market source is filled.
      */
-    private void executeHedgeTrade(String bondId, String side, double size, double hedgePrice, String referenceSource) {
+    public void executeHedgeTrade(String bondId, String side, double size, double hedgePrice, String referenceSource) {
         LOGGER.info("executeHedgeTrade: Bond={}, Side={}, Size={}, Price={}, RefSrc={}", 
             bondId, side, size, hedgePrice, referenceSource);
         
@@ -613,7 +879,7 @@ public class MarketMaker implements IOrderManager {
         // Increment total update counter
         int updateCount = marketUpdateCounter.incrementAndGet();
 
-        LOGGER.info("MarketMaker.best() called with Best object: {}", best);
+        LOGGER.debug("MarketMaker.best() called with Best object: {}", best);
         // Process the market update
         String id = best.getId();
         String instrumentId = best.getInstrumentId();
@@ -657,30 +923,29 @@ public class MarketMaker implements IOrderManager {
         }
         
         // Count updates per instrument
-        LOGGER.info("MarketMaker:  received market update within best() for instrument: {}", id);
+        LOGGER.debug("MarketMaker:  received market update within best() for instrument: {}", id);
         instrumentUpdateCounters.computeIfAbsent(id, k -> new AtomicInteger(0)).incrementAndGet();
 
-        LOGGER.info("MarketMaker:  best() called with Best object: {}", best);
-            LOGGER.info("best: Received market update for {}: bid=%.4f, ask=%.4f, bidSrc={}, askSrc={}", 
-                id, best.getBid(), best.getAsk(), best.getBidSrc(), best.getAskSrc());
-        
+        LOGGER.debug("MarketMaker:  best() called with Best object: {}", best);
+        LOGGER.debug("best: Received market update for {}: bid=, ask=, bidSrc={}, askSrc={}", 
+            id, best.getBid(), best.getAsk(), best.getBidSrc(), best.getAskSrc());
 
-        LOGGER.info("Processing market update for instrument: {}", id);
+        LOGGER.debug("MarketMaker:  Processing market update for instrument: {}", id);
         if (id.endsWith("C_Fixed")) {
-            LOGGER.info("Processing market update for CASH instrument: {}", id);
+            LOGGER.debug("MarketMaker:  Processing market update for CASH instrument");
             processMarketUpdate(best, gcBestCash);
         } else if (id.endsWith("REG_Fixed")) {
             // For REG_Fixed instruments, use REG GC rates
-            LOGGER.info("Processing market update for REG instrument: {}", id);
+            LOGGER.debug("MarketMaker:  Processing market update for REG instrument");
             processMarketUpdate(best, gcBestREG);
         } else {
-            LOGGER.warn("Unexpected instrument type: {}", id);
+            LOGGER.warn("MarketMaker:  Unexpected instrument type: {}", id);
         }
         
         // Increment processed counter - we made it to processing the update
         processedUpdateCounter.incrementAndGet();
 
-        LOGGER.info("best: Market update processed");
+        LOGGER.debug("best: Market update processed");
 
     }
 
@@ -691,33 +956,32 @@ public class MarketMaker implements IOrderManager {
      * @param best The updated best prices
      */
     public void processMarketUpdate(Best best, GCBest gcBest) {
-        LOGGER.info("processMarketUpdate called with Best object: {}", best);
-        LOGGER.info("GCBest object: {}", gcBest);        
+        LOGGER.debug("processMarketUpdate:  called with Best object: {}", best);
         if (!enabled) {
-            LOGGER.info("processMarketUpdate: Market maker not enabled, skipping");
+            LOGGER.debug("processMarketUpdate: Market maker not enabled, skipping");
             return;
         }
         
         try {
             String instrumentId = best.getInstrumentId();
             String bestId = best.getId(); // This should be the instrument ID from VMO.CM_INSTRUMENT
-            LOGGER.info("Processing market update for bestId: {}", bestId);
-            LOGGER.info("Processing market update for instrument ID: {}", instrumentId);
+            LOGGER.debug("processMarketUpdate:  Processing market update for bestId: {}", bestId);
+            LOGGER.debug("processMarketUpdate:  Processing market update for instrument ID: {}", instrumentId);
 
             if (bestId == null || bestId.isEmpty()) {
-                LOGGER.info("processMarketUpdate: Empty instrument ID, skipping");
+                LOGGER.debug("processMarketUpdate: Empty instrument ID, skipping");
                 return;
             }
             
             // Find the bond ID that maps to this instrument ID
             String bondId = null;
-            
-            LOGGER.info("Current bond to instrument map size: {}", 
+
+            LOGGER.debug("Current bond to instrument map size: {}", 
                     bondEligibilityListener.bondToInstrumentMap.size());
-                for (Map.Entry<String, String> entry : bondEligibilityListener.bondToInstrumentMap.entrySet()) {
-                    LOGGER.info("Bond to instrument mapping: {} -> {}", entry.getKey(), entry.getValue());
-                }
-            
+            // for (Map.Entry<String, String> entry : bondEligibilityListener.bondToInstrumentMap.entrySet()) {
+            //     LOGGER.info("Bond to instrument mapping: {} -> {}", entry.getKey(), entry.getValue());
+            // }
+
             for (Map.Entry<String, String> entry : bondEligibilityListener.bondToInstrumentMap.entrySet()) {
                 if (entry.getValue().equals(instrumentId) || entry.getValue().equals(bestId)) {
                     bondId = entry.getKey();
@@ -738,13 +1002,31 @@ public class MarketMaker implements IOrderManager {
                 return;
             }
 
-            LOGGER.info("Processing market update for bond {} (instrument: {})", bondId, bestId);
+
+            // Check if we already have active quotes for this bond
+            ActiveQuote existingQuote = activeQuotes.get(bondId);
+            boolean hasActiveBid = false;
+            boolean hasActiveAsk = false;
+            
+            if (existingQuote != null) {
+                // Check if we have active orders that are still alive
+                MarketOrder bidOrder = existingQuote.getBidOrder();
+                MarketOrder askOrder = existingQuote.getAskOrder();
+                
+                hasActiveBid = (bidOrder != null && !bidOrder.isDead());
+                hasActiveAsk = (askOrder != null && !askOrder.isDead());
+                
+                LOGGER.info("Existing quote status for bond {}: activeBid={}, activeAsk={}", 
+                    bondId, hasActiveBid, hasActiveAsk);
+            }
+
+            LOGGER.debug("processMarketUpdate:  Processing market update for bond: {}", bondId);
 
             // Process with symmetric quoting (simplified for this example)
-            processSymmetricQuoting(best, bondId);
+            processSymmetricQuoting(best, bondId, hasActiveBid, hasActiveAsk);
 
-            LOGGER.info("processMarketUpdate: Market update processed for bond: {}", bondId);
-            
+            LOGGER.debug("processMarketUpdate: Market update processed for bond: {}", bondId);
+
         } catch (Exception e) {
             LOGGER.error("Error processing market update: {}", e.getMessage(), e);
         }
@@ -848,7 +1130,7 @@ public class MarketMaker implements IOrderManager {
      * ActiveQuote represents a two-sided quote for a specific instrument.
      * It tracks the bid and ask orders and their reference sources.
      */
-    private static class ActiveQuote {
+    public static class ActiveQuote {
         private final String cusip;
         private MarketOrder bidOrder;
         private MarketOrder askOrder;
@@ -951,7 +1233,7 @@ public class MarketMaker implements IOrderManager {
                 LOGGER.info("MarketMaker: Market making disabled");
 
                 // Cancel all pending orders
-                cancelAllOrders();
+                cancelAllOrders(5000);
             }
         }
 
@@ -974,7 +1256,7 @@ public class MarketMaker implements IOrderManager {
                 trackedInstruments.add(cusip);
                 
                 // Try to create initial markets for this bond
-                tryCreateInitialMarkets(cusip);
+                tryCreateOrUpdateMarkets(cusip);
 
                 LOGGER.info("handleEligibilityChange: Bond {} became eligible, initial markets created", cusip);
             } else {
@@ -1002,23 +1284,46 @@ public class MarketMaker implements IOrderManager {
         
         try {
             Set<String> eligibleBonds = bondEligibilityListener.getEligibleBonds();
-
             LOGGER.info("Making markets for {} eligible bonds", eligibleBonds.size());
 
             int marketsCreated = 0;
             int marketsUpdated = 0;
+            int marketsSkipped = 0;
             
             // Process all eligible bonds
             for (String cusip : eligibleBonds) {
+                // Check if we're already tracking this instrument
                 if (!trackedInstruments.contains(cusip)) {
                     // New eligible bond, not yet tracking
                     trackedInstruments.add(cusip);
-                    tryCreateInitialMarkets(cusip);
+                    tryCreateOrUpdateMarkets(cusip);
                     marketsCreated++;
                 } else {
-                    // Already tracking this bond, update markets if needed
-                    tryCreateOrUpdateMarkets(cusip);
-                    marketsUpdated++;
+                    // Already tracking this bond - only update if necessary
+                    ActiveQuote existingQuote = activeQuotes.get(cusip);
+                    
+                    if (existingQuote == null) {
+                        // We're tracking the instrument but don't have quotes - create them
+                        tryCreateInitialMarkets(cusip);
+                        marketsUpdated++;
+                    } else {
+                        // Check if orders are still active
+                        MarketOrder bidOrder = existingQuote.getBidOrder();
+                        MarketOrder askOrder = existingQuote.getAskOrder();
+                        
+                        boolean bidActive = (bidOrder != null && !bidOrder.isDead());
+                        boolean askActive = (askOrder != null && !askOrder.isDead());
+                        
+                        if (!bidActive || !askActive) {
+                            // Only refresh if one side is dead
+                            validateExistingQuotes(cusip, existingQuote);
+                            marketsUpdated++;
+                        } else {
+                            // Both sides are active, skip
+                            marketsSkipped++;
+                            LOGGER.debug("Skipping market refresh for {}: both sides active", cusip);
+                        }
+                    }
                 }
             }
             
@@ -1038,8 +1343,8 @@ public class MarketMaker implements IOrderManager {
                 marketsRemoved++;
             }
             
-            LOGGER.info("makeMarketsForEligibleBonds: Market making completed: {} created, {} updated, {} removed", 
-                marketsCreated, marketsUpdated, marketsRemoved);
+            LOGGER.info("makeMarketsForEligibleBonds: Market making completed: {} created, {} updated, {} skipped, {} removed", 
+                marketsCreated, marketsUpdated, marketsSkipped, marketsRemoved);
         } catch (Exception e) {
             LOGGER.error("makeMarketsForEligibleBonds: Error in periodic market making: {}", e.getMessage(), e);
         }
@@ -1104,9 +1409,9 @@ public class MarketMaker implements IOrderManager {
             }
 
             // Create default spread around reference price
-            double defaultSpread = config.getDefaultSpread(); // You'd add this to config
-            double bidPrice = referencePrice - (defaultSpread / 2);
-            double askPrice = referencePrice + (defaultSpread / 2);
+
+            double bidPrice = referencePrice + config.getBidAdjustment();
+            double askPrice = referencePrice - config.getAskAdjustment();
 
             LOGGER.info("Creating default markets for " + cusip + 
                 " at " + bidPrice + "/" + askPrice);
@@ -1130,7 +1435,7 @@ public class MarketMaker implements IOrderManager {
             // Get the instrument ID that corresponds to this bond ID
             String instrumentId = bondEligibilityListener.getInstrumentIdForBond(bondId);
             if (instrumentId == null) {
-                LOGGER.warn("No instrument ID mapping found for bond: " + bondId + ", skipping");
+                LOGGER.warn("No instrument ID mapping found for bond: {}, skipping", bondId);
                 return;
             }
 
@@ -1139,12 +1444,24 @@ public class MarketMaker implements IOrderManager {
             if (existingQuote == null) {
                 tryCreateInitialMarkets(bondId);
             } else {
-                // Check if existing orders are still valid
-                validateExistingQuotes(bondId, existingQuote);
+                // Check if any existing orders are dead and need replacement
+                MarketOrder bidOrder = existingQuote.getBidOrder();
+                MarketOrder askOrder = existingQuote.getAskOrder();
+                
+                boolean bidActive = (bidOrder != null && !bidOrder.isDead());
+                boolean askActive = (askOrder != null && !askOrder.isDead());
+                
+                // Only validate if at least one side needs attention
+                if (!bidActive || !askActive) {
+                    LOGGER.info("Validating quotes for {}: bidActive={}, askActive={}", 
+                        bondId, bidActive, askActive);
+                    validateExistingQuotes(bondId, existingQuote);
+                } else {
+                    LOGGER.debug("Both sides active for {}, skipping update", bondId);
+                }
             }
-            
         } catch (Exception e) {
-            LOGGER.error("Error creating/updating markets for bond " + bondId + ": " + e.getMessage(), e);
+            LOGGER.error("Error creating/updating markets for bond {}: {}", bondId, e.getMessage(), e);
         }
     }
 
@@ -1185,7 +1502,7 @@ public class MarketMaker implements IOrderManager {
 
                     double bidPrice = quote.getBidPrice();
                     if (bidPrice <= 0) {
-                        bidPrice = getReferencePriceForBond(bondId) - (config.getDefaultSpread() / 2);
+                        bidPrice = getReferencePriceForBond(bondId) - config.getBidAdjustment();
                     }
                     
                     if (bidPrice > 0) {
@@ -1200,7 +1517,7 @@ public class MarketMaker implements IOrderManager {
 
                     double askPrice = quote.getAskPrice();
                     if (askPrice <= 0) {
-                        askPrice = getReferencePriceForBond(bondId) + (config.getDefaultSpread() / 2);
+                        askPrice = getReferencePriceForBond(bondId) + config.getDefaultSpread();
                     }
                     
                     if (askPrice > 0) {
@@ -1230,27 +1547,27 @@ public class MarketMaker implements IOrderManager {
         
         try {
             // You might get this from bond static data
-            Map<String, Object> bondData = bondEligibilityListener.getBondData(cusip);
-            if (bondData != null) {
-                // Look for any price fields in the static data
-                Object lastPrice = bondData.get("LastPrice");
-                if (lastPrice instanceof Number) {
-                    return ((Number) lastPrice).doubleValue();
-                }
+            // Map<String, Object> bondData = bondEligibilityListener.getBondData(cusip);
+            // if (bondData != null) {
+            //     // Look for any price fields in the static data
+            //     Object lastPrice = bondData.get("LastPrice");
+            //     if (lastPrice instanceof Number) {
+            //         return ((Number) lastPrice).doubleValue();
+            //     }
                 
-                // Fallback to par value if available
-                Object parValue = bondData.get("ParValue");
-                if (parValue instanceof Number) {
-                    return ((Number) parValue).doubleValue();
-                }
-            }
+            //     // Fallback to par value if available
+            //     Object parValue = bondData.get("ParValue");
+            //     if (parValue instanceof Number) {
+            //         return ((Number) parValue).doubleValue();
+            //     }
+            // }
             
             // Default fallback price (you'd want something more sophisticated)
-            return 100.0; // Par value assumption
+            return 4.25; // Par value assumption
             
         } catch (Exception e) {
             LOGGER.warn("Error getting reference price for " + cusip + ": " + e.getMessage(), e);
-            return 100.0; // Default fallback
+            return 4.25; // Default fallback
         }
     }
 
@@ -1375,44 +1692,130 @@ public class MarketMaker implements IOrderManager {
     }
 
     /**
-     * Cancel an existing order.
-     * 
-     * @param order The order to cancel
-     * @param cusip The instrument CUSIP (for tracking)
+     * Prepares the market maker for shutdown without making MKV calls.
+     * First phase of the two-phase shutdown process.
      */
-    private void cancelOrder(MarketOrder order, String cusip) {
-        try {
-            if (order == null || order.getOrderId() == null) {
-                return;
-            }
-
-            LOGGER.info("Cancelling order: orderId=" + order.getOrderId() + 
-                ", reqId=" + order.getMyReqId() + 
-                ", cusip=" + cusip);
+    public void prepareForShutdown() {
+        LOGGER.info("Preparing market maker for shutdown");
+        
+        // First disable to prevent new orders
+        this.enabled = false;
+        
+        // Shutdown scheduler first to prevent any new order placements
+        if (scheduler != null) {
+            try {
+                LOGGER.info("Shutting down market maker scheduler");
+                scheduler.shutdown();
                 
-            String traderId = orderManager.getTraderForVenue(config.getMarketSource());
-            
-            MarketOrder cancelOrder = MarketOrder.orderCancel(
-                config.getMarketSource(), 
-                traderId, 
-                order.getOrderId(), 
-                this
-            );
-            
-            if (cancelOrder != null) {
-                LOGGER.info("Cancel request sent: orderId=" + order.getOrderId());
-            } else {
-                LOGGER.warn("Failed to cancel order: orderId=" + order.getOrderId());
+                if (!scheduler.awaitTermination(3, TimeUnit.SECONDS)) {
+                    List<Runnable> pendingTasks = scheduler.shutdownNow();
+                    LOGGER.warn("Force-terminated scheduler with {} pending tasks", 
+                        pendingTasks.size());
+                }
+            } catch (Exception e) {
+                LOGGER.warn("Error shutting down scheduler: {}", e.getMessage());
             }
+        }
+        
+        LOGGER.info("Market maker prepared for shutdown");
+    }
+
+    /**
+     * Completes the shutdown process after the main application
+     * has finished its critical MKV operations.
+     * Second phase of the two-phase shutdown process.
+     */
+    public void completeShutdown() {
+        LOGGER.info("Completing market maker shutdown");
+        
+        try {
+            // Clear all data structures
+            activeQuotes.clear();
+            trackedInstruments.clear();
+            orderIdToReqIdMap.clear();
+            instrumentUpdateCounters.clear();
         } catch (Exception e) {
-            LOGGER.error("Error cancelling order: " + e.getMessage(), e);
+            LOGGER.error("Error during final market maker cleanup: {}", e.getMessage(), e);
+        }
+        
+        LOGGER.info("Market maker shutdown completed");
+    }
+
+    /**
+     * Performs a complete shutdown of the market maker component.
+     * Disables the market maker and cancels all orders if possible.
+     */
+    public void shutdown() {
+        LOGGER.info("Shutting down market maker");
+        
+        // Check if shutdown has already been handled by the shutdown hook
+        if (!markShutdownHandled()) {
+            LOGGER.info("Shutdown already handled by shutdown hook, skipping");
+            return;
+        }
+
+        // First prepare for shutdown (disable and stop scheduler)
+        prepareForShutdown();
+        
+        try {
+            // Use the thread-safe Mkv access pattern with proper synchronization
+            Mkv mkv = null;
+            MkvPublishManager pm = null;
+            boolean mkvAvailable = false;
+            
+            // Get the MKV instance and publish manager safely
+            try {
+                synchronized (Mkv.class) {  // Synchronize on Mkv class to prevent concurrent shutdown
+                    try {
+                        mkv = Mkv.getInstance();
+                        if (mkv != null) {
+                            try {
+                                pm = mkv.getPublishManager();
+                                mkvAvailable = (pm != null);
+                            } catch (IllegalStateException e) {
+                                LOGGER.warn("MKV API is stopping or stopped, cannot access PublishManager");
+                            }
+                        }
+                    } catch (IllegalStateException e) {
+                        LOGGER.warn("MKV API is already stopped, cannot get instance");
+                    }
+                }
+            } catch (Exception e) {
+                LOGGER.warn("Error checking MKV availability: {}", e.getMessage());
+            }
+            
+            if (mkvAvailable) {
+                LOGGER.info("MKV still available, cancelling all active quotes");
+                try {
+                    // Cancel orders with a short timeout
+                    boolean success = cancelAllOrders(3000);
+                    if (!success) {
+                        LOGGER.warn("Not all orders cancelled successfully before timeout");
+                    }
+                } catch (Exception e) {
+                    LOGGER.error("Error during order cancellation: {}", e.getMessage(), e);
+                }
+            } else {
+                LOGGER.warn("MKV no longer available, skipping order cancellation");
+            }
+            
+            // Complete the shutdown process
+            completeShutdown();
+            
+        } catch (Exception e) {
+            LOGGER.error("Error during market maker shutdown: {}", e.getMessage(), e);
         }
     }
 
-    public void shutdown() {
-        LOGGER.info("Shutting down market maker");
-        setEnabled(false);
-        cancelAllOrders();
+    // Add a method to check if shutdown is already handled
+    private boolean markShutdownHandled() {
+        synchronized (this) {
+            if (shutdownHandled) {
+                return false;
+            }
+            shutdownHandled = true;
+            return true;
+        }
     }
 
     public boolean isRunning() {
@@ -1524,15 +1927,166 @@ public class MarketMaker implements IOrderManager {
     }
 
     /**
+     * Updates an existing order with new parameters, or places a new order if none exists
+     * 
+     * @param bondId The bond CUSIP
+     * @param nativeInstrument The native instrument ID for the venue
+     * @param side The order side ("Buy" or "Sell")
+     * @param size Order size
+     * @param price New order price
+     * @param referenceSource Reference source for the price
+     * @param existingOrder Existing order to update (can be null)
+     * @return The updated or new MarketOrder
+     */
+    private MarketOrder updateOrder(String bondId, String nativeInstrument, String side, 
+                                double size, double price, String referenceSource,
+                                MarketOrder existingOrder) {
+        LOGGER.info("updateOrder: CUSIP={}, Side={}, Size={}, Price={}, Source={}, HasExisting={}", 
+            bondId, side, size, price, referenceSource, (existingOrder != null));
+        
+        try {
+            // Additional validation before placing/updating order
+            if (size <= 0) {
+                LOGGER.warn("Invalid order size: {}, must be positive", size);
+                LOGGER.info("updateOrder: Failed: Invalid order size");
+                return null;
+            }
+
+            if (price <= 0 || price < config.getMinPrice() || price > config.getMaxPrice()) {
+                LOGGER.warn("Invalid order price: {} (min={}, max={})", 
+                    price, config.getMinPrice(), config.getMaxPrice());
+                LOGGER.info("updateOrder: Failed: Invalid order price");
+                return null;
+            }
+
+            // If we have an existing order that's still active, update it
+            if (existingOrder != null && !existingOrder.isDead()) {
+                LOGGER.info("Updating existing {} order: orderId={}, oldPrice={}, newPrice={}", 
+                    side, existingOrder.getOrderId(), existingOrder.getPrice(), price);
+                    
+                MarketOrder updatedOrder = MarketOrder.orderUpdate(
+                    config.getMarketSource(), 
+                    fenicsTrader,
+                    existingOrder.getOrderId(),
+                    nativeInstrument, 
+                    side, 
+                    size, 
+                    price, 
+                    this  // OrderManager instance
+                );
+                
+                if (updatedOrder != null) {
+                    LOGGER.info("Order updated successfully: {}", updatedOrder.getOrderId());
+                    return updatedOrder;
+                } else {
+                    LOGGER.error("Failed to update {} order for {}", side, bondId);
+                    // If update fails, attempt to cancel and place new
+                    cancelOrder(existingOrder, bondId);
+                }
+            }
+            
+            // If no existing order or update failed, place a new order
+            LOGGER.info("Placing new {} order on {}: {} ({}), size={}, price={}", 
+                side, config.getMarketSource(), nativeInstrument, bondId, size, price);
+                
+            MarketOrder newOrder = orderManager.addOrder(
+                config.getMarketSource(), 
+                fenicsTrader, 
+                nativeInstrument, 
+                side, 
+                size, 
+                price, 
+                config.getOrderType(), 
+                config.getTimeInForce()
+            );
+            
+            if (newOrder != null) {
+                LOGGER.info("New order placed successfully: reqId={}", newOrder.getMyReqId());
+                return newOrder;
+            } else {
+                LOGGER.error("Failed to place new {} order for {}", side, bondId);
+                return null;
+            }
+        } catch (Exception e) {
+            LOGGER.error("updateOrder: Error updating/placing order for {}: {}", bondId, e.getMessage(), e);
+            return null;
+        }
+    }
+
+    /**
+     * Cancel an existing order.
+     * 
+     * @param order The order to cancel
+     * @param cusip The instrument CUSIP (for tracking)
+     */
+    private void cancelOrder(MarketOrder order, String cusip) {
+        try {
+            if (order == null || order.getOrderId() == null) {
+                return;
+            }
+
+            // Check if MKV is still available in a more robust way
+            try {
+                // Check both Mkv instance and PublishManager availability
+                Mkv mkv = Mkv.getInstance();
+                if (mkv == null) {
+                    LOGGER.warn("Cannot cancel order {} - MKV not available", order.getOrderId());
+                    return;
+                }
+                
+                MkvPublishManager pm;
+                try {
+                    pm = mkv.getPublishManager();
+                    if (pm == null) {
+                        LOGGER.warn("Cannot cancel order {} - MKV PublishManager not available", order.getOrderId());
+                        return;
+                    }
+                } catch (IllegalStateException e) {
+                    LOGGER.warn("Cannot cancel order {} - MKV API is stopped", order.getOrderId());
+                    return;
+                }
+            } catch (IllegalStateException e) {
+                LOGGER.warn("Cannot cancel order {} - MKV API is stopped", order.getOrderId());
+                return;
+            }
+
+            LOGGER.info("Cancelling order: orderId={}, reqId={}, cusip={}", 
+                order.getOrderId(), order.getMyReqId(), cusip);
+                
+            String traderId = orderManager.getTraderForVenue(config.getMarketSource());
+            
+            try {
+                MarketOrder cancelOrder = MarketOrder.orderCancel(
+                    config.getMarketSource(), 
+                    traderId, 
+                    order.getOrderId(), 
+                    this
+                );
+                
+                if (cancelOrder != null) {
+                    LOGGER.info("Cancel request sent: orderId={}", order.getOrderId());
+                } else {
+                    LOGGER.warn("Failed to cancel order: orderId={}", order.getOrderId());
+                }
+            } catch (IllegalStateException e) {
+                LOGGER.warn("Cannot cancel order {} - MKV API is stopped", order.getOrderId());
+            }
+        } catch (Exception e) {
+            LOGGER.error("Error cancelling order: {}", e.getMessage(), e);
+        }
+    }
+
+    /**
      * Process normal symmetric quoting when both sides can be hedged
      * @param best The updated best prices
      * @param bondId The bond ID
      */
-    private void processSymmetricQuoting(Best best, String bondId) {
-        LOGGER.info("processSymmetricQuoting: Processing symmetric quoting for bond: {}", bondId);
+    private void processSymmetricQuoting(Best best, String bondId, boolean hasActiveBid, boolean hasActiveAsk) {
+        LOGGER.debug("processSymmetricQuoting: Processing symmetric quoting for bond: {}", bondId);
 
         try {
             String instrumentId = bondEligibilityListener.getInstrumentIdForBond(bondId);
+            LOGGER.info("processSymmetricQuoting: Instrument ID for bond: {}", instrumentId);
             // if (instrumentId == null) {
             //     LOGGER.warn("No instrument ID found for bond: {}", bondId);
             //     LOGGER.debug(instrumentId);("processSymmetricQuoting:  Failed: No instrument ID found for bond");
@@ -1586,31 +2140,31 @@ public class MarketMaker implements IOrderManager {
                 LOGGER.debug("Valid ask source, our ask price will be: {}", ourAskPrice);
             }
             
-            // Enforce minimum spread if both sides are valid
-            if (validBidSource && validAskSource) {
-                double currentSpread = ourAskPrice - ourBidPrice;
-                if (currentSpread < config.getMinSpread()) {
-                    // Adjust prices to meet minimum spread
-                    double midpoint = (ourBidPrice + ourAskPrice) / 2;
-                    ourBidPrice = midpoint - (config.getMinSpread() / 2);
-                    ourAskPrice = midpoint + (config.getMinSpread() / 2);
-                    LOGGER.info("Enforcing minimum spread of {}, adjusted prices: bid={}, ask={}",
-                        config.getMinSpread(), ourBidPrice, ourAskPrice);
-                }
-            }
+            // // Enforce minimum spread if both sides are valid
+            // if (validBidSource && validAskSource) {
+            //     double currentSpread = ourAskPrice - ourBidPrice;
+            //     if (currentSpread < config.getMinSpread()) {
+            //         // Adjust prices to meet minimum spread
+            //         double midpoint = (ourBidPrice + ourAskPrice) / 2;
+            //         ourBidPrice = midpoint - (config.getMinSpread() / 2);
+            //         ourAskPrice = midpoint + (config.getMinSpread() / 2);
+            //         LOGGER.info("Enforcing minimum spread of {}, adjusted prices: bid={}, ask={}",
+            //             config.getMinSpread(), ourBidPrice, ourAskPrice);
+            //     }
+            // }
             
             // Validate that our prices are reasonable
-            if (validBidSource && (ourBidPrice <= 0 || ourBidPrice < config.getMinPrice() || ourBidPrice > config.getMaxPrice())) {
-                LOGGER.warn("Invalid calculated bid price: {} (min={}, max={})", 
-                    ourBidPrice, config.getMinPrice(), config.getMaxPrice());
-                validBidSource = false;
-            }
+            // if (validBidSource && (ourBidPrice <= 0 || ourBidPrice < config.getMinPrice() || ourBidPrice > config.getMaxPrice())) {
+            //     LOGGER.warn("Invalid calculated bid price: {} (min={}, max={})", 
+            //         ourBidPrice, config.getMinPrice(), config.getMaxPrice());
+            //     validBidSource = false;
+            // }
             
-            if (validAskSource && (ourAskPrice <= 0 || ourAskPrice < config.getMinPrice() || ourAskPrice > config.getMaxPrice())) {
-                LOGGER.warn("Invalid calculated ask price: {} (min={}, max={})", 
-                    ourAskPrice, config.getMinPrice(), config.getMaxPrice());
-                validAskSource = false;
-            }
+            // if (validAskSource && (ourAskPrice <= 0 || ourAskPrice < config.getMinPrice() || ourAskPrice > config.getMaxPrice())) {
+            //     LOGGER.warn("Invalid calculated ask price: {} (min={}, max={})", 
+            //         ourAskPrice, config.getMinPrice(), config.getMaxPrice());
+            //     validAskSource = false;
+            // }
 
             // Get the native instrument ID using the correct instrument ID
             String nativeInstrument = null;
@@ -1628,7 +2182,7 @@ public class MarketMaker implements IOrderManager {
                 return;
             }
 
-            LOGGER.info("Using native instrument: {} for bond {}", nativeInstrument, bondId);
+            LOGGER.debug("Using native instrument: {} for bond {}", nativeInstrument, bondId);
 
             // Check if we already have a quote for this bond
             ActiveQuote existingQuote = activeQuotes.get(bondId);
@@ -1647,16 +2201,17 @@ public class MarketMaker implements IOrderManager {
                         ourAskPrice, referenceAskSource);
                 }
                 
-                LOGGER.info("processSymmetricQuoting: New quotes created for bond: {}", bondId);
+                LOGGER.debug("processSymmetricQuoting: New quotes created for bond: {}", bondId);
             } else {
                 // Update existing quotes
-                updateExistingSymmetricQuotes(existingQuote, bondId, nativeInstrument,
-                    validBidSource, ourBidPrice, referenceBidSource,
-                    validAskSource, ourAskPrice, referenceAskSource);
-                
-                LOGGER.info("processSymmetricQuoting: Updated existing quotes for bond: {}", bondId);
+            // Only update quotes that need updating based on price changes or dead orders
+                updateExistingSymmetricQuotesWithDupeCheck(
+                    existingQuote, bondId, nativeInstrument,
+                    validBidSource, ourBidPrice, referenceBidSource, hasActiveBid,
+                    validAskSource, ourAskPrice, referenceAskSource, hasActiveAsk);
+                LOGGER.debug("processSymmetricQuoting: Updated existing quotes for bond: {}", bondId);
             }
-            
+
         } catch (Exception e) {
             LOGGER.error("Error processing symmetric quoting for bond {}: {}", bondId, e.getMessage(), e);
         }
@@ -1665,85 +2220,87 @@ public class MarketMaker implements IOrderManager {
     /**
      * Update existing symmetric quotes with price change detection and order management
      */
-    private void updateExistingSymmetricQuotes(ActiveQuote existingQuote, String bondId, String nativeInstrument,
-                                            boolean validBidSource, double ourBidPrice, String referenceBidSource,
-                                            boolean validAskSource, double ourAskPrice, String referenceAskSource) {
-        LOGGER.info("updateExistingSymmetricQuotes: Updating quotes for bond: {}", bondId);
+    private void updateExistingSymmetricQuotesWithDupeCheck(
+        ActiveQuote existingQuote, String bondId, String nativeInstrument,
+        boolean validBidSource, double ourBidPrice, String referenceBidSource, boolean hasActiveBid,
+        boolean validAskSource, double ourAskPrice, String referenceAskSource, boolean hasActiveAsk) {
+        LOGGER.debug("updateExistingSymmetricQuotes: Updating quotes for bond: {}", bondId);
         
         try {
             // Define minimum price change threshold to avoid excessive order churn
-            final double MIN_PRICE_CHANGE_THRESHOLD = 0.005; // Half a penny
+            final double MIN_PRICE_CHANGE_THRESHOLD = 0.01; // Basis point
             
             // Update bid if needed
             if (validBidSource && ourBidPrice > 0) {
                 MarketOrder currentBid = existingQuote.getBidOrder();
                 double currentBidPrice = existingQuote.getBidPrice();
                 
-                // Check if we need to update the bid order
-                boolean updateBid = currentBid == null || 
-                                    currentBid.isDead() || 
-                                    Math.abs(currentBidPrice - ourBidPrice) >= MIN_PRICE_CHANGE_THRESHOLD ||
-                                    !referenceBidSource.equals(existingQuote.getBidReferenceSource());
+                // Only update if:
+                // 1. No active order exists, OR
+                // 2. Price change is significant, OR
+                // 3. Reference source has changed
+                boolean updateBid = !hasActiveBid || 
+                                Math.abs(currentBidPrice - ourBidPrice) >= MIN_PRICE_CHANGE_THRESHOLD ||
+                                (referenceBidSource != null && 
+                                !referenceBidSource.equals(existingQuote.getBidReferenceSource()));
                 
                 if (updateBid) {
-                    // Cancel existing order if present
-                    if (currentBid != null && !currentBid.isDead()) {
-                        cancelOrder(currentBid, bondId);
+                    // Use the updateOrder wrapper to handle the order update/placement
+                    MarketOrder updatedBid = updateOrder(bondId, nativeInstrument, "Buy", 
+                        config.getMinSize(), ourBidPrice, referenceBidSource, 
+                        hasActiveBid ? currentBid : null);
+                    
+                    if (updatedBid != null) {
+                        existingQuote.setBidOrder(updatedBid, referenceBidSource, ourBidPrice);
+                        LOGGER.debug("Bid quote updated for {}: price={}, source={}", 
+                            bondId, ourBidPrice, referenceBidSource);
                     }
-                    
-                    // Place new order
-                    placeOrder(bondId, nativeInstrument, "Buy", config.getMinSize(), 
-                        ourBidPrice, referenceBidSource);
-                    
-                    LOGGER.info("Updated bid for {}: price={}, source={}", 
-                        bondId, ourBidPrice, referenceBidSource);
                 } else {
                     LOGGER.debug("Bid unchanged for {}: price={}, change={}", 
                         bondId, currentBidPrice, Math.abs(currentBidPrice - ourBidPrice));
                 }
-            } else if (existingQuote.getBidOrder() != null && !existingQuote.getBidOrder().isDead()) {
+            } else if (existingQuote.getBidOrder() != null && hasActiveBid) {
                 // Cancel bid side if it's no longer valid
-                LOGGER.info("Cancelling bid for {} as source is no longer valid", bondId);
+                LOGGER.debug("Cancelling bid for {} as source is no longer valid", bondId);
                 cancelOrder(existingQuote.getBidOrder(), bondId);
             }
-            
+
             // Update ask if needed
             if (validAskSource && ourAskPrice > 0) {
                 MarketOrder currentAsk = existingQuote.getAskOrder();
                 double currentAskPrice = existingQuote.getAskPrice();
                 
                 // Check if we need to update the ask order
-                boolean updateAsk = currentAsk == null || 
-                                    currentAsk.isDead() || 
-                                    Math.abs(currentAskPrice - ourAskPrice) >= MIN_PRICE_CHANGE_THRESHOLD ||
-                                    !referenceAskSource.equals(existingQuote.getAskReferenceSource());
+                boolean updateAsk = !hasActiveAsk || 
+                                Math.abs(currentAskPrice - ourAskPrice) >= MIN_PRICE_CHANGE_THRESHOLD ||
+                                (referenceAskSource != null && 
+                                !referenceAskSource.equals(existingQuote.getAskReferenceSource()));
                 
                 if (updateAsk) {
-                    // Cancel existing order if present
-                    if (currentAsk != null && !currentAsk.isDead()) {
-                        cancelOrder(currentAsk, bondId);
+                    // Use the updateOrder wrapper to handle the order update/placement
+                    MarketOrder updatedAsk = updateOrder(bondId, nativeInstrument, "Sell", 
+                        config.getMinSize(), ourAskPrice, referenceAskSource, 
+                        hasActiveAsk ? currentAsk : null);
+                    
+                    if (updatedAsk != null) {
+                        existingQuote.setAskOrder(updatedAsk, referenceAskSource, ourAskPrice);
+                        LOGGER.info("Ask quote updated for {}: price={}, source={}", 
+                            bondId, ourAskPrice, referenceAskSource);
                     }
-                    
-                    // Place new order
-                    placeOrder(bondId, nativeInstrument, "Sell", config.getMinSize(), 
-                        ourAskPrice, referenceAskSource);
-                    
-                    LOGGER.info("Updated ask for {}: price={}, source={}", 
-                        bondId, ourAskPrice, referenceAskSource);
                 } else {
                     LOGGER.debug("Ask unchanged for {}: price={}, change={}", 
                         bondId, currentAskPrice, Math.abs(currentAskPrice - ourAskPrice));
                 }
-            } else if (existingQuote.getAskOrder() != null && !existingQuote.getAskOrder().isDead()) {
+            } else if (existingQuote.getAskOrder() != null && hasActiveAsk) {
                 // Cancel ask side if it's no longer valid
                 LOGGER.info("Cancelling ask for {} as source is no longer valid", bondId);
                 cancelOrder(existingQuote.getAskOrder(), bondId);
             }
 
             LOGGER.info("updateExistingSymmetricQuotes: Quotes updated for bond: {}", bondId);
-
         } catch (Exception e) {
-            LOGGER.error("updateExistingSymmetricQuotes: Error updating symmetric quotes for bond {}: {}", bondId, e.getMessage(), e);
+            LOGGER.error("updateExistingSymmetricQuotes: Error updating symmetric quotes for bond {}: {}", 
+                bondId, e.getMessage(), e);
         }
     }
 }
