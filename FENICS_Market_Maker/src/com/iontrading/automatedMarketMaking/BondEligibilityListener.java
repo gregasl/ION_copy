@@ -554,6 +554,7 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
             boolean isSnapshot) {
         try {
             // Update monitoring counters
+            LOGGER.info("Received full update in BondEligibilityListener for record: {}", mkvRecord.getName());
             lastUpdateTimestamp.set(System.currentTimeMillis());
             
             String recordName = mkvRecord.getName();
@@ -704,6 +705,7 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
         try {
             if (recordName == null) return null;
             
+            LOGGER.info("Extracting CUSIP from SDS record: {}", recordName);
             String[] parts = recordName.split("\\.");
             if (parts.length < 4) return null;
             
@@ -733,7 +735,7 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
     private String extractCusipFromBondRecord(String recordName) {
         try {
             if (recordName == null) return null;
-            
+            LOGGER.info("Extracting CUSIP from bond record: {}", recordName);
             String[] parts = recordName.split("\\.");
             if (parts.length < 4) return null;
             
@@ -757,7 +759,7 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
     private String extractCusipFromPositionRecord(String recordName) {
         try {
             if (recordName == null) return null;
-            
+            LOGGER.info("Extracting CUSIP from position record: {}", recordName);
             String[] parts = recordName.split("\\.");
             if (parts.length < 4) return null;
             
