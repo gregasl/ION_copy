@@ -17,11 +17,15 @@ public class BondConsolidatedData {
     // Data from SDS source
     private Map<String, Object> sdsData = new ConcurrentHashMap<>();
     
+    // Data from MFA source
+    private Map<String, Object> mfaData = new ConcurrentHashMap<>();
+
     // Timestamps for each data source
     private long staticDataTimestamp = 0;
     private long positionDataTimestamp = 0;
     private long sdsDataTimestamp = 0;
-    
+    private long mfaDataTimestamp = 0;
+
     public BondConsolidatedData(String cusip) {
         this.cusip = cusip;
     }
@@ -44,7 +48,12 @@ public class BondConsolidatedData {
         sdsData.putAll(data);
         sdsDataTimestamp = System.currentTimeMillis();
     }
-    
+
+    public void updateMfaData(Map<String, Object> data) {
+        mfaData.putAll(data);
+        mfaDataTimestamp = System.currentTimeMillis();
+    }
+
     public Map<String, Object> getStaticData() {
         return staticData;
     }
@@ -55,6 +64,10 @@ public class BondConsolidatedData {
     
     public Map<String, Object> getSdsData() {
         return sdsData;
+    }
+
+    public Map<String, Object> getMfaData() {
+        return mfaData;
     }
     
     public boolean hasStaticData() {
@@ -68,7 +81,11 @@ public class BondConsolidatedData {
     public boolean hasSdsData() {
         return !sdsData.isEmpty();
     }
-    
+
+    public boolean hasMfaData() {
+        return !mfaData.isEmpty();
+    }
+
     public long getStaticDataTimestamp() {
         return staticDataTimestamp;
     }
@@ -80,7 +97,11 @@ public class BondConsolidatedData {
     public long getSdsDataTimestamp() {
         return sdsDataTimestamp;
     }
-    
+
+    public long getMfaDataTimestamp() {
+        return mfaDataTimestamp;
+    }
+
     /**
      * Get a consolidated view of all data
      */
@@ -99,14 +120,19 @@ public class BondConsolidatedData {
         for (Map.Entry<String, Object> entry : sdsData.entrySet()) {
             consolidated.put("SDS_" + entry.getKey(), entry.getValue());
         }
-        
+
+        for (Map.Entry<String, Object> entry : mfaData.entrySet()) {
+            consolidated.put("MFA_" + entry.getKey(), entry.getValue());
+        }
+
         // Add metadata
         consolidated.put("CUSIP", cusip);
         consolidated.put("LastStaticUpdate", staticDataTimestamp);
         consolidated.put("LastPositionUpdate", positionDataTimestamp);
         consolidated.put("LastSdsUpdate", sdsDataTimestamp);
-        consolidated.put("IsComplete", hasStaticData() && hasPositionData() && hasSdsData());
-        
+        consolidated.put("LastMfaUpdate", mfaDataTimestamp);
+        consolidated.put("IsComplete", hasStaticData() && hasPositionData() && hasSdsData() && hasMfaData());
+
         return consolidated;
     }
 }

@@ -2,6 +2,8 @@ package com.iontrading.automatedMarketMaking;
 
 import java.util.Map;
 import java.util.Set;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -17,6 +19,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.iontrading.janino.p.t;
 import com.iontrading.mkv.Mkv;
 import com.iontrading.mkv.MkvObject;
 import com.iontrading.mkv.MkvPattern;
@@ -51,6 +54,14 @@ public class MarketMaker implements IOrderManager {
     // Reference to the main OrderManagement component
     private final OrderManagement orderManager;
     
+    private volatile GCBest latestGcBestCash;
+    private volatile GCBest latestGcBestREG;
+    private volatile double latestCashGcRate;
+    private volatile double latestRegGcRate;
+    private final Object gcBestLock = new Object();
+
+    private final Map<String, Boolean> termCodeActiveStatus = new ConcurrentHashMap<>();
+
     // Store our active orders by instrument ID
     private final Map<String, ActiveQuote> activeQuotes = new ConcurrentHashMap<>();
 
@@ -67,6 +78,7 @@ public class MarketMaker implements IOrderManager {
     private boolean isBondStaticSubscribed = false;
     private boolean isFirmPositionSubscribed = false;
     private boolean isSdsInformationSubscribed = false;
+    private boolean isMfaInformationSubscribed = false;
 
     // Configuration for the market maker
     private final MarketMakerConfig config;
@@ -87,6 +99,11 @@ public class MarketMaker implements IOrderManager {
     private static final String SDS_INFORMATION_PATTERN = "ALL.POSITION_US.SDS.";
     private static final String[] SDS_INFORMATION_FIELDS = {
         "Id", "Code", "DateStart", "SOMA"
+    };
+
+    private static final String MFA_INFORMATION_PATTERN = "ALL.STATISTICS.MFA.";
+    private static final String[] MFA_INFORMATION_FIELDS = {
+        "Id", "DateMaturity", "RateAvg", "SpreadGCAvg", "Term", "VirtualInstrumentId", "VolumeTotal"
     };
 
     private volatile boolean shutdownHandled = false;
@@ -113,7 +130,7 @@ public class MarketMaker implements IOrderManager {
             this.orderManager = orderManager;
             this.config = new MarketMakerConfig();
             LOGGER.info("MarketMaker initialized with default config");
-
+            initializeMarketSchedule();
             this.bondEligibilityListener = new BondEligibilityListener();
 
             this.fenicsTrader = orderManager.getTraderForVenue(config.getMarketSource());
@@ -140,8 +157,16 @@ public class MarketMaker implements IOrderManager {
 
             // Start periodic market making for eligible bonds
             scheduler.scheduleAtFixedRate(
-                this::makeMarketsForEligibleBonds, 
-                60, // Initial delay (seconds) 
+                () -> makeMarketsForEligibleBonds("C"), 
+                5, // Initial delay (seconds) 
+                30, // Run every 30 seconds
+                TimeUnit.SECONDS
+            );
+
+                        // Start periodic market making for eligible bonds
+            scheduler.scheduleAtFixedRate(
+                () -> makeMarketsForEligibleBonds("REG"), 
+                5, // Initial delay (seconds) 
                 30, // Run every 30 seconds
                 TimeUnit.SECONDS
             );
@@ -173,7 +198,7 @@ public class MarketMaker implements IOrderManager {
         try {
             this.orderManager = orderManager;
             this.config = config;
-
+            initializeMarketSchedule();
             this.bondEligibilityListener = new BondEligibilityListener();
             
             // Subscribe to MKV data streams with detailed logging
@@ -181,6 +206,7 @@ public class MarketMaker implements IOrderManager {
             subscribeToBondStaticData();
             subscribeToFirmPositionData();
             subscribeToSdsInformationData();
+            subscribeToMfaInformationData();
 
             this.fenicsTrader = orderManager.getTraderForVenue(config.getMarketSource());
             LOGGER.info("Using trader ID for {}: {}", config.getMarketSource(), fenicsTrader);
@@ -206,17 +232,17 @@ public class MarketMaker implements IOrderManager {
 
             // Start periodic market making for eligible bonds
             scheduler.scheduleAtFixedRate(
-                this::makeMarketsForEligibleBonds, 
-                60, // Initial delay (seconds) 
+                () -> makeMarketsForEligibleBonds("C"), 
+                5, // Initial delay (seconds) 
                 30, // Run every 30 seconds
                 TimeUnit.SECONDS
             );
-            
-            // Add a diagnostic check task
+
+            // Start periodic market making for eligible bonds
             scheduler.scheduleAtFixedRate(
-                this::logDiagnosticStatistics, 
-                30, // Initial delay (seconds) 
-                60, // Run every minute
+                () -> makeMarketsForEligibleBonds("REG"), 
+                5, // Initial delay (seconds) 
+                30, // Run every 30 seconds
                 TimeUnit.SECONDS
             );
 
@@ -224,6 +250,150 @@ public class MarketMaker implements IOrderManager {
         } catch (Exception e) {
             LOGGER.error("MarketMaker.constructor: Error creating MarketMaker with custom config", e);
             throw e; // Re-throw to maintain original behavior
+        }
+    }
+
+    /**
+     * Initialize market making schedule based on configured market hours
+     */
+    private void initializeMarketSchedule() {
+        LOGGER.info("Initializing market schedule for term codes");
+        
+        // Initialize initial status for each term code based on current time
+        updateTermCodeActiveStatus();
+        
+        // Schedule daily start/stop tasks
+        scheduler.scheduleAtFixedRate(
+            () -> startTermCodeMarketMaking("C"), 
+            getSecondsUntilTime(config.getCashMarketOpenTime()),
+            24 * 60 * 60, // Every 24 hours
+            TimeUnit.SECONDS
+        );
+        
+        scheduler.scheduleAtFixedRate(
+            () -> stopTermCodeMarketMaking("C"), 
+            getSecondsUntilTime(config.getCashMarketCloseTime()),
+            24 * 60 * 60, // Every 24 hours
+            TimeUnit.SECONDS
+        );
+        
+        scheduler.scheduleAtFixedRate(
+            () -> startTermCodeMarketMaking("REG"), 
+            getSecondsUntilTime(config.getRegMarketOpenTime()),
+            24 * 60 * 60, // Every 24 hours
+            TimeUnit.SECONDS
+        );
+        
+        scheduler.scheduleAtFixedRate(
+            () -> stopTermCodeMarketMaking("REG"), 
+            getSecondsUntilTime(config.getRegMarketCloseTime()),
+            24 * 60 * 60, // Every 24 hours
+            TimeUnit.SECONDS
+        );
+        
+        // Also schedule a check every minute to handle any timing issues
+        scheduler.scheduleAtFixedRate(
+            this::updateTermCodeActiveStatus,
+            60, // Start after 1 minute
+            60, // Check every minute
+            TimeUnit.SECONDS
+        );
+        
+        LOGGER.info("Market schedule initialized - C: {}-{}, REG: {}-{}", 
+            config.getCashMarketOpenTime(), config.getCashMarketCloseTime(),
+            config.getRegMarketOpenTime(), config.getRegMarketCloseTime());
+    }
+
+    /**
+     * Calculate seconds until a specified time today or tomorrow
+     */
+    private long getSecondsUntilTime(LocalTime targetTime) {
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime target = LocalDateTime.of(now.toLocalDate(), targetTime);
+        
+        // If target time is earlier today, schedule for tomorrow
+        if (now.toLocalTime().isAfter(targetTime)) {
+            target = target.plusDays(1);
+        }
+        
+        return java.time.Duration.between(now, target).getSeconds();
+    }
+
+    /**
+     * Start market making for a specific term code
+     */
+    private void startTermCodeMarketMaking(String termCode) {
+        LOGGER.info("Starting market making for term code: {}", termCode);
+        
+        boolean wasActive = termCodeActiveStatus.getOrDefault(termCode, false);
+        termCodeActiveStatus.put(termCode, true);
+        
+        if (!wasActive && enabled) {
+            // Only create markets if global enabled flag is true
+            makeMarketsForEligibleBonds(termCode);        }
+    }
+
+    /**
+     * Stop market making for a specific term code
+     */
+    private void stopTermCodeMarketMaking(String termCode) {
+        LOGGER.info("Stopping market making for term code: {}", termCode);
+        
+        termCodeActiveStatus.put(termCode, false);
+        
+        // Cancel all orders for this term code
+        cancelAllOrders(termCode);
+    }
+
+    /**
+     * Update active status for all term codes based on current time
+     */
+    private void updateTermCodeActiveStatus() {
+        LocalTime now = LocalTime.now();
+        
+        boolean cashActive = isTimeInRange(now, 
+                                        config.getCashMarketOpenTime(), 
+                                        config.getCashMarketCloseTime());
+        boolean regActive = isTimeInRange(now, 
+                                    config.getRegMarketOpenTime(), 
+                                    config.getRegMarketCloseTime());
+        
+        boolean cashWasActive = termCodeActiveStatus.getOrDefault("C", false);
+        boolean regWasActive = termCodeActiveStatus.getOrDefault("REG", false);
+        
+        termCodeActiveStatus.put("C", cashActive);
+        termCodeActiveStatus.put("REG", regActive);
+        
+        // Handle state changes
+        if (cashActive != cashWasActive) {
+            LOGGER.info("Cash market status changed to: {}", cashActive ? "ACTIVE" : "INACTIVE");
+            if (cashActive && enabled) {
+                makeMarketsForEligibleBonds("C");
+            } else if (!cashActive) {
+                cancelAllOrders("C");
+            }
+        }
+        
+        if (regActive != regWasActive) {
+            LOGGER.info("REG market status changed to: {}", regActive ? "ACTIVE" : "INACTIVE");
+            if (regActive && enabled) {
+                makeMarketsForEligibleBonds("REG");
+            } else if (!regActive) {
+                cancelAllOrders("REG");
+            }
+        }
+    }
+
+    /**
+     * Check if time is within a range (handles overnight ranges)
+     */
+    private boolean isTimeInRange(LocalTime time, LocalTime start, LocalTime end) {
+        if (start.isAfter(end)) {
+            // Overnight range (e.g., 22:00-06:00)
+            return !time.isAfter(end) || !time.isBefore(start);
+        } else {
+            // Same-day range
+            return !time.isBefore(start) && !time.isAfter(end);
         }
     }
 
@@ -239,9 +409,10 @@ public class MarketMaker implements IOrderManager {
             boolean bondSubscribed = subscribeToBondStaticData();
             boolean firmSubscribed = subscribeToFirmPositionData();
             boolean sdsSubscribed = subscribeToSdsInformationData();
-            
+            boolean mfaSubscribed = subscribeToMfaInformationData();
+
             // If any subscription failed, set up a listener for pattern discovery
-            if (!bondSubscribed || !firmSubscribed || !sdsSubscribed) {
+            if (!bondSubscribed || !firmSubscribed || !sdsSubscribed || !mfaSubscribed) {
                 LOGGER.info("Some patterns not available yet, setting up a publish listener");
                 
                 // Create a single shared listener for all patterns
@@ -265,9 +436,13 @@ public class MarketMaker implements IOrderManager {
                                 trySubscribeToPattern(SDS_INFORMATION_PATTERN, SDS_INFORMATION_FIELDS,
                                     bondEligibilityListener, mkvObject, pm, this);
                             }
+                            else if (!isMfaInformationSubscribed && MFA_INFORMATION_PATTERN.equals(name)) {
+                                trySubscribeToPattern(MFA_INFORMATION_PATTERN, MFA_INFORMATION_FIELDS,
+                                    bondEligibilityListener, mkvObject, pm, this);
+                            }
                         }
                     }
-                    
+
                     @Override
                     public void onPublishIdle(String component, boolean start) {
                         // At idle time, check for patterns again
@@ -294,6 +469,15 @@ public class MarketMaker implements IOrderManager {
                                     bondEligibilityListener, obj, pm, this);
                             }
                         }
+                        
+                        if (!isMfaInformationSubscribed) {
+                            MkvObject obj = pm.getMkvObject(MFA_INFORMATION_PATTERN);
+                            if (obj != null && obj.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
+                                trySubscribeToPattern(MFA_INFORMATION_PATTERN, MFA_INFORMATION_FIELDS,
+                                    bondEligibilityListener, obj, pm, this);
+                            }
+                        }
+
                     }
                     
                     @Override
@@ -317,11 +501,12 @@ public class MarketMaker implements IOrderManager {
                         synchronized (subscriptionLock) {
                             stillWaiting = !isBondStaticSubscribed || 
                                         !isFirmPositionSubscribed || 
-                                        !isSdsInformationSubscribed;
+                                        !isSdsInformationSubscribed || 
+                                        !isMfaInformationSubscribed;
                             
                             if (stillWaiting) {
-                                LOGGER.warn("Pattern subscription timeout reached. Status: Bond={}, Firm={}, SDS={}",
-                                    isBondStaticSubscribed, isFirmPositionSubscribed, isSdsInformationSubscribed);
+                                LOGGER.warn("Pattern subscription timeout reached. Status: Bond={}, Firm={}, SDS={}, MFA={}",
+                                    isBondStaticSubscribed, isFirmPositionSubscribed, isSdsInformationSubscribed, isMfaInformationSubscribed);
                                 
                                 // Remove the listener to avoid leaks
                                 pm.removePublishListener(patternListener);
@@ -478,6 +663,50 @@ public class MarketMaker implements IOrderManager {
         }
     }
 
+
+    /**
+     * Subscribe to MFA information data
+     */
+    private boolean subscribeToMfaInformationData() {
+        LOGGER.info("subscribeToMfaInformationData: Subscribing to MFA information data");
+
+        try {
+            // Get the publish manager to access patterns
+            MkvPublishManager pm = Mkv.getInstance().getPublishManager();
+            LOGGER.info("Got publish manager: {}", pm);
+       
+            // Look up the pattern object
+            MkvObject obj = pm.getMkvObject(MFA_INFORMATION_PATTERN);
+            LOGGER.info("Looking up pattern: {}, result: {}", MFA_INFORMATION_PATTERN, obj);
+
+            if (obj != null && obj.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
+                synchronized (this.subscriptionLock) {
+                    // Check again inside synchronized block
+                    if (isMfaInformationSubscribed) {
+                        return true;
+                    
+                    }
+                    // Subscribe within a synchronized block
+                    LOGGER.info("Found MFA information pattern, subscribing: {}", (Object) MFA_INFORMATION_FIELDS);
+                    ((MkvPattern) obj).subscribe(MFA_INFORMATION_FIELDS, bondEligibilityListener);
+
+                    // Mark that we've successfully subscribed
+                    isMfaInformationSubscribed = true;
+
+                    LOGGER.info("Subscribed to MFA information data: {} with {} fields",
+                        MFA_INFORMATION_PATTERN, MFA_INFORMATION_FIELDS.length);
+                    return true;
+                }
+            } else {
+                LOGGER.error("subscribeToMfaInformationData: Failed: MFA information pattern not found");
+                return false;
+            }
+        } catch (Exception e) {
+            LOGGER.error("subscribeToMfaInformationData: Error subscribing to MFA information data", e);
+            return false;
+        }
+    }
+
     /**
      * Helper method to safely subscribe to a pattern when it becomes available
      */
@@ -492,8 +721,10 @@ public class MarketMaker implements IOrderManager {
                 isAlreadySubscribed = isFirmPositionSubscribed;
             } else if (SDS_INFORMATION_PATTERN.equals(patternName)) {
                 isAlreadySubscribed = isSdsInformationSubscribed;
+            } else if (MFA_INFORMATION_PATTERN.equals(patternName)) {
+                isAlreadySubscribed = isMfaInformationSubscribed;
             }
-            
+
             // Check if already subscribed
             if (isAlreadySubscribed) {
                 return true;
@@ -511,12 +742,14 @@ public class MarketMaker implements IOrderManager {
                     isFirmPositionSubscribed = true;
                 } else if (SDS_INFORMATION_PATTERN.equals(patternName)) {
                     isSdsInformationSubscribed = true;
+                } else if (MFA_INFORMATION_PATTERN.equals(patternName)) {
+                    isMfaInformationSubscribed = true;
                 }
 
                 LOGGER.info("Successfully subscribed to pattern: {}", patternName);
 
                 // Remove the listener if we're done with all subscriptions
-                if (isBondStaticSubscribed && isFirmPositionSubscribed && isSdsInformationSubscribed) {
+                if (isBondStaticSubscribed && isFirmPositionSubscribed && isSdsInformationSubscribed && isMfaInformationSubscribed) {
                     LOGGER.info("All patterns subscribed, removing publish listener");
                     pm.removePublishListener(publishListener);
                 }
@@ -531,6 +764,36 @@ public class MarketMaker implements IOrderManager {
 
     public Map<String, ActiveQuote> getActiveQuotes() {
         return Collections.unmodifiableMap(activeQuotes); // Return unmodifiable to prevent external modification
+    }
+
+    /**
+     * Cancel all orders for instruments with a specific term code
+     */
+    private void cancelAllOrders(String termCode) {
+        LOGGER.info("Cancelling all orders for term code: {}", termCode);
+        
+        List<String> bondsToCancel = new ArrayList<>();
+        
+        // Find all bonds with that term code that have active orders
+        for (String cusip : trackedInstruments) {
+            String instrumentId = bondEligibilityListener.getInstrumentIdForBond(cusip, termCode);
+            if (instrumentId != null && activeQuotes.containsKey(cusip)) {
+                bondsToCancel.add(cusip);
+            }
+        }
+        
+        // Cancel orders for each bond
+        int cancelCount = 0;
+        for (String cusip : bondsToCancel) {
+            try {
+                cancelOrdersForInstrument(cusip);
+                cancelCount++;
+            } catch (Exception e) {
+                LOGGER.error("Error cancelling orders for {}: {}", cusip, e.getMessage(), e);
+            }
+        }
+        
+        LOGGER.info("Cancelled orders for {} bonds with term code: {}", cancelCount, termCode);
     }
 
     /**
@@ -736,7 +999,7 @@ public class MarketMaker implements IOrderManager {
      * Execute a hedge trade on the reference venue.
      * This method is called when one of our orders on the market source is filled.
      */
-    public void executeHedgeTrade(String bondId, String side, double size, double hedgePrice, String referenceSource) {
+    public void executeHedgeTrade(String bondId, String termCode, String side, double size, double hedgePrice, String referenceSource) {
         LOGGER.info("executeHedgeTrade: Bond={}, Side={}, Size={}, Price={}, RefSrc={}", 
             bondId, side, size, hedgePrice, referenceSource);
         
@@ -754,7 +1017,7 @@ public class MarketMaker implements IOrderManager {
             }
 
             // Get the instrument ID that corresponds to this bond ID
-            String instrumentId = bondEligibilityListener.getInstrumentIdForBond(bondId);
+            String instrumentId = bondEligibilityListener.getInstrumentIdForBond(bondId, termCode);
             if (instrumentId == null) {
                 LOGGER.info("executeHedgeTrade: No instrument ID found for bond: {}", bondId);
                 return;
@@ -877,7 +1140,13 @@ public class MarketMaker implements IOrderManager {
     @Override
     public void best(Best best, double cash_gc, double reg_gc, GCBest gcBestCash, GCBest gcBestREG) {
         // Increment total update counter
-        int updateCount = marketUpdateCounter.incrementAndGet();
+
+        synchronized(gcBestLock) {
+            this.latestGcBestCash = gcBestCash;
+            this.latestGcBestREG = gcBestREG;
+            this.latestCashGcRate = cash_gc;
+            this.latestRegGcRate = reg_gc;
+        }
 
         LOGGER.debug("MarketMaker.best() called with Best object: {}", best);
         // Process the market update
@@ -977,15 +1246,17 @@ public class MarketMaker implements IOrderManager {
             String bondId = null;
 
             LOGGER.debug("Current bond to instrument map size: {}", 
-                    bondEligibilityListener.bondToInstrumentMap.size());
-            // for (Map.Entry<String, String> entry : bondEligibilityListener.bondToInstrumentMap.entrySet()) {
-            //     LOGGER.info("Bond to instrument mapping: {} -> {}", entry.getKey(), entry.getValue());
-            // }
+                    bondEligibilityListener.bondToInstrumentMaps.size());
 
-            for (Map.Entry<String, String> entry : bondEligibilityListener.bondToInstrumentMap.entrySet()) {
-                if (entry.getValue().equals(instrumentId) || entry.getValue().equals(bestId)) {
-                    bondId = entry.getKey();
-                    LOGGER.info("Found bond ID mapping: {} -> {}", bondId, bestId);
+            for (Map.Entry<String, Map<String, String>> entry : bondEligibilityListener.bondToInstrumentMaps.entrySet()) {
+                for (Map.Entry<String, String> innerEntry : entry.getValue().entrySet()) {
+                    if (innerEntry.getValue().equals(instrumentId) || innerEntry.getValue().equals(bestId)) {
+                        bondId = entry.getKey();
+                        LOGGER.info("Found bond ID mapping: {} -> {}", bondId, bestId);
+                        break;
+                    }
+                }
+                if (bondId != null) {
                     break;
                 }
             }
@@ -1021,9 +1292,18 @@ public class MarketMaker implements IOrderManager {
             }
 
             LOGGER.debug("processMarketUpdate:  Processing market update for bond: {}", bondId);
-
+            
+            String termCode;
+            if (instrumentId.endsWith("C_Fixed")) {
+                termCode = "C";
+            } else if (instrumentId.endsWith("REG_Fixed")) {
+                termCode = "REG";
+            } else {
+                LOGGER.warn("processMarketUpdate: Unsupported instrument type for bond: {}", bondId);
+                return; // Unsupported instrument type
+            }
             // Process with symmetric quoting (simplified for this example)
-            processSymmetricQuoting(best, bondId, hasActiveBid, hasActiveAsk);
+            processSymmetricQuoting(best, termCode, bondId, hasActiveBid, hasActiveAsk);
 
             LOGGER.debug("processMarketUpdate: Market update processed for bond: {}", bondId);
 
@@ -1046,7 +1326,7 @@ public class MarketMaker implements IOrderManager {
             LOGGER.info("  Active quotes: {}", activeQuotes.size());
             LOGGER.info("  Bond eligibility listener status:");
             LOGGER.info("    Eligible bonds: {}", bondEligibilityListener.getEligibleBonds().size());
-            LOGGER.info("    Bond to instrument mappings: {}", bondEligibilityListener.bondToInstrumentMap.size());
+            LOGGER.info("    Bond to instrument mappings: {}", bondEligibilityListener.bondToInstrumentMaps.size());
             
             // Log top 5 instruments with most updates
             LOGGER.info("  Top instruments by update count:");
@@ -1111,6 +1391,7 @@ public class MarketMaker implements IOrderManager {
         subscriptions.put("bondStatic", isBondStaticSubscribed);
         subscriptions.put("firmPosition", isFirmPositionSubscribed);
         subscriptions.put("sdsInformation", isSdsInformationSubscribed);
+        subscriptions.put("mfaInformation", isMfaInformationSubscribed);
         status.put("subscriptions", subscriptions);
         
         // Add depth listener status
@@ -1224,7 +1505,13 @@ public class MarketMaker implements IOrderManager {
                 LOGGER.info("MarketMaker: Market making enabled");
 
                 // Start market making for eligible bonds
-                makeMarketsForEligibleBonds();
+                if (termCodeActiveStatus.get("C")){
+                    makeMarketsForEligibleBonds("C");
+                }
+
+                if (termCodeActiveStatus.get("REG")){
+                    makeMarketsForEligibleBonds("REG");
+                }
                 
                 // Start order monitor
                 monitorOrders();
@@ -1254,11 +1541,10 @@ public class MarketMaker implements IOrderManager {
             if (isEligible) {
                 // Bond became eligible, add to tracked set and create initial markets
                 trackedInstruments.add(cusip);
-                
+                String termCode = (String) bondData.get("termCode");
                 // Try to create initial markets for this bond
-                tryCreateOrUpdateMarkets(cusip);
+                tryCreateOrUpdateMarkets(cusip, termCode);
 
-                LOGGER.info("handleEligibilityChange: Bond {} became eligible, initial markets created", cusip);
             } else {
                 // Bond became ineligible, remove from tracked set and cancel orders
                 trackedInstruments.remove(cusip);
@@ -1274,7 +1560,7 @@ public class MarketMaker implements IOrderManager {
         }
     }
 
-    private void makeMarketsForEligibleBonds() {
+    private void makeMarketsForEligibleBonds(String termCode) {
         LOGGER.info("makeMarketsForEligibleBonds: Starting periodic market making");
         
         if (!enabled) {
@@ -1296,15 +1582,14 @@ public class MarketMaker implements IOrderManager {
                 if (!trackedInstruments.contains(cusip)) {
                     // New eligible bond, not yet tracking
                     trackedInstruments.add(cusip);
-                    tryCreateOrUpdateMarkets(cusip);
+                    tryCreateOrUpdateMarkets(cusip, termCode);
                     marketsCreated++;
                 } else {
                     // Already tracking this bond - only update if necessary
                     ActiveQuote existingQuote = activeQuotes.get(cusip);
-                    
                     if (existingQuote == null) {
                         // We're tracking the instrument but don't have quotes - create them
-                        tryCreateInitialMarkets(cusip);
+                        tryCreateInitialMarkets(cusip, termCode);
                         marketsUpdated++;
                     } else {
                         // Check if orders are still active
@@ -1316,7 +1601,7 @@ public class MarketMaker implements IOrderManager {
                         
                         if (!bidActive || !askActive) {
                             // Only refresh if one side is dead
-                            validateExistingQuotes(cusip, existingQuote);
+                            validateExistingQuotes(cusip, termCode,existingQuote);
                             marketsUpdated++;
                         } else {
                             // Both sides are active, skip
@@ -1353,10 +1638,10 @@ public class MarketMaker implements IOrderManager {
     /**
      * Try to create initial markets for a newly eligible bond
      */
-    private void tryCreateInitialMarkets(String bondId) {
+    private void tryCreateInitialMarkets(String bondId, String termCode) {
         try {
             // Get the instrument ID that corresponds to this bond ID
-            String instrumentId = bondEligibilityListener.getInstrumentIdForBond(bondId);
+            String instrumentId = bondEligibilityListener.getInstrumentIdForBond(bondId, termCode);
             if (instrumentId == null) {
                 LOGGER.warn("No instrument ID mapping found for bond: " + bondId);
                 return;
@@ -1387,7 +1672,7 @@ public class MarketMaker implements IOrderManager {
             }
 
             // Try to get current best prices to base our quotes on
-            createDefaultMarkets(bondId, nativeInstrument);
+            createDefaultMarkets(termCode, bondId, nativeInstrument);
             
         } catch (Exception e) {
             LOGGER.error("Error creating initial markets for bond " + bondId + ": " + e.getMessage(), e);
@@ -1397,21 +1682,11 @@ public class MarketMaker implements IOrderManager {
     /**
      * Create default markets when no reference prices are available
      */
-    private void createDefaultMarkets(String cusip, String nativeInstrument) {
+    private void createDefaultMarkets(String termCode, String cusip, String nativeInstrument) {
         try {
-            // You might want to get a reference price from bond static data or use a default
-            // For now, using a placeholder approach - you'd need to implement proper pricing
             
-            double referencePrice = getReferencePriceForBond(cusip);
-            if (referencePrice <= 0) {
-                LOGGER.warn("No reference price available for " + cusip);
-                return;
-            }
-
-            // Create default spread around reference price
-
-            double bidPrice = referencePrice + config.getBidAdjustment();
-            double askPrice = referencePrice - config.getAskAdjustment();
+            double bidPrice = getReferencePriceForBond(cusip, termCode, "Buy");
+            double askPrice = getReferencePriceForBond(cusip, termCode, "Sell");
 
             LOGGER.info("Creating default markets for " + cusip + 
                 " at " + bidPrice + "/" + askPrice);
@@ -1421,6 +1696,9 @@ public class MarketMaker implements IOrderManager {
                     bidPrice, "DEFAULT");
             placeOrder(cusip, nativeInstrument, "Sell", config.getMinSize(), 
                     askPrice, "DEFAULT");
+            
+            LOGGER.info("Default markets created for " + cusip + 
+                ": Bid=" + bidPrice + ", Ask=" + askPrice);
                     
         } catch (Exception e) {
             LOGGER.error("Error creating default markets for " + cusip + ": " + e.getMessage(), e);
@@ -1430,10 +1708,10 @@ public class MarketMaker implements IOrderManager {
     /**
      * Try to create or update markets for an instrument
      */
-    private void tryCreateOrUpdateMarkets(String bondId) {
+    private void tryCreateOrUpdateMarkets(String bondId, String termCode) {
         try {
             // Get the instrument ID that corresponds to this bond ID
-            String instrumentId = bondEligibilityListener.getInstrumentIdForBond(bondId);
+            String instrumentId = bondEligibilityListener.getInstrumentIdForBond(bondId, termCode);
             if (instrumentId == null) {
                 LOGGER.warn("No instrument ID mapping found for bond: {}, skipping", bondId);
                 return;
@@ -1442,7 +1720,7 @@ public class MarketMaker implements IOrderManager {
             // Check if existing quotes need validation
             ActiveQuote existingQuote = activeQuotes.get(bondId);
             if (existingQuote == null) {
-                tryCreateInitialMarkets(bondId);
+                tryCreateInitialMarkets(bondId, termCode);
             } else {
                 // Check if any existing orders are dead and need replacement
                 MarketOrder bidOrder = existingQuote.getBidOrder();
@@ -1455,7 +1733,7 @@ public class MarketMaker implements IOrderManager {
                 if (!bidActive || !askActive) {
                     LOGGER.info("Validating quotes for {}: bidActive={}, askActive={}", 
                         bondId, bidActive, askActive);
-                    validateExistingQuotes(bondId, existingQuote);
+                    validateExistingQuotes(bondId, termCode, existingQuote);
                 } else {
                     LOGGER.debug("Both sides active for {}, skipping update", bondId);
                 }
@@ -1468,7 +1746,7 @@ public class MarketMaker implements IOrderManager {
     /**
      * Validate and refresh existing quotes
      */
-    private void validateExistingQuotes(String bondId, ActiveQuote quote) {
+    private void validateExistingQuotes(String bondId, String termCode, ActiveQuote quote) {
         try {
             // Check if orders are still alive
             MarketOrder bidOrder = quote.getBidOrder();
@@ -1479,7 +1757,7 @@ public class MarketMaker implements IOrderManager {
             
             if (needNewBid || needNewAsk) {
                 // Get the instrument ID that corresponds to this bond ID
-                String instrumentId = bondEligibilityListener.getInstrumentIdForBond(bondId);
+                String instrumentId = bondEligibilityListener.getInstrumentIdForBond(bondId, termCode);
                 if (instrumentId == null) {
                     LOGGER.warn("Cannot refresh quotes - no instrument ID mapping for bond: " + bondId);
                     return;
@@ -1502,7 +1780,7 @@ public class MarketMaker implements IOrderManager {
 
                     double bidPrice = quote.getBidPrice();
                     if (bidPrice <= 0) {
-                        bidPrice = getReferencePriceForBond(bondId) - config.getBidAdjustment();
+                        bidPrice = getReferencePriceForBond(bondId, termCode, "Buy");
                     }
                     
                     if (bidPrice > 0) {
@@ -1517,7 +1795,7 @@ public class MarketMaker implements IOrderManager {
 
                     double askPrice = quote.getAskPrice();
                     if (askPrice <= 0) {
-                        askPrice = getReferencePriceForBond(bondId) + config.getDefaultSpread();
+                        askPrice = getReferencePriceForBond(bondId, termCode, "Sell");
                     }
                     
                     if (askPrice > 0) {
@@ -1533,42 +1811,156 @@ public class MarketMaker implements IOrderManager {
         }
     }
 
-    /**
-     * Get reference price for a bond (you'll need to implement this)
-     */
-    private double getReferencePriceForBond(String cusip) {
-        // This is where you'd implement your pricing logic
-        // Could come from:
-        // - Last traded price
-        // - Bond static data (par value, etc.)
-        // - External pricing service
-        // - Previous day's close
-        // For now, returning a placeholder
-        
-        try {
-            // You might get this from bond static data
-            // Map<String, Object> bondData = bondEligibilityListener.getBondData(cusip);
-            // if (bondData != null) {
-            //     // Look for any price fields in the static data
-            //     Object lastPrice = bondData.get("LastPrice");
-            //     if (lastPrice instanceof Number) {
-            //         return ((Number) lastPrice).doubleValue();
-            //     }
-                
-            //     // Fallback to par value if available
-            //     Object parValue = bondData.get("ParValue");
-            //     if (parValue instanceof Number) {
-            //         return ((Number) parValue).doubleValue();
-            //     }
-            // }
-            
-            // Default fallback price (you'd want something more sophisticated)
-            return 4.25; // Par value assumption
-            
-        } catch (Exception e) {
-            LOGGER.warn("Error getting reference price for " + cusip + ": " + e.getMessage(), e);
-            return 4.25; // Default fallback
+    private double getReferencePriceForBond(String cusip, String termCode, String side) {
+        double lastGCRate = 0.0;
+        GCBest lastGCBest = null;
+        if (termCode.equals("C")) {
+            synchronized(gcBestLock) {
+                lastGCBest = latestGcBestCash;
+                lastGCRate = latestCashGcRate;
+            }
+        } else if (termCode.equals("REG")) {
+            synchronized(gcBestLock) {
+                lastGCBest = latestGcBestREG;
+                lastGCRate = latestRegGcRate;
+            }
         }
+        
+        if (side.equals("Buy")){
+            double bid = 0;
+            if (lastGCBest == null || lastGCRate <= 0) {
+                LOGGER.warn("No valid GC rate available for Buy side on bond: " + cusip);
+                return -9999; // No valid rate, cannot quote
+            } else if (lastGCBest != null) {
+                bid = lastGCBest.getBid();
+                if (bid == 0 && lastGCRate > 0) {
+                    LOGGER.info("Using last GC traded value for pricing on Buy side for bond: " + cusip);
+                    return lastGCRate + 20;
+                } else if (bid != 0) {
+                    LOGGER.info("Using last GC bid value for pricing on Buy side for bond: " + cusip);
+                    return bid + 1;
+                }
+            }
+        }
+        
+        double gcAsk = 0.0;
+        if (side.equals("Sell")){
+            double ask = 0.0;
+            if (lastGCBest == null || lastGCRate <= 0) {
+                LOGGER.warn("No valid GC rate available for Sell side on bond: " + cusip);
+                gcAsk = -9999; // No valid rate, cannot quote
+            } else if (lastGCBest != null) {
+                ask = lastGCBest.getAsk();
+                if (ask == 0 && lastGCRate > 0) {
+                    LOGGER.info("Using last GC traded value for pricing on Sell side for bond: " + cusip);
+                    gcAsk = lastGCRate;
+                } else if (ask != 0) {
+                    LOGGER.info("Using last GC ask value for pricing on Sell side for bond: " + cusip);
+                    gcAsk = ask;
+                }
+            }
+        }
+
+        double spread = 0.0;
+        try {
+            // Get bond data from the eligibility listener
+            Map<String, Object> bondData = bondEligibilityListener.getBondData(cusip);
+            if (bondData != null) {
+                // Try to get MFA rate information
+                Object mfaData = bondData.get("mfaData");
+                if (mfaData != null && mfaData instanceof Map) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> mfaInfo = (Map<String, Object>) mfaData;
+
+                    Map<String, Object> cToday = getMfaRecord(mfaInfo, "MFA_" + cusip + "_C_Fixed_TODAY");
+                    Map<String, Object> cYest = getMfaRecord(mfaInfo, "MFA_" + cusip + "_C_Fixed_YEST");
+                    Map<String, Object> regToday = getMfaRecord(mfaInfo, "MFA_" + cusip + "_REG_Fixed_TODAY");
+                    Map<String, Object> regYest = getMfaRecord(mfaInfo, "MFA_" + cusip + "_REG_Fixed_YEST");
+                    if (termCode.equals("C")) {
+                        if (cToday != null) {
+                            Object rateAvg = cToday.get("SpreadGCAvg");
+                                if (rateAvg != null) {
+                                    try {
+                                        spread = 2 * Double.parseDouble(rateAvg.toString());
+                                        LOGGER.info("Using MFA GC Spread for {}: {}", cusip, spread);
+                                    } catch (NumberFormatException e) {
+                                        LOGGER.warn("Invalid MFA rate format for {}: {}", cusip, rateAvg);
+                                    }
+                                }
+                            } else if (cYest != null) {
+                                Object rateAvg = cYest.get("SpreadGCAvg");
+                                if (rateAvg != null) {
+                                    try {
+                                        spread = 2 * Double.parseDouble(rateAvg.toString());
+                                        LOGGER.info("Using MFA GC Spread for {}: {}", cusip, spread);
+                                    } catch (NumberFormatException e) {
+                                        LOGGER.warn("Invalid MFA rate format for {}: {}", cusip, rateAvg);
+                                    }
+                                }
+                            } else if (regYest != null) {
+                                Object rateAvg = regYest.get("SpreadGCAvg");
+                                if (rateAvg != null) {
+                                    try {
+                                        spread = 2 * Double.parseDouble(rateAvg.toString());
+                                        LOGGER.info("Using MFA GC Spread for {}: {}", cusip, spread);
+                                    } catch (NumberFormatException e) {
+                                        LOGGER.warn("Invalid MFA rate format for {}: {}", cusip, rateAvg);
+                                    }
+                                }
+                            }
+                            if (spread > 0) {
+                                LOGGER.info("Using calculated spread for {}: {}", cusip, spread);
+                                return gcAsk - spread;
+                            }
+                        } else if (termCode.equals("REG")){
+                            if (regToday != null) {
+                                Object rateAvg = regToday.get("SpreadGCAvg");
+                                if (rateAvg != null) {
+                                    try {
+                                        spread = 2 * Double.parseDouble(rateAvg.toString());
+                                        LOGGER.info("Using MFA GC Spread for {}: {}", cusip, spread);
+                                    } catch (NumberFormatException e) {
+                                        LOGGER.warn("Invalid MFA rate format for {}: {}", cusip, rateAvg);
+                                    }
+                                }
+                            } else if (cToday != null) {
+                                Object rateAvg = cToday.get("SpreadGCAvg");
+                                if (rateAvg != null) {
+                                    try {
+                                        spread = 2 * Double.parseDouble(rateAvg.toString());
+                                        LOGGER.info("Using MFA GC Spread for {}: {}", cusip, spread);
+                                    } catch (NumberFormatException e) {
+                                        LOGGER.warn("Invalid MFA rate format for {}: {}", cusip, rateAvg);
+                                    }
+                                }
+                            }
+                            if (spread > 0) {
+                                LOGGER.info("Using calculated spread for {}: {}", cusip, spread);
+                                return gcAsk - spread;
+                            }
+                        }
+                    } 
+                } else {
+                    LOGGER.warn("No bond data available for {} to calculate reference price", cusip);
+                    return -9999; // No bond data, cannot quote  
+                }
+            } catch (Exception e) {
+            LOGGER.warn("Error accessing MFA data for {}: {}", cusip, e.getMessage());
+            }
+        return -9999;
+    }
+
+    /**
+     * Helper method to safely get MFA record
+     */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> getMfaRecord(Map<String, Object> mfaInfo, String key) {
+        if (mfaInfo == null) return null;
+        Object obj = mfaInfo.get(key);
+        if (obj instanceof Map) {
+            return (Map<String, Object>) obj;
+        }
+        return null;
     }
 
     @Override
@@ -1681,8 +2073,6 @@ public class MarketMaker implements IOrderManager {
         summary.put("enabled", enabled);
         summary.put("marketSource", config.getMarketSource());
         summary.put("minSize", config.getMinSize());
-        summary.put("bidAdjustment", config.getBidAdjustment());
-        summary.put("askAdjustment", config.getAskAdjustment());
         summary.put("autoHedge", config.isAutoHedge());
         summary.put("activeQuotes", activeQuotes.size());
         summary.put("trackedInstruments", trackedInstruments.size());
@@ -1870,12 +2260,6 @@ public class MarketMaker implements IOrderManager {
                 return;
             }
 
-            if (price <= 0 || price < config.getMinPrice() || price > config.getMaxPrice()) {
-                LOGGER.warn("Invalid order price: {} (min={}, max={})", 
-                    price, config.getMinPrice(), config.getMaxPrice());
-                LOGGER.info("placeOrder: Failed: Invalid order price");
-                return;
-            }
 
             // Check if we're within trading hours for default markets
             if ("DEFAULT".equals(referenceSource) && !config.isDefaultMarketMakingAllowed()) {
@@ -1949,13 +2333,6 @@ public class MarketMaker implements IOrderManager {
             if (size <= 0) {
                 LOGGER.warn("Invalid order size: {}, must be positive", size);
                 LOGGER.info("updateOrder: Failed: Invalid order size");
-                return null;
-            }
-
-            if (price <= 0 || price < config.getMinPrice() || price > config.getMaxPrice()) {
-                LOGGER.warn("Invalid order price: {} (min={}, max={})", 
-                    price, config.getMinPrice(), config.getMaxPrice());
-                LOGGER.info("updateOrder: Failed: Invalid order price");
                 return null;
             }
 
@@ -2081,11 +2458,11 @@ public class MarketMaker implements IOrderManager {
      * @param best The updated best prices
      * @param bondId The bond ID
      */
-    private void processSymmetricQuoting(Best best, String bondId, boolean hasActiveBid, boolean hasActiveAsk) {
+    private void processSymmetricQuoting(Best best, String bondId, String termCode, boolean hasActiveBid, boolean hasActiveAsk) {
         LOGGER.debug("processSymmetricQuoting: Processing symmetric quoting for bond: {}", bondId);
 
         try {
-            String instrumentId = bondEligibilityListener.getInstrumentIdForBond(bondId);
+            String instrumentId = bondEligibilityListener.getInstrumentIdForBond(bondId, termCode);
             LOGGER.info("processSymmetricQuoting: Instrument ID for bond: {}", instrumentId);
             // if (instrumentId == null) {
             //     LOGGER.warn("No instrument ID found for bond: {}", bondId);
@@ -2129,13 +2506,13 @@ public class MarketMaker implements IOrderManager {
             String referenceAskSource = null;
             
             if (validBidSource) {
-                ourBidPrice = bestBid + config.getBidAdjustment();
+                ourBidPrice = bestBid + 0.01;
                 referenceBidSource = bidSource;
                 LOGGER.debug("Valid bid source, our bid price will be: {}", ourBidPrice);
             }
             
             if (validAskSource) {
-                ourAskPrice = bestAsk - config.getAskAdjustment();
+                ourAskPrice = bestAsk - 0.01;
                 referenceAskSource = askSource;
                 LOGGER.debug("Valid ask source, our ask price will be: {}", ourAskPrice);
             }
@@ -2301,6 +2678,45 @@ public class MarketMaker implements IOrderManager {
         } catch (Exception e) {
             LOGGER.error("updateExistingSymmetricQuotes: Error updating symmetric quotes for bond {}: {}", 
                 bondId, e.getMessage(), e);
+        }
+    }
+        /**
+     * Gets the latest GCBest for Cash 
+     * @return The latest GCBest for Cash, may be null if not yet received
+     */
+    public GCBest getLatestGcBestCash() {
+        synchronized(gcBestLock) {
+            return latestGcBestCash;
+        }
+    }
+
+    /**
+     * Gets the latest GCBest for REG
+     * @return The latest GCBest for REG, may be null if not yet received
+     */
+    public GCBest getLatestGcBestREG() {
+        synchronized(gcBestLock) {
+            return latestGcBestREG;
+        }
+    }
+
+    /**
+     * Gets the latest Cash GC rate
+     * @return The latest Cash GC rate, 0 if not yet received
+     */
+    public double getLatestCashGcRate() {
+        synchronized(gcBestLock) {
+            return latestCashGcRate;
+        }
+    }
+
+    /**
+     * Gets the latest REG GC rate
+     * @return The latest REG GC rate, 0 if not yet received
+     */
+    public double getLatestRegGcRate() {
+        synchronized(gcBestLock) {
+            return latestRegGcRate;
         }
     }
 }
