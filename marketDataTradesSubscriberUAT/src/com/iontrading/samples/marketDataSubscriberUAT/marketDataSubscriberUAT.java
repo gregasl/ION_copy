@@ -210,14 +210,17 @@ public class marketDataSubscriberUAT {
     
     // Fields for subscription
     private String[] fieldsTrade = new String[]{
-        "Id", "Code", "Date", "InstrumentId", "Desc", "CompNameOrigin", "DPriceStart", "CashStart", 
-        "OrderId", "OrigSrc","Price", "Qty", "TimeCreation"
+        "Id", "Code", "CashStop", "Date", "DateCreation", "DateMaturity", "DateSettl", "InstrumentId", "Desc", "CompNameOrigin", "DPriceStart", "CashStart", 
+        "MarketAlias", "OrderId", "OrderNo", "OrigSrc", "OrigTrader","Price", "Qty", "QtyDeleted", "QtyNominal", "QtyTick", "Rejectable", "TimeCreation",
+        "StatusStr", "TermCode", "Time", "TimeCreation", "Trader", "Type", "VerbStr", "Yield"
     };
 
     // Fields for subscription
     private String[] fieldsOrder = new String[]{
-        "Active", "Code", "CompNameOrigin", "Date", "Desc", "Id", "InstrumentId", "OrderNo", "OrigId", "Price", "QtyFill", "QtyStatus", "QtyTot", "TimeInForce", "TimeUpd", 
-        "Trader", "TradingStatus", "Verb" 
+        "Active", "ActiveStr", "Code", "CompNameOrigin", "CurrentAction", "CurrentActionStr", "Date", "Desc", "Id", "InstrumentId", "IndQtyGoal", "MarketStatus", 
+        "OrderNo", "OrigCode", "OrigId", "OrigSrc", "Price", "QtyFill", "QtyGoal", "QtyHidden", "QtyHit", "QtyHitDeleted", "QtyHitExt", "QtyHitWorkUp", 
+        "QtyLocked", "QtyLost", "QtyMin", "QtyOvertraded", "QtyShown", "QtyStatus", "QtyStatusStr", "QtyTick", "QtyTot", "QtyTotReq", "StatusStr", 
+        "Time", "TimeCreation", "TimeInForce", "TimeUpd", "Trader", "TradingStatus", "TradingStatusStr", "Verb", "VerbStr", "Yield" 
     };
 
     private String[] fieldsRefPrice = new String[]{

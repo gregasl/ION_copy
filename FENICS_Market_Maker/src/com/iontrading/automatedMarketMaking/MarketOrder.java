@@ -446,12 +446,18 @@ public void onResult(MkvFunctionCallEvent mkvFunctionCallEvent, MkvSupply mkvSup
     return marketSource;
   }
   
-
   /**
  * @return The quantity filled for this order
  */
 public double getQtyFilled() {
     return qtyFilled;
+}
+
+  /**
+ * @return The quantity filled for this order
+ */
+public void setQtyFilled(double qtyFilled) {
+    this.qtyFilled = qtyFilled;
 }
 
 /**

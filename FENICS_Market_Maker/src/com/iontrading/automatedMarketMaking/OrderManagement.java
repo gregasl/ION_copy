@@ -478,7 +478,6 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
 
     initializeSignalHandlers();
 
-
 }
 
   /**
@@ -1273,7 +1272,6 @@ private void trySubscribeAndRemoveListener(MkvObject mkvObject, MkvPublishManage
                 return order;
             }
         }
-        
         return null;
     }
 
@@ -1298,120 +1296,69 @@ private void trySubscribeAndRemoveListener(MkvObject mkvObject, MkvPublishManage
         try {
             // Check if this is our order by looking at CompNameOrigin (should match our app ID)
             String appName = mkvRecord.getValue("CompNameOrigin").getString();
-            if (!"MarketMaker".equals(appName)) {
-                return; // Not our order
+            String src = mkvRecord.getValue("OrigSrc").getString();
+
+            if (!"MarketMaker".equals(appName) || !"FENICS_USREPO".equals(src)) {
+                return; // Not a market maker order nor a FENICS execution
             }
             
             // Get order details
             String orderId = mkvRecord.getValue("Id").getString();
             String instrumentId = mkvRecord.getValue("InstrumentId").getString();
-            String userData = mkvRecord.getValue("UserData").getString();
-            String tradeStatus = mkvRecord.getValue("TradeStatus").getString();
+            String origId = mkvRecord.getValue("OrigId").getString();
+            String VerbStr = mkvRecord.getValue("VerbStr").getString();
+            String tradeStatus = mkvRecord.getValue("TradingStatusStr").getString();
             double qtyFill = mkvRecord.getValue("QtyFill").getReal();
             double price = mkvRecord.getValue("Price").getReal();
 
-            // If no userData, we can't find the request ID
-            if (userData == null || userData.isEmpty()) {
-                LOGGER.debug("Order update missing UserData: {}", orderId);
-                return;
-            }
-            
-            // Parse request ID from UserData
-            int reqId;
-            try {
-                reqId = Integer.parseInt(userData);
-            } catch (NumberFormatException e) {
-                LOGGER.warn("Invalid request ID in UserData: {}", userData);
-                return;
-            }
-            
-            LOGGER.debug("Processing order update: reqId={}, orderId={}, status={}, fill={}", 
-                reqId, orderId, tradeStatus, qtyFill);
-            
-            // Get the corresponding MarketOrder from our cache
-            MarketOrder order = getOrder(reqId);
+            MarketOrder order = getOrderByOrderId(origId);
             if (order == null) {
-                LOGGER.debug("Order not found in cache: reqId={}", reqId);
+                LOGGER.debug("Order not found in cache: origId={}", origId);
                 return;
             }
+            double prevQtyFilled = order.getQtyFilled();
+            double newQtyFilled = qtyFill - prevQtyFilled;
+            order.setQtyFilled(qtyFill);
+
+            LOGGER.debug("Processing order update: origId={}, orderId={}, status={}, fill={}", 
+                origId, orderId, tradeStatus, qtyFill);
             
-            // Check if this update indicates a fill
-            if (qtyFill > 0 && ("Filled".equals(tradeStatus) || "PartiallyFilled".equals(tradeStatus))) {
-                // Get current fill quantity tracked for this order
-                double currentFill = order.getQtyFilled();
-                
-                // If we have new fill quantity
-                if (qtyFill > currentFill) {
-                    double newFillQty = qtyFill - currentFill;
-                    
-                    LOGGER.info("Order fill detected: orderId={}, reqId={}, newQty={}, price={}, status={}",
-                        orderId, reqId, newFillQty, price, tradeStatus);
-                    
-                    // Now find the active quote that contains this order
-                    if (marketMaker != null) {
-                        // Find the ActiveQuote containing this order
-                        for (MarketMaker.ActiveQuote quote : marketMaker.getActiveQuotes().values()) {
-                            MarketOrder bidOrder = quote.getBidOrder();
-                            MarketOrder askOrder = quote.getAskOrder();
-                            String termCode = null;
-                            if (instrumentId.endsWith("C_Fixed")) {
-                                termCode = "C";
-                            } else if (instrumentId.endsWith("REG_Fixed")) {
-                                termCode = "REG";
-                            } else {
-                                LOGGER.warn("Unknown term code for instrument: {}", instrumentId);
-                                return;
-                            }
-
-                            String side = null;
-                            String referenceSource = null;
-                            
-                            if (bidOrder != null && bidOrder.getOrderId() != null && 
-                                bidOrder.getOrderId().equals(orderId)) {
-                                side = "Buy";
-                                referenceSource = quote.getBidReferenceSource();
-                                LOGGER.info("Fill was on a bid for {}", quote.getCusip());
-                            } else if (askOrder != null && askOrder.getOrderId() != null && 
-                                    askOrder.getOrderId().equals(orderId)) {
-                                side = "Sell";
-                                referenceSource = quote.getAskReferenceSource();
-                                LOGGER.info("Fill was on an ask for {}", quote.getCusip());
-                            }
-                            
-                            if (instrumentId.endsWith("C_Fixed")) {
-                                termCode = "C";
-                            } else if (instrumentId.endsWith("REG_Fixed")) {
-                                termCode = "REG";
-                            } else {
-                                LOGGER.warn("Unknown term code for instrument: {}", instrumentId);
-                                return;
-                            }
-
-                            if (side != null) {
-                                // Update our tracking of filled quantity
-                                // Since MarketOrder doesn't have updateFilled, we'll need to track this elsewhere
-                                // For now, we'll just execute the hedge trade with the new fill amount
-                                
-                                // Execute hedge trade for the new fill quantity
-                                marketMaker.executeHedgeTrade(
-                                    quote.getCusip(), 
-                                    termCode,
-                                    side,  // Passing side twice as the method requires it
-                                    newFillQty, 
-                                    price,
-                                    referenceSource
-                                );
-                                break;
-                            }
-                        }
-                    }
+            double orderPrice = 0.0;
+            String market = null;
+            // Get the best price information for this instrument
+            Best bestMarket = latestBestByInstrument.get(instrumentId);
+            if (bestMarket == null) {
+                LOGGER.warn("No best market found for instrument: {}", instrumentId);
+                return; // Cannot process without best market
+            } else {
+                if (VerbStr.equals("Buy")) {
+                    orderPrice = bestMarket.getBid();
+                    market = bestMarket.getBidSrc();
+                } else if (VerbStr.equals("Sell")) {
+                    orderPrice = bestMarket.getAsk();
+                    market = bestMarket.getAskSrc();
+                } else {
+                    LOGGER.warn("Unknown verb for order: {}", VerbStr);
+                    return; // Cannot process unknown verb
                 }
             }
             
+            // Now we use the market variable to get the trader
+            String trader = getTraderForVenue(market);
+
+            if (!(trader == null) && orderPrice > 0.0 && newQtyFilled > 0.0) {
+                LOGGER.info("Adding order: market={}, trader={}, instrumentId={}, verb={}, qtyFilled={}, price={}",
+                    market, trader, instrumentId, VerbStr, newQtyFilled, orderPrice);
+                addOrder(market, trader, instrumentId, VerbStr, newQtyFilled, orderPrice, "Limit", "FAS");
+            } else {
+                LOGGER.warn("No trader configured for market: {}", market);
+                return; // Cannot process without trader
+            }
+
+
             // Handle order completion/cancellation
-            if ("Canceled".equals(tradeStatus) || "Filled".equals(tradeStatus) || 
-                "Rejected".equals(tradeStatus)) {
-                removeOrder(reqId);
+            if (!"Active".equals(tradeStatus)) {
+                orderDead(order);
             }
         } catch (Exception e) {
             LOGGER.error("Error processing order update: {}", e.getMessage(), e);
