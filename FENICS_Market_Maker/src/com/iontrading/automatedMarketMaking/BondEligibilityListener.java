@@ -339,9 +339,6 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
             // Check SOMA holdings (must be at least $1 billion)
             Object somaObj = bondData.get("SDS_SOMA");
             LOGGER.info("Checking SOMA holdings for bond {}: {}", cusip, somaObj);
-            if (somaObj == null) {
-                somaObj = bondData.get("SDS_SOMA");
-            }
             
             if (somaObj != null) {
                 try {
