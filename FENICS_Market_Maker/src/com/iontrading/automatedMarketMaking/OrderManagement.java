@@ -517,9 +517,12 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
     private void initializeMarketMaker() {
         try {
             // Create default market maker configuration
-            marketMakerConfig = new MarketMakerConfig();
-            marketMakerConfig.setAutoEnabled(false); // Start disabled by default
-            marketMakerConfig.setQuoteUpdateIntervalSeconds(30);
+            marketMakerConfig = new MarketMakerConfig.Builder()
+                .setAutoEnabled(false)
+                .setQuoteUpdateIntervalSeconds(30)
+                .setMarketSource("FENICS_USREPO")
+                .setTargetVenues("BTEC_REPO_US", "DEALERWEB_REPO")
+                .build();
             LOGGER.info("Default market maker configuration created: {}", marketMakerConfig);
             // Create the market maker instance
             marketMaker = new MarketMaker(this, marketMakerConfig);
