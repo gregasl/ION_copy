@@ -1,5 +1,6 @@
 package com.iontrading.automatedMarketMaking;
 
+import java.time.LocalTime;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
@@ -8,15 +9,16 @@ import java.util.Set;
  * Configuration for the MarketMaker component
  */
 public class MarketMakerConfig {
-    // Default spread in basis points
-    private int defaultSpreadBps = 5;
-    
-    // Default size for quotes
-    private int defaultSize = 100;
-    
+
     // Flag to enable automated market making
     private boolean autoEnabled = false;
     
+    private LocalTime cashMarketOpenTime = LocalTime.of(7, 0); // 7:00 AM
+    private LocalTime cashMarketCloseTime = LocalTime.of(23, 55); // 11:55 PM
+    private LocalTime regMarketOpenTime = LocalTime.of(9, 0); // 9:00 AM
+    private LocalTime regMarketCloseTime = LocalTime.of(16, 30); // 4:30 PM
+    private boolean enforceMarketHours = true;
+
     // Interval for quote updates in seconds
     private int quoteUpdateIntervalSeconds = 30;
     private String marketSource = "FENICS_USREPO";
@@ -24,18 +26,11 @@ public class MarketMakerConfig {
 
     // Trading parameters
     private double minSize = 25.0;
-    private double bidAdjustment = 0.01;
-    private double askAdjustment = 0.01;
-    private double minSpread = 0.02;
-    private double defaultSpread = 0.05;
-    private double minPrice = 0;
-    private double maxPrice = 5.0;
 
 
     private String orderType = "Limit";
     private String timeInForce = "FAS"; // Good Till Cancel
     private boolean autoHedge = false;
-    private boolean cashOnly = true;
     private boolean defaultMarketMakingAllowed = true;
 
     /**
@@ -53,30 +48,11 @@ public class MarketMakerConfig {
      * @param autoEnabled Flag to enable automated market making
      * @param quoteUpdateIntervalSeconds Interval for quote updates in seconds
      */
-    public MarketMakerConfig(int defaultSpreadBps, int defaultSize, 
-                           boolean autoEnabled, int quoteUpdateIntervalSeconds) {
-        this.defaultSpreadBps = defaultSpreadBps;
-        this.defaultSize = defaultSize;
+    public MarketMakerConfig(boolean autoEnabled, int quoteUpdateIntervalSeconds) {
         this.autoEnabled = autoEnabled;
         this.quoteUpdateIntervalSeconds = quoteUpdateIntervalSeconds;
     }
-    
-    public int getDefaultSpreadBps() {
-        return defaultSpreadBps;
-    }
-    
-    public void setDefaultSpreadBps(int defaultSpreadBps) {
-        this.defaultSpreadBps = defaultSpreadBps;
-    }
-    
-    public int getDefaultSize() {
-        return defaultSize;
-    }
-    
-    public void setDefaultSize(int defaultSize) {
-        this.defaultSize = defaultSize;
-    }
-    
+       
     public boolean isAutoEnabled() {
         return autoEnabled;
     }
@@ -103,24 +79,6 @@ public class MarketMakerConfig {
     public double getMinSize() { return minSize; }
     public void setMinSize(double minSize) { this.minSize = minSize; }
 
-    public double getBidAdjustment() { return bidAdjustment; }
-    public void setBidAdjustment(double bidAdjustment) { this.bidAdjustment = bidAdjustment; }
-
-    public double getAskAdjustment() { return askAdjustment; }
-    public void setAskAdjustment(double askAdjustment) { this.askAdjustment = askAdjustment; }
-
-    public double getMinSpread() { return minSpread; }
-    public void setMinSpread(double minSpread) { this.minSpread = minSpread; }
-
-    public double getDefaultSpread() { return defaultSpread; }
-    public void setDefaultSpread(double defaultSpread) { this.defaultSpread = defaultSpread; }
-
-    public double getMinPrice() { return minPrice; }
-    public void setMinPrice(double minPrice) { this.minPrice = minPrice; }
-
-    public double getMaxPrice() { return maxPrice; }
-    public void setMaxPrice(double maxPrice) { this.maxPrice = maxPrice; }
-
     public String getOrderType() { return orderType; }
     public void setOrderType(String orderType) { this.orderType = orderType; }
 
@@ -130,23 +88,59 @@ public class MarketMakerConfig {
     public boolean isAutoHedge() { return autoHedge; }
     public void setAutoHedge(boolean autoHedge) { this.autoHedge = autoHedge; }
 
-    public boolean isCashOnly() { return cashOnly; }
-    public void setCashOnly(boolean cashOnly) { this.cashOnly = cashOnly; }
-
     public boolean isDefaultMarketMakingAllowed() { return defaultMarketMakingAllowed; }
     public void setDefaultMarketMakingAllowed(boolean defaultMarketMakingAllowed) { 
         this.defaultMarketMakingAllowed = defaultMarketMakingAllowed; 
     }
 
-public Set<String> getTargetVenuesSet() {
-    return new HashSet<>(Arrays.asList(targetVenues));
-}
+    public LocalTime getCashMarketOpenTime() {
+        return cashMarketOpenTime;
+    }
+
+    public void setCashMarketOpenTime(LocalTime cashMarketOpenTime) {
+        this.cashMarketOpenTime = cashMarketOpenTime;
+    }
+
+    public LocalTime getCashMarketCloseTime() {
+        return cashMarketCloseTime;
+    }
+
+    public void setCashMarketCloseTime(LocalTime cashMarketCloseTime) {
+        this.cashMarketCloseTime = cashMarketCloseTime;
+    }
+
+    public LocalTime getRegMarketOpenTime() {
+        return regMarketOpenTime;
+    }
+
+    public void setRegMarketOpenTime(LocalTime regMarketOpenTime) {
+        this.regMarketOpenTime = regMarketOpenTime;
+    }
+
+    public LocalTime getRegMarketCloseTime() {
+        return regMarketCloseTime;
+    }
+
+    public void setRegMarketCloseTime(LocalTime regMarketCloseTime) {
+        this.regMarketCloseTime = regMarketCloseTime;
+    }
+
+    public boolean isEnforceMarketHours() {
+        return enforceMarketHours;
+    }
+
+    public void setEnforceMarketHours(boolean enforceMarketHours) {
+        this.enforceMarketHours = enforceMarketHours;
+    }
+
+
+    public Set<String> getTargetVenuesSet() {
+        return new HashSet<>(Arrays.asList(targetVenues));
+    }
     
     @Override
     public String toString() {
         return "MarketMakerConfig{" +
-            "defaultSpreadBps=" + defaultSpreadBps +
-            ", defaultSize=" + defaultSize +
             ", autoEnabled=" + autoEnabled +
             ", quoteUpdateIntervalSeconds=" + quoteUpdateIntervalSeconds +
             '}';

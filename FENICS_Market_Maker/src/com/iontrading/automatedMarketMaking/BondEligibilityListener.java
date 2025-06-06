@@ -42,8 +42,8 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
     private final Set<String> eligibleBonds = ConcurrentHashMap.newKeySet();
     
     // Store bond to instrument mapping
-    public final Map<String, String> bondToInstrumentMap = new ConcurrentHashMap<>();
-    
+    public final Map<String, Map<String, String>> bondToInstrumentMaps = new ConcurrentHashMap<>();    
+
     // Store bond data
     private final Map<String, BondConsolidatedData> consolidatedBondData = new ConcurrentHashMap<>();
     
@@ -137,10 +137,12 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
     /**
      * Get instrument ID for a bond
      */
-    public String getInstrumentIdForBond(String bondId) {
-        return bondToInstrumentMap.get(bondId);
+    public String getInstrumentIdForBond(String bondId, String TermCode) {
+        Map<String, String> instrumentMap = bondToInstrumentMaps.get(bondId);
+        if (instrumentMap == null) return null;
+        return instrumentMap.get(TermCode);
     }
-    
+
     /**
      * Get bond data
      */
@@ -152,12 +154,18 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
     /**
      * Add a bond as eligible for market making
      */
-    public void addEligibleBond(String cusip, String instrumentId, Map<String, Object> bondData) {
+    public void addEligibleBond(String cusip, String instrumentId, String TermCode, Map<String, Object> bondData) {
         boolean wasEligible = eligibleBonds.contains(cusip);
         
         eligibleBonds.add(cusip);
-        bondToInstrumentMap.put(cusip, instrumentId);
+
+        // Get or create the instrument map for this bond
+        Map<String, String> instrumentMap = bondToInstrumentMaps.computeIfAbsent(
+            cusip, k -> new ConcurrentHashMap<>());
         
+        // Add the instrument ID for the specific market/term
+        instrumentMap.put(TermCode, instrumentId);
+
         // Update to use consolidatedBondData instead of bondDataMap
         BondConsolidatedData consolidatedData = consolidatedBondData.computeIfAbsent(
             cusip, k -> new BondConsolidatedData(k));
@@ -173,6 +181,9 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
                     Collections.singletonMap(key.substring(4), entry.getValue()));
             } else if (key.startsWith("SDS_")) {
                 consolidatedData.updateSdsData(
+                    Collections.singletonMap(key.substring(4), entry.getValue()));
+            } else if (key.startsWith("MFA_")) {
+                consolidatedData.updateMfaData(
                     Collections.singletonMap(key.substring(4), entry.getValue()));
             } else {
                 // Default to static data for unprefixed fields
@@ -195,7 +206,7 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
         boolean wasEligible = eligibleBonds.contains(cusip);
         
         eligibleBonds.remove(cusip);
-        String instrumentId = bondToInstrumentMap.remove(cusip);
+        Map<String, String> instrumentMap = bondToInstrumentMaps.remove(cusip);
         
         // Update to use consolidatedBondData instead of bondDataMap
         BondConsolidatedData bondData = consolidatedBondData.get(cusip);
@@ -203,7 +214,7 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
             bondData.getConsolidatedView() : null;
         
         if (wasEligible) {
-            LOGGER.info("Bond {} removed from eligible list (instrument: {})", cusip, instrumentId);
+            LOGGER.info("Bond {} removed from eligible list", cusip);
             notifyEligibilityChange(cusip, false, consolidatedView);
         }
     }
@@ -374,13 +385,102 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
                 }
             }
             
-            // Bond passes all criteria
+            // If yesterday's Cash market was rich, not eligible for C market making
+            Object mfaData = bondData.get("mfaData");
+            if (mfaData != null && mfaData instanceof Map) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> mfaInfo = (Map<String, Object>) mfaData;
+
+                Map<String, Object> cToday = getMfaRecord(mfaInfo,"MFA_" + cusip + "_C_Fixed_TODAY");
+                Map<String, Object> cYest = getMfaRecord(mfaInfo,"MFA_" + cusip + "_C_Fixed_YEST");
+                Map<String, Object> regToday = getMfaRecord(mfaInfo,"MFA_" + cusip + "_REG_Fixed_TODAY");
+                Map<String, Object> regYest = getMfaRecord(mfaInfo,"MFA_" + cusip + "_REG_Fixed_YEST");
+
+                if (cToday != null) {
+                    Object rateAvg = cToday.get("SpreadGCAvg");
+                    if (rateAvg != null) {
+                        try {
+                            double mfaRate = Double.parseDouble(rateAvg.toString());
+                            if (mfaRate > 15) {
+                                eligibleC = false;
+                                eligibleREG = false;
+                            }
+                            LOGGER.info("Today C spread to GC is too high to offer C|REG for cusip {}: {}", mfaRate, cusip);
+
+                        } catch (NumberFormatException e) {
+                            LOGGER.warn("Invalid MFA rate format for {}: {}", cusip, rateAvg);
+                        }
+                    }
+                }
+
+                if (regToday != null) {
+                    Object rateAvg = regToday.get("SpreadGCAvg");
+                    if (rateAvg != null) {
+                        try {
+                            double mfaRate = Double.parseDouble(rateAvg.toString());
+                            if (mfaRate > 15) {
+                                eligibleREG = false;
+                            }
+                            LOGGER.info("Today REG spread to GC is too high to offer REG for cusip {}: {}", mfaRate, cusip);
+
+                        } catch (NumberFormatException e) {
+                            LOGGER.warn("Invalid MFA rate format for {}: {}", cusip, rateAvg);
+                        }
+                    }
+                }
+
+                if (cYest != null) {
+                    Object rateAvg = cYest.get("SpreadGCAvg");
+                    if (rateAvg != null) {
+                        try {
+                            double mfaRate = Double.parseDouble(rateAvg.toString());
+                            if (mfaRate > 15) {
+                                eligibleC = false;
+                            }
+                            LOGGER.info("Yest C spread to GC is too high to offer C for cusip {}: {}", mfaRate, cusip);
+
+                        } catch (NumberFormatException e) {
+                            LOGGER.warn("Invalid MFA rate format for {}: {}", cusip, rateAvg);
+                        }
+                    }
+                }
+
+                if (regYest != null) {
+                    Object rateAvg = regYest.get("SpreadGCAvg");
+                    if (rateAvg != null) {
+                        try {
+                            double mfaRate = Double.parseDouble(rateAvg.toString());
+                            if (mfaRate > 15) {
+                                eligibleC = false;
+                            }
+                            LOGGER.info("Yest REG spread to GC is too high to offer REG for cusip {}: {}", mfaRate, cusip);
+
+                        } catch (NumberFormatException e) {
+                            LOGGER.warn("Invalid MFA rate format for {}: {}", cusip, rateAvg);
+                        }
+                    }
+                }
+            }
+            // Bond eligibility result
             return new EligibilityResult(eligibleC, eligibleREG);
 
         } catch (Exception e) {
             LOGGER.error("Error evaluating eligibility for bond {}: {}", cusip, e.getMessage(), e);
             return new EligibilityResult(false, false);
         }
+    }
+
+    /**
+     * Helper method to safely get MFA record
+     */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> getMfaRecord(Map<String, Object> mfaInfo, String key) {
+        if (mfaInfo == null) return null;
+        Object obj = mfaInfo.get(key);
+        if (obj instanceof Map) {
+            return (Map<String, Object>) obj;
+        }
+        return null;
     }
 
     /**
@@ -407,7 +507,7 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
                     if (instrumentId != null) {
                         // Using the BondConsolidatedData directly
                         eligibleBonds.add(cusip);
-                        bondToInstrumentMap.put(cusip, instrumentId);
+                        bondToInstrumentMaps.computeIfAbsent(cusip, k -> new ConcurrentHashMap<>()).put("C", instrumentId);
                         notifyEligibilityChange(cusip, true, bondData.getConsolidatedView());
                         eligibleCount++;
                         
@@ -423,7 +523,7 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
                     String instrumentId = extractInstrumentId(cusip, bondData);
                     if (instrumentId != null) {
                         eligibleBonds.add(cusip);
-                        bondToInstrumentMap.put(cusip, instrumentId);
+                        bondToInstrumentMaps.computeIfAbsent(cusip, k -> new ConcurrentHashMap<>()).put("REG", instrumentId);
                         notifyEligibilityChange(cusip, true, bondData.getConsolidatedView());
                         eligibleCount++;
 
@@ -491,6 +591,15 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
                         return instrumentId.toString();
                     }
                 }
+
+                // 4. Check MFA data for any relevant mapping
+                Map<String, Object> mfaData = bondData.getMfaData();
+                if (mfaData != null) {
+                    Object instrumentId = mfaData.get("Id");
+                    if (instrumentId != null) {
+                        return instrumentId.toString();
+                    }
+                }
             }
             // Handle regular Map<String, Object>
             else if (bondDataObj instanceof Map) {
@@ -502,9 +611,8 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
                 if (instrumentId != null) {
                     return instrumentId.toString();
                 }
-                
                 // Then try with prefixes
-                String[] prefixes = {"STATIC_", "POS_", "SDS_"};
+                String[] prefixes = {"STATIC_", "POS_", "SDS_", "MFA_"};
                 for (String prefix : prefixes) {
                     Object prefixedId = bondData.get(prefix + "InstrumentId");
                     if (prefixedId != null) {
@@ -523,9 +631,9 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
             }
             
             // Check if we already have a mapping
-            String existingMapping = bondToInstrumentMap.get(cusip);
-            if (existingMapping != null) {
-                return existingMapping;
+            Map<String, String> instrumentMap = bondToInstrumentMaps.get(cusip);
+            if (instrumentMap != null && !instrumentMap.isEmpty()) {
+                return instrumentMap.values().iterator().next(); // Return first available instrument
             }
             
             // Fallback: construct instrument ID from CUSIP
@@ -596,6 +704,11 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
                 cusip = extractCusipFromPositionRecord(recordName);
                 recordType = "POSITION";
             }
+            else if (recordName.startsWith("ALL.STATISTICS.MFA.")) {
+                // Example: ALL.STATISTICS.MFA.MFA_912810RW0_C_Fixed_TODAY
+                cusip = extractCusipFromMfaRecord(recordName);
+                recordType = "MFA";
+            }
             else {
                 LOGGER.debug("Ignoring record {}: unrecognized pattern", recordName);
                 return;
@@ -628,7 +741,7 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
                     // Extract instrument ID if available
                     Object instrumentId = extractedData.get("InstrumentId");
                     if (instrumentId != null) {
-                        bondToInstrumentMap.put(cusip, instrumentId.toString());
+                        bondToInstrumentMaps.computeIfAbsent(cusip, k -> new ConcurrentHashMap<>()).put("C", instrumentId.toString());
                     }
                     break;
                     
@@ -637,8 +750,14 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
                     bondData.updatePositionData(extractedData);
                     LOGGER.info("Extracted position data for CUSIP {}: {}", cusip, extractedData);
                     break;
+
+                case "MFA":
+                    LOGGER.info("Updating MFA data for CUSIP: {}", cusip);
+                    bondData.updateMfaData(extractedData);
+                    LOGGER.info("Extracted MFA data for CUSIP {}: {}", cusip, extractedData);
+                    break;
             }
-            
+
             // Check if we should update eligibility status
             evaluateBondEligibility(cusip, bondData);
             
@@ -772,6 +891,35 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
     }
 
     /**
+     * Extract CUSIP from MFA record
+     * Example: ALL.STATISTICS.MFA.MFA_912810RW0_C_Fixed_TODAY
+     */
+    private String extractCusipFromMfaRecord(String recordName) {
+        try {
+            if (recordName == null) return null;
+            LOGGER.info("Extracting CUSIP from MFA record: {}", recordName);
+            String[] parts = recordName.split("\\.");
+            if (parts.length < 4) return null;
+            
+            String lastPart = parts[3];
+
+            // Extract CUSIP from complex MFA ID
+            String[] subParts = lastPart.split("_");
+            if (subParts.length > 1) {  // Changed from > 0 to > 1
+                String potentialCusip = subParts[1];  // Changed from index 0 to index 1
+                if (isValidCusip(potentialCusip)) {
+                    return potentialCusip;
+                }
+            }
+            
+            return null;
+        } catch (Exception e) {
+            LOGGER.error("Error extracting CUSIP from MFA record: {}", e.getMessage(), e);
+            return null;
+        }
+    }
+    
+    /**
      * Extract CUSIP from position record
      * Example: USD.IU_POSITION.VMO_REPO_US.91282CMM0_20250530_STD
      */
@@ -799,7 +947,7 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
             return null;
         }
     }
-    
+
     // MkvPublishListener implementation
     public void onSubscribe(MkvRecord record, MkvSupply supply, boolean isSnapshot) {
         // Not implemented for this listener
@@ -823,10 +971,11 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
             
             if (shouldBeEligible.eligibleForTermC && !currentlyEligible) {
                 // Get instrument ID from mapped data or create one
-                String instrumentId = bondToInstrumentMap.get(cusip);
+                Map<String, String> instrumentMap = bondToInstrumentMaps.get(cusip);
+                String instrumentId = instrumentMap != null ? instrumentMap.get("C") : null;
                 if (instrumentId == null) {
                     instrumentId = createInstrumentIdForCusip(cusip, "C");
-                    bondToInstrumentMap.put(cusip, instrumentId);
+                    bondToInstrumentMaps.computeIfAbsent(cusip, k -> new ConcurrentHashMap<>()).put("C", instrumentId);
                 }
                 
                 // Add to eligible list
@@ -843,12 +992,12 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
                 
                 // Notify listeners
                 notifyEligibilityChange(cusip, false, bondData.getConsolidatedView());
-            } else if (shouldBeEligible.eligibleForTermREG && !currentlyEligible) {
                 // Handle REG term eligibility
-                String instrumentId = bondToInstrumentMap.get(cusip);
+                Map<String, String> instrumentMap = bondToInstrumentMaps.get(cusip);
+                String instrumentId = instrumentMap != null ? instrumentMap.get("REG") : null;
                 if (instrumentId == null) {
                     instrumentId = createInstrumentIdForCusip(cusip, "REG");
-                    bondToInstrumentMap.put(cusip, instrumentId);
+                    bondToInstrumentMaps.computeIfAbsent(cusip, k -> new ConcurrentHashMap<>()).put("REG", instrumentId);
                 }
                 
                 eligibleBonds.add(cusip);
@@ -882,16 +1031,19 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
         int withStaticAndPosition = 0;
         int withStaticAndSds = 0;
         int withPositionAndSds = 0;
+        int withMfaOnly = 0; // MFA is not currently tracked in status
+        int withMfaAndPosition = 0; // MFA + Position is not currently tracked in status
         int withAllData = 0;
         
         for (BondConsolidatedData data : consolidatedBondData.values()) {
             boolean hasStatic = data.hasStaticData();
             boolean hasPosition = data.hasPositionData();
             boolean hasSds = data.hasSdsData();
-            
-            if (hasStatic && hasPosition && hasSds) withAllData++;
-            else if (hasStatic && hasPosition) withStaticAndPosition++;
-            else if (hasStatic && hasSds) withStaticAndSds++;
+            boolean hasMfa = data.hasMfaData();
+
+            if (hasStatic && hasPosition && hasSds && hasMfa) withAllData++;
+            else if (hasStatic && hasPosition && hasMfa) withStaticAndPosition++;
+            else if (hasStatic && hasSds && hasMfa) withStaticAndSds++;
             else if (hasPosition && hasSds) withPositionAndSds++;
             else if (hasStatic) withStaticOnly++;
             else if (hasPosition) withPositionOnly++;
@@ -904,6 +1056,8 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
         status.put("bondsWithStaticAndPosition", withStaticAndPosition);
         status.put("bondsWithStaticAndSds", withStaticAndSds);
         status.put("bondsWithPositionAndSds", withPositionAndSds);
+        status.put("bondsWithMfaOnly", withMfaOnly);
+        status.put("bondsWithMfaAndPosition", withMfaAndPosition);
         status.put("bondsWithAllData", withAllData);
         status.put("listeners", eligibilityListeners.size());
         

@@ -519,8 +519,6 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
         try {
             // Create default market maker configuration
             marketMakerConfig = new MarketMakerConfig();
-            marketMakerConfig.setDefaultSpreadBps(5);
-            marketMakerConfig.setDefaultSize(25);
             marketMakerConfig.setAutoEnabled(false); // Start disabled by default
             marketMakerConfig.setQuoteUpdateIntervalSeconds(30);
             LOGGER.info("Default market maker configuration created: {}", marketMakerConfig);
@@ -944,16 +942,12 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
         
         try {
             // Extract configuration parameters
-            Number spreadBps = (Number) controlMessage.getOrDefault("spreadBps", marketMakerConfig.getDefaultSpreadBps());
-            Number size = (Number) controlMessage.getOrDefault("size", marketMakerConfig.getDefaultSize());
             Boolean autoEnabled = (Boolean) controlMessage.getOrDefault("autoEnabled", marketMakerConfig.isAutoEnabled());
             Number updateInterval = (Number) controlMessage.getOrDefault("updateInterval", 
-                                                                    marketMakerConfig.getQuoteUpdateIntervalSeconds());
+            marketMakerConfig.getQuoteUpdateIntervalSeconds());
             
             // Create new configuration
             MarketMakerConfig newConfig = new MarketMakerConfig(
-                spreadBps.intValue(),
-                size.intValue(),
                 autoEnabled,
                 updateInterval.intValue()
             );
@@ -1310,6 +1304,7 @@ private void trySubscribeAndRemoveListener(MkvObject mkvObject, MkvPublishManage
             
             // Get order details
             String orderId = mkvRecord.getValue("Id").getString();
+            String instrumentId = mkvRecord.getValue("InstrumentId").getString();
             String userData = mkvRecord.getValue("UserData").getString();
             String tradeStatus = mkvRecord.getValue("TradeStatus").getString();
             double qtyFill = mkvRecord.getValue("QtyFill").getReal();
@@ -1358,7 +1353,16 @@ private void trySubscribeAndRemoveListener(MkvObject mkvObject, MkvPublishManage
                         for (MarketMaker.ActiveQuote quote : marketMaker.getActiveQuotes().values()) {
                             MarketOrder bidOrder = quote.getBidOrder();
                             MarketOrder askOrder = quote.getAskOrder();
-                            
+                            String termCode = null;
+                            if (instrumentId.endsWith("C_Fixed")) {
+                                termCode = "C";
+                            } else if (instrumentId.endsWith("REG_Fixed")) {
+                                termCode = "REG";
+                            } else {
+                                LOGGER.warn("Unknown term code for instrument: {}", instrumentId);
+                                return;
+                            }
+
                             String side = null;
                             String referenceSource = null;
                             
@@ -1374,6 +1378,15 @@ private void trySubscribeAndRemoveListener(MkvObject mkvObject, MkvPublishManage
                                 LOGGER.info("Fill was on an ask for {}", quote.getCusip());
                             }
                             
+                            if (instrumentId.endsWith("C_Fixed")) {
+                                termCode = "C";
+                            } else if (instrumentId.endsWith("REG_Fixed")) {
+                                termCode = "REG";
+                            } else {
+                                LOGGER.warn("Unknown term code for instrument: {}", instrumentId);
+                                return;
+                            }
+
                             if (side != null) {
                                 // Update our tracking of filled quantity
                                 // Since MarketOrder doesn't have updateFilled, we'll need to track this elsewhere
@@ -1382,7 +1395,8 @@ private void trySubscribeAndRemoveListener(MkvObject mkvObject, MkvPublishManage
                                 // Execute hedge trade for the new fill quantity
                                 marketMaker.executeHedgeTrade(
                                     quote.getCusip(), 
-                                    side, 
+                                    termCode,
+                                    side,  // Passing side twice as the method requires it
                                     newFillQty, 
                                     price,
                                     referenceSource
