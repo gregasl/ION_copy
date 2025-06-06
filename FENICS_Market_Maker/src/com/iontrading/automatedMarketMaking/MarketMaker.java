@@ -28,6 +28,7 @@ import com.iontrading.mkv.enums.MkvObjectType;
 import com.iontrading.mkv.events.MkvPublishListener;
 import com.iontrading.mkv.events.MkvRecordListener;
 import com.iontrading.mkv.exceptions.MkvException;
+import java.io.ObjectInputFilter;
 
 /**
  * MarketMaker implements a market making strategy for FENICS that quotes based on
@@ -115,21 +116,27 @@ public class MarketMaker implements IOrderManager {
 
     public String getApplicationId() {
         // Return a unique identifier for this market maker instance
-        return "MarketMaker_" + System.currentTimeMillis();
-        // Or if you have a specific app ID:
-        // return "ION_MarketMaker_v1.0";
+        return "MarketMaker";
     }
     /**
      * Creates a new MarketMaker instance with default configuration.
      * 
      * @param orderManager The parent OrderManagement instance
      */
+
     public MarketMaker(OrderManagement orderManager) {
         LOGGER.info("MarketMaker.constructor", "Creating with default config, orderManager=" + orderManager);
         try {
+            // Initialize with default configuration
             this.orderManager = orderManager;
-            this.config = new MarketMakerConfig();
-            LOGGER.info("MarketMaker initialized with default config");
+            this.config = new MarketMakerConfig.Builder()
+                .setAutoEnabled(true)
+                .setQuoteUpdateIntervalSeconds(15)
+                .setMarketSource("FENICS_USREPO")
+                .setTargetVenues("BTEC_REPO_US", "DEALERWEB_REPO")
+                .setRegMarketHours(LocalTime.of(8, 30), LocalTime.of(17, 0))
+                .setCashMarketHours(LocalTime.of(7, 0), LocalTime.of(11, 55))
+                .build();
             initializeMarketSchedule();
             this.bondEligibilityListener = new BondEligibilityListener();
 
@@ -159,7 +166,7 @@ public class MarketMaker implements IOrderManager {
             scheduler.scheduleAtFixedRate(
                 () -> makeMarketsForEligibleBonds("C"), 
                 5, // Initial delay (seconds) 
-                30, // Run every 30 seconds
+                config.getQuoteUpdateIntervalSeconds(), // Run every 30 seconds
                 TimeUnit.SECONDS
             );
 
@@ -167,7 +174,7 @@ public class MarketMaker implements IOrderManager {
             scheduler.scheduleAtFixedRate(
                 () -> makeMarketsForEligibleBonds("REG"), 
                 5, // Initial delay (seconds) 
-                30, // Run every 30 seconds
+                config.getQuoteUpdateIntervalSeconds(), // Run every 30 seconds
                 TimeUnit.SECONDS
             );
             
@@ -198,6 +205,7 @@ public class MarketMaker implements IOrderManager {
         try {
             this.orderManager = orderManager;
             this.config = config;
+            
             initializeMarketSchedule();
             this.bondEligibilityListener = new BondEligibilityListener();
             
@@ -234,7 +242,7 @@ public class MarketMaker implements IOrderManager {
             scheduler.scheduleAtFixedRate(
                 () -> makeMarketsForEligibleBonds("C"), 
                 5, // Initial delay (seconds) 
-                30, // Run every 30 seconds
+                config.getQuoteUpdateIntervalSeconds(), // Run every 30 seconds
                 TimeUnit.SECONDS
             );
 
@@ -242,7 +250,7 @@ public class MarketMaker implements IOrderManager {
             scheduler.scheduleAtFixedRate(
                 () -> makeMarketsForEligibleBonds("REG"), 
                 5, // Initial delay (seconds) 
-                30, // Run every 30 seconds
+                config.getQuoteUpdateIntervalSeconds(), // Run every 30 seconds
                 TimeUnit.SECONDS
             );
 
@@ -265,28 +273,28 @@ public class MarketMaker implements IOrderManager {
         // Schedule daily start/stop tasks
         scheduler.scheduleAtFixedRate(
             () -> startTermCodeMarketMaking("C"), 
-            getSecondsUntilTime(config.getCashMarketOpenTime()),
+            getSecondsUntilTime(getCashMarketOpenTime()),
             24 * 60 * 60, // Every 24 hours
             TimeUnit.SECONDS
         );
         
         scheduler.scheduleAtFixedRate(
             () -> stopTermCodeMarketMaking("C"), 
-            getSecondsUntilTime(config.getCashMarketCloseTime()),
+            getSecondsUntilTime(getCashMarketCloseTime()),
             24 * 60 * 60, // Every 24 hours
             TimeUnit.SECONDS
         );
         
         scheduler.scheduleAtFixedRate(
             () -> startTermCodeMarketMaking("REG"), 
-            getSecondsUntilTime(config.getRegMarketOpenTime()),
+            getSecondsUntilTime(getRegMarketOpenTime()),
             24 * 60 * 60, // Every 24 hours
             TimeUnit.SECONDS
         );
         
         scheduler.scheduleAtFixedRate(
             () -> stopTermCodeMarketMaking("REG"), 
-            getSecondsUntilTime(config.getRegMarketCloseTime()),
+            getSecondsUntilTime(getRegMarketCloseTime()),
             24 * 60 * 60, // Every 24 hours
             TimeUnit.SECONDS
         );
@@ -300,8 +308,8 @@ public class MarketMaker implements IOrderManager {
         );
         
         LOGGER.info("Market schedule initialized - C: {}-{}, REG: {}-{}", 
-            config.getCashMarketOpenTime(), config.getCashMarketCloseTime(),
-            config.getRegMarketOpenTime(), config.getRegMarketCloseTime());
+            getCashMarketOpenTime(), getCashMarketCloseTime(),
+            getRegMarketOpenTime(), getRegMarketCloseTime());
     }
 
     /**
@@ -317,6 +325,27 @@ public class MarketMaker implements IOrderManager {
         }
         
         return java.time.Duration.between(now, target).getSeconds();
+    }
+
+    private LocalTime getCashMarketOpenTime() {
+        // Convert from pre-computed minutes back to LocalTime
+        int minutes = config.getCashMarketOpenMinutes();
+        return LocalTime.of(minutes / 60, minutes % 60);
+    }
+
+    private LocalTime getCashMarketCloseTime() {
+        int minutes = config.getCashMarketCloseMinutes();
+        return LocalTime.of(minutes / 60, minutes % 60);
+    }
+
+    private LocalTime getRegMarketOpenTime() {
+        int minutes = config.getRegMarketOpenMinutes();
+        return LocalTime.of(minutes / 60, minutes % 60);
+    }
+
+    private LocalTime getRegMarketCloseTime() {
+        int minutes = config.getRegMarketCloseMinutes();
+        return LocalTime.of(minutes / 60, minutes % 60);
     }
 
     /**
@@ -349,14 +378,9 @@ public class MarketMaker implements IOrderManager {
      * Update active status for all term codes based on current time
      */
     private void updateTermCodeActiveStatus() {
-        LocalTime now = LocalTime.now();
-        
-        boolean cashActive = isTimeInRange(now, 
-                                        config.getCashMarketOpenTime(), 
-                                        config.getCashMarketCloseTime());
-        boolean regActive = isTimeInRange(now, 
-                                    config.getRegMarketOpenTime(), 
-                                    config.getRegMarketCloseTime());
+        // Use the pre-computed market status from config for better performance
+        boolean cashActive = config.isDuringCashHours();
+        boolean regActive = config.isDuringRegHours();
         
         boolean cashWasActive = termCodeActiveStatus.getOrDefault("C", false);
         boolean regWasActive = termCodeActiveStatus.getOrDefault("REG", false);
