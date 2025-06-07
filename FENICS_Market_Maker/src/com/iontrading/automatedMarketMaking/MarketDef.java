@@ -58,14 +58,14 @@ public class MarketDef {
      */
     public static String[] INSTRUMENT_FIELDS = { 
             "Id", "IsAon",
-            "Id0", "Src0", "Attribute0", "Id1", "Src1", "Attribute1",
-            "Id2", "Src2", "Attribute2", "Id3", "Src3", "Attribute3",
-            "Id4", "Src4", "Attribute4", "Id5", "Src5", "Attribute5",
-            "Id6", "Src6", "Attribute6", "Id7", "Src7", "Attribute7",
-            "Id8", "Src8", "Attribute8", "Id9", "Src9", "Attribute9",
-            "Id10", "Src10", "Attribute10", "Id11", "Src11", "Attribute11",
-            "Id12", "Src12", "Attribute12", "Id13", "Src13", "Attribute13",
-            "Id14", "Src14", "Attribute14", "Id15", "Src15", "Attribute15",
+            "Id0", "Src0", "Attribute0", "QtyMin0", "Id1", "Src1", "Attribute1", "QtyMin1",
+            "Id2", "Src2", "Attribute2", "QtyMin2", "Id3", "Src3", "Attribute3", "QtyMin3",
+            "Id4", "Src4", "Attribute4", "QtyMin4", "Id5", "Src5", "Attribute5", "QtyMin5",
+            "Id6", "Src6", "Attribute6", "QtyMin6", "Id7", "Src7", "Attribute7", "QtyMin7",
+            "Id8", "Src8", "Attribute8", "QtyMin8", "Id9", "Src9", "Attribute9", "QtyMin9",
+            "Id10", "Src10", "Attribute10", "QtyMin10", "Id11", "Src11", "Attribute11", "QtyMin11",
+            "Id12", "Src12", "Attribute12", "QtyMin12", "Id13", "Src13", "Attribute13", "QtyMin13",
+            "Id14", "Src14", "Attribute14", "QtyMin14", "Id15", "Src15", "Attribute15", "QtyMin15",
     };
     
     /**

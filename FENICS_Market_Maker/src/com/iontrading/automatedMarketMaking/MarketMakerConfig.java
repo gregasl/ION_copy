@@ -139,9 +139,22 @@ public final class MarketMakerConfig {
     }
 
     public boolean isDuringCashHours() {
-        isDuringRegHours(); // Trigger cache refresh if needed
+        // CRITICAL FIX: Don't call isDuringRegHours() - use proper synchronization
+        long now = System.currentTimeMillis();
+        if (now - lastMarketHoursCheck > MARKET_HOURS_CACHE_MS) {
+            synchronized(this) {
+                if (now - lastMarketHoursCheck > MARKET_HOURS_CACHE_MS) {
+                    int currentMinutes = LocalTime.now().getHour() * 60 + LocalTime.now().getMinute();
+                    this.isDuringRegHoursCache = !enforceMarketHours || 
+                        (currentMinutes >= regMarketOpenMinutes && currentMinutes <= regMarketCloseMinutes);
+                    this.isDuringCashHoursCache = !enforceMarketHours || 
+                        (currentMinutes >= cashMarketOpenMinutes && currentMinutes <= cashMarketCloseMinutes);
+                    lastMarketHoursCheck = now;
+                }
+            }
+        }
         return isDuringCashHoursCache;
-    }    
+    }
 
     // Builder pattern for construction
     public static class Builder {

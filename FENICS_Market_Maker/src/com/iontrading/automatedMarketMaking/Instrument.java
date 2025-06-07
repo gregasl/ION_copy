@@ -9,8 +9,6 @@ package com.iontrading.automatedMarketMaking;
 
 import java.util.HashMap;
 import java.util.Map;
-// import java.util.logging.Level;
-// import java.util.logging.Logger;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -45,6 +43,9 @@ public class Instrument {
     private String attribute0, attribute1, attribute2, attribute3, attribute4, attribute5, attribute6, attribute7;
     private String attribute8, attribute9, attribute10, attribute11, attribute12, attribute13, attribute14, attribute15;
     
+    // Source fields (Src0-Src15)
+    private String qtyMin0, qtyMin1, qtyMin2, qtyMin3, qtyMin4, qtyMin5, qtyMin6, qtyMin7, qtyMin8, qtyMin9, qtyMin10, qtyMin11, qtyMin12, qtyMin13, qtyMin14, qtyMin15;
+
     // Cache for source to native ID mappings
     private final Map<String, String> sourceToNativeIdMap = new HashMap<>();
     
@@ -217,6 +218,55 @@ public class Instrument {
     public String getSrc15() { return src15; }
     public void setSrc15(String src15) { this.src15 = src15; }
     
+    // QtyMin field getters and setters
+    public String getQtyMin0() { return qtyMin0; }
+    public void setQtyMin0(String qtyMin0) { this.qtyMin0 = qtyMin0; }
+
+    public String getQtyMin1() { return qtyMin1; }
+    public void setQtyMin1(String qtyMin1) { this.qtyMin1 = qtyMin1; }
+
+    public String getQtyMin2() { return qtyMin2; }
+    public void setQtyMin2(String qtyMin2) { this.qtyMin2 = qtyMin2; }
+
+    public String getQtyMin3() { return qtyMin3; }
+    public void setQtyMin3(String qtyMin3) { this.qtyMin3 = qtyMin3; }
+
+    public String getQtyMin4() { return qtyMin4; }
+    public void setQtyMin4(String qtyMin4) { this.qtyMin4 = qtyMin4; }
+
+    public String getQtyMin5() { return qtyMin5; }
+    public void setQtyMin5(String qtyMin5) { this.qtyMin5 = qtyMin5; }
+
+    public String getQtyMin6() { return qtyMin6; }
+    public void setQtyMin6(String qtyMin6) { this.qtyMin6 = qtyMin6; }
+
+    public String getQtyMin7() { return qtyMin7; }
+    public void setQtyMin7(String qtyMin7) { this.qtyMin7 = qtyMin7; }
+
+    public String getQtyMin8() { return qtyMin8; }
+    public void setQtyMin8(String qtyMin8) { this.qtyMin8 = qtyMin8; }
+
+    public String getQtyMin9() { return qtyMin9; }
+    public void setQtyMin9(String qtyMin9) { this.qtyMin9 = qtyMin9; }
+
+    public String getQtyMin10() { return qtyMin10; }
+    public void setQtyMin10(String qtyMin10) { this.qtyMin10 = qtyMin10; }
+
+    public String getQtyMin11() { return qtyMin11; }
+    public void setQtyMin11(String qtyMin11) { this.qtyMin11 = qtyMin11; }
+
+    public String getQtyMin12() { return qtyMin12; }
+    public void setQtyMin12(String qtyMin12) { this.qtyMin12 = qtyMin12; }
+
+    public String getQtyMin13() { return qtyMin13; }
+    public void setQtyMin13(String qtyMin13) { this.qtyMin13 = qtyMin13; }
+
+    public String getQtyMin14() { return qtyMin14; }
+    public void setQtyMin14(String qtyMin14) { this.qtyMin14 = qtyMin14; }
+
+    public String getQtyMin15() { return qtyMin15; }
+    public void setQtyMin15(String qtyMin15) { this.qtyMin15 = qtyMin15; }
+
     // Attribute field getters and setters
     public String getAttribute0() { return attribute0; }
     public void setAttribute0(String attribute0) { this.attribute0 = attribute0; }
@@ -354,6 +404,7 @@ public class Instrument {
                 String src = getSourceByIndex(i);
                 String nativeId = getIdByIndex(i);
                 String attr = getAttributeByIndex(i);
+                double qtyMin = Double.parseDouble(getQtyMinByIndex(i)); 
                 Boolean isAttrAON = getAONByIndex(i);
 
                 if (src != null && !src.isEmpty()) {
@@ -362,6 +413,7 @@ public class Instrument {
                     .append(", id=").append(nativeId)
                     .append(", attr=").append(attr)
                     .append(", isAttrAON=").append(isAttrAON)
+                    .append(", qtyMin=").append(qtyMin)
                     .append("\n");
                 }
             }
@@ -374,6 +426,175 @@ public class Instrument {
             return null;
         }
     }
+    
+/**
+ * Gets the minimum quantity for a specific source.
+ * This method searches through the Src0-Src15 fields to find the matching source,
+ * then returns the corresponding QtyMin value.
+ * 
+ * @param sourceId The source identifier (e.g., "DEALERWEB_REPO", "BTEC_REPO_US", "FENICS_USREPO")
+ * @return The minimum quantity as a double, or -1 if not found or invalid
+ */
+public double getMinimumQuantityBySource(String sourceId) {
+    if (sourceId == null || sourceId.isEmpty()) {
+        LOGGER.warn("Instrument.getMinimumQuantityBySource received null/empty sourceId");
+        return -1;
+    }
+
+    try {
+        // Search through all source/QtyMin pairs
+        if (LOGGER.isDebugEnabled()) {
+            LOGGER.debug("Searching for minimum quantity for source: {} in instrument: {}", sourceId, instrumentId);
+        }
+
+        for (int i = 0; i <= 15; i++) {
+            String src = getSourceByIndex(i);
+            String qtyMinStr = getQtyMinByIndex(i);
+
+            if (LOGGER.isDebugEnabled()) {
+                LOGGER.debug("Checking index {}: src={}, qtyMin={}", i, src, qtyMinStr);
+            }
+
+            // Skip if source doesn't match or is null
+            if (src == null || !sourceId.equals(src)) {
+                continue;
+            }
+
+            LOGGER.info("Found matching source at index {}: {}", i, src);
+
+            // Special handling for FENICS_USREPO (same logic as getInstrumentFieldBySourceString)
+            if ("FENICS_USREPO".equals(src)) {
+                String attributeValue = getAttributeByIndex(i);
+                LOGGER.debug("FENICS_USREPO found, checking attribute value: {}", attributeValue);
+                
+                // Only use this entry if attribute also matches FENICS_USREPO
+                if ("BGC".equals(attributeValue)) {
+                    LOGGER.info("Skipping FENICS_USREPO entry because attribute doesn't match: {}", attributeValue);
+                    continue;
+                } else if (!"FENICS_USREPO".equals(attributeValue)) {
+                    LOGGER.info("Skipping FENICS_USREPO entry because attribute doesn't match: {}", attributeValue);
+                    continue;
+                }
+            }
+
+            // Parse and return the minimum quantity
+            if (qtyMinStr != null && !qtyMinStr.isEmpty()) {
+                try {
+                    double qtyMin = Double.parseDouble(qtyMinStr);
+                    if (LOGGER.isInfoEnabled()) {
+                        LOGGER.info("Found minimum quantity for source {}: {}", sourceId, qtyMin);
+                    }
+                    return qtyMin;
+                } catch (NumberFormatException e) {
+                    LOGGER.warn("Invalid QtyMin format for source {} at index {}: {}", sourceId, i, qtyMinStr);
+                    // Continue searching in case there's another valid entry
+                }
+            } else {
+                LOGGER.warn("QtyMin is null/empty for source {} at index {}", sourceId, i);
+                // Continue searching in case there's another valid entry
+            }
+        }
+
+        // No valid matches found
+        LOGGER.warn("No minimum quantity found for source: {} in instrument: {}", sourceId, instrumentId);
+
+        // Log all source fields for debugging (only if debug is enabled)
+        if (LOGGER.isDebugEnabled()) {
+            logAllSourceFields();
+        }
+
+        return -1;
+        
+    } catch (Exception e) {
+        LOGGER.error("Error getting minimum quantity for source: {} in instrument: {}", 
+            sourceId, instrumentId, e);
+        return -1;
+    }
+}
+
+/**
+ * Gets the minimum quantity for a specific source with a fallback default.
+ * This is a convenience method that provides a fallback value if no specific minimum is found.
+ * 
+ * @param sourceId The source identifier
+ * @param defaultMinimum The default minimum to return if source-specific minimum is not found
+ * @return The minimum quantity for the source, or defaultMinimum if not found
+ */
+public double getMinimumQuantityBySource(String sourceId, double defaultMinimum) {
+    double sourceMinimum = getMinimumQuantityBySource(sourceId);
+    if (sourceMinimum <= 0) {
+        if (LOGGER.isDebugEnabled()) {
+            LOGGER.debug("No specific minimum found for source {}, using default: {}", 
+                sourceId, defaultMinimum);
+        }
+        return defaultMinimum;
+    }
+    return sourceMinimum;
+}
+
+/**
+ * Gets all minimum quantities mapped by source for this instrument.
+ * Useful for configuration validation and debugging.
+ * 
+ * @return Map of source -> minimum quantity
+ */
+public Map<String, Double> getAllMinimumQuantitiesBySource() {
+    Map<String, Double> result = new HashMap<>();
+    
+    try {
+        for (int i = 0; i <= 15; i++) {
+            String src = getSourceByIndex(i);
+            String qtyMinStr = getQtyMinByIndex(i);
+            
+            if (src != null && !src.isEmpty() && qtyMinStr != null && !qtyMinStr.isEmpty()) {
+                // Apply same FENICS_USREPO filtering logic
+                if ("FENICS_USREPO".equals(src)) {
+                    String attributeValue = getAttributeByIndex(i);
+                    if (!"FENICS_USREPO".equals(attributeValue)) {
+                        continue; // Skip this entry
+                    }
+                }
+                
+                try {
+                    double qtyMin = Double.parseDouble(qtyMinStr);
+                    result.put(src, qtyMin);
+                } catch (NumberFormatException e) {
+                    LOGGER.warn("Invalid QtyMin format for source {} at index {}: {}", src, i, qtyMinStr);
+                }
+            }
+        }
+    } catch (Exception e) {
+        LOGGER.error("Error getting all minimum quantities for instrument: {}", instrumentId, e);
+    }
+    
+    return result;
+}
+
+/**
+ * Helper method to log all source fields for debugging
+ */
+private void logAllSourceFields() {
+    StringBuilder sb = new StringBuilder();
+    sb.append("All source/QtyMin fields for ").append(instrumentId).append(":\n");
+    
+    for (int i = 0; i <= 15; i++) {
+        String src = getSourceByIndex(i);
+        String qtyMin = getQtyMinByIndex(i);
+        String attr = getAttributeByIndex(i);
+        Boolean isAON = getAONByIndex(i);
+        
+        if (src != null && !src.isEmpty()) {
+            sb.append("  Index ").append(i)
+              .append(": src=").append(src)
+              .append(", qtyMin=").append(qtyMin)
+              .append(", attr=").append(attr)
+              .append(", isAON=").append(isAON)
+              .append("\n");
+        }
+    }
+    
+    LOGGER.debug("Source/QtyMin mapping for {}:\n{}", instrumentId, sb.toString());
+}
     
     /**
      * Helper method to get source by index
@@ -399,7 +620,32 @@ public class Instrument {
             default: return null;
         }
     }
-    
+        
+    /**
+     * Helper method to get qtyMin by index
+     */
+    private String getQtyMinByIndex(int index) {
+        switch (index) {
+            case 0: return qtyMin0;
+            case 1: return qtyMin1;
+            case 2: return qtyMin2;
+            case 3: return qtyMin3;
+            case 4: return qtyMin4;
+            case 5: return qtyMin5;
+            case 6: return qtyMin6;
+            case 7: return qtyMin7;
+            case 8: return qtyMin8;
+            case 9: return qtyMin9;
+            case 10: return qtyMin10;
+            case 11: return qtyMin11;
+            case 12: return qtyMin12;
+            case 13: return qtyMin13;
+            case 14: return qtyMin14;
+            case 15: return qtyMin15;
+            default: return null;
+        }
+    }
+
     /**
      * Helper method to get ID by index
      */
@@ -491,6 +737,7 @@ public class Instrument {
             String src = null;
             String id = null;
             String attr = null;
+            Double qtyMin = null;
             Boolean instrumentIsAon = null;
             try {
 
@@ -498,11 +745,13 @@ public class Instrument {
                     java.lang.reflect.Method getId = this.getClass().getMethod("getId" + i);
                     java.lang.reflect.Method getAttr = this.getClass().getMethod("getAttribute" + i);
                     java.lang.reflect.Method getAON = this.getClass().getMethod("get" + i + "IsAON");
-                    
+                    java.lang.reflect.Method getQtyMin = this.getClass().getMethod("getQtyMin" + i);
+
                     src = (String) getSrc.invoke(this);
                     id = (String) getId.invoke(this);
                     attr = (String) getAttr.invoke(this);
                     instrumentIsAon = (Boolean) getAON.invoke(this);
+                    qtyMin = (Double) getQtyMin.invoke(this);
 
             } catch (Exception e) {
                 sb.append("  Error accessing field at index ").append(i)

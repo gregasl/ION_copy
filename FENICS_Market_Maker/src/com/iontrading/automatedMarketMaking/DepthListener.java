@@ -26,8 +26,6 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.Date;
-// import java.util.logging.Level;
-// import java.util.logging.Logger;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -699,6 +697,107 @@ private boolean isElectronicVenue(String source) {
         return defaultValue;
     }
 
+/**
+ * Gets the minimum quantity for a specific source.
+ * Delegates to the appropriate Instrument object.
+ * 
+ * @param instrumentId The instrument identifier
+ * @param sourceId The source identifier (e.g., "DEALERWEB_REPO", "BTEC_REPO_US", "FENICS_USREPO")
+ * @return The minimum quantity as a double, or -1 if not found or invalid
+ */
+public double getMinimumQuantityBySource(String instrumentId, String sourceId) {
+    LOGGER.debug("getMinimumQuantityBySource called with instrumentId={}, sourceId={}",
+        instrumentId, sourceId);
+
+    if (instrumentId == null || sourceId == null || instrumentId.isEmpty() || sourceId.isEmpty()) {
+        LOGGER.warn("getMinimumQuantityBySource received null/empty parameter: instrumentId={}, sourceId={}",
+            instrumentId, sourceId);
+        return -1;
+    }
+
+    Instrument instrument = instrumentData.get(instrumentId);
+    if (instrument == null) {
+        LOGGER.warn("No instrument data found for: {} (total instruments loaded: {})",
+            instrumentId, instrumentData.size());
+
+        // Add diagnostic info about available instruments for this source
+        int matchCount = 0;
+        StringBuilder matchingInstruments = new StringBuilder();
+        for (Map.Entry<String, Instrument> entry : instrumentData.entrySet()) {
+            String key = entry.getKey();
+            if (key.contains(instrumentId) || instrumentId.contains(key)) {
+                matchCount++;
+                if (matchCount <= 5) { // Limit to 5 similar matches to avoid huge logs
+                    matchingInstruments.append(key).append(", ");
+                }
+            }
+        }
+        
+        if (matchCount > 0) {
+            LOGGER.info("Found {} similar instrument IDs for minimum quantity lookup: {}",
+                matchCount, (matchCount > 5 ? matchingInstruments.toString() + "..." : matchingInstruments.toString()));
+        }
+
+        return -1;
+    }
+
+    // If we found the instrument, delegate to it and log the result
+    double result = instrument.getMinimumQuantityBySource(sourceId);
+    LOGGER.debug("getMinimumQuantityBySource result for {} with source {}: {}",
+        instrumentId, sourceId, result);
+
+    if (result <= 0) {
+        LOGGER.warn("Instrument {} found but returned no valid minimum quantity for source: {}",
+            instrumentId, sourceId);
+    }
+
+    return result;
+}
+
+/**
+ * Gets the minimum quantity for a specific source with a fallback default.
+ * This is a convenience method that provides a fallback value if no specific minimum is found.
+ * 
+ * @param instrumentId The instrument identifier
+ * @param sourceId The source identifier
+ * @param defaultMinimum The default minimum to return if source-specific minimum is not found
+ * @return The minimum quantity for the source, or defaultMinimum if not found
+ */
+public double getMinimumQuantityBySource(String instrumentId, String sourceId, double defaultMinimum) {
+    double sourceMinimum = getMinimumQuantityBySource(instrumentId, sourceId);
+    if (sourceMinimum <= 0) {
+        if (LOGGER.isDebugEnabled()) {
+            LOGGER.debug("No specific minimum found for instrument {} source {}, using default: {}", 
+                instrumentId, sourceId, defaultMinimum);
+        }
+        return defaultMinimum;
+    }
+    return sourceMinimum;
+}
+
+/**
+ * Gets all minimum quantities mapped by source for a specific instrument.
+ * Useful for configuration validation and debugging.
+ * 
+ * @param instrumentId The instrument identifier
+ * @return Map of source -> minimum quantity, or empty map if instrument not found
+ */
+public Map<String, Double> getAllMinimumQuantitiesBySource(String instrumentId) {
+    if (instrumentId == null || instrumentId.isEmpty()) {
+        LOGGER.warn("getAllMinimumQuantitiesBySource received null/empty instrumentId");
+        return new HashMap<>();
+    }
+
+    Instrument instrument = instrumentData.get(instrumentId);
+    if (instrument == null) {
+        LOGGER.warn("No instrument data found for: {} when getting all minimum quantities",
+            instrumentId);
+        return new HashMap<>();
+    }
+
+    return instrument.getAllMinimumQuantitiesBySource();
+}
+
     /**
      * Gets the native instrument ID for a source.
      * Delegates to the appropriate Instrument object.
@@ -1062,18 +1161,37 @@ public String getInstrumentFieldBySourceString(String instrumentId, String sourc
     }
 
     private String formatTimestamp(long timestampMs) {
-    if (timestampMs <= 0) {
-        return "N/A";
+        if (timestampMs <= 0) {
+            return "N/A";
+        }
+        
+        LocalDateTime dateTime = LocalDateTime.ofInstant(
+            java.time.Instant.ofEpochMilli(timestampMs), 
+            java.time.ZoneId.systemDefault());
+        
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS");
+        return dateTime.format(formatter);
+        }
+    
+
+    public void cleanup() {
+        synchronized (queueLock) {
+            pendingDepthUpdates.clear();
+        }
+        bestCache.clear();
+        recordDataMap.clear();
+        if (heartbeatScheduler != null && !heartbeatScheduler.isShutdown()) {
+            heartbeatScheduler.shutdown();
+            try {
+                if (!heartbeatScheduler.awaitTermination(5, TimeUnit.SECONDS)) {
+                    heartbeatScheduler.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                heartbeatScheduler.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
+        }
     }
-    
-    LocalDateTime dateTime = LocalDateTime.ofInstant(
-        java.time.Instant.ofEpochMilli(timestampMs), 
-        java.time.ZoneId.systemDefault());
-    
-    DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS");
-    return dateTime.format(formatter);
-}
-    
     /**
      * Updates the instrument pattern subscription status tracking
      * 
