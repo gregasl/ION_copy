@@ -186,7 +186,9 @@ public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener {
     MkvFunction fn = pm.getMkvFunction(MarketSource + "VCMIOrderRwt181");
     
     if (fn == null) {
-      LOGGER.error("Failed to get VCMIOrderRwt181 function from gateway");
+      if (LOGGER.isInfoEnabled()) {
+        LOGGER.info("Failed to get VCMIOrderRwt181 function from gateway");
+      }
       return null;
     }
     
@@ -388,8 +390,10 @@ public void onResult(MkvFunctionCallEvent mkvFunctionCallEvent, MkvSupply mkvSup
         
         // Get the full string representation of the supply
         String resultString = mkvSupply.getString(mkvSupply.firstIndex());
-        LOGGER.debug("Raw order result for reqId={}: {}", myReqId, resultString);
-        
+        if (LOGGER.isDebugEnabled()) {
+            LOGGER.debug("Raw order result for reqId={}: {}", myReqId, resultString);
+        }
+
         // Parse the string to extract the order ID
         // The format is typically: "0:OK -Result {-Id {5697620189428842553_20250603} -OrderTmpId {...} }"
         String orderId = null;
@@ -412,8 +416,10 @@ public void onResult(MkvFunctionCallEvent mkvFunctionCallEvent, MkvSupply mkvSup
                 }
                 
                 // Log the successful order creation
-                LOGGER.info("Order successfully created: reqId={}, orderId={}", myReqId, orderId);
-                
+                if (LOGGER.isInfoEnabled()) {
+                    LOGGER.info("Order successfully created: reqId={}, orderId={}", myReqId, orderId);
+                }
+
                 // Log to machine-readable format for auditing
                 ApplicationLogging.logOrderUpdate(
                     "ORDER_CREATED", 
@@ -422,13 +428,19 @@ public void onResult(MkvFunctionCallEvent mkvFunctionCallEvent, MkvSupply mkvSup
                     "Order created successfully"
                 );
             } else {
-                LOGGER.warn("Could not parse order ID - invalid format: reqId={}", myReqId);
+                if (LOGGER.isWarnEnabled()) {
+                    LOGGER.warn("Could not parse order ID - invalid format: reqId={}", myReqId);
+                }
             }
         } else {
-            LOGGER.warn("Could not find -Id in result string: reqId={}", myReqId);
+            if (LOGGER.isWarnEnabled()) {
+                LOGGER.warn("Could not find -Id in result string: reqId={}", myReqId);
+            }
         }
     } catch (Exception e) {
-        LOGGER.error("Error processing order creation result: reqId={}, error={}", myReqId, e.getMessage(), e);
+        if (LOGGER.isErrorEnabled()) {
+            LOGGER.error("Error processing order creation result: reqId={}, error={}", myReqId, e.getMessage(), e);
+        }
     }
 }
 
@@ -516,8 +528,10 @@ public String getVerb() {
    * This is now accessible to support cancel operations
    */
   public void setOrderId(String oid) {
-	  LOGGER.info("Setting order ID: reqId={}, orderId={}", myReqId, oid);
-	  orderId = oid;
+    if (LOGGER.isInfoEnabled()) {
+      LOGGER.info("Setting order ID: reqId={}, orderId={}", myReqId, oid);
+    }
+    orderId = oid;
   }
 
   public static long getOrderTtlMs() {
@@ -546,13 +560,17 @@ public String getVerb() {
 
       if (expired && orderId == null) {
           // If the order is expired but has no ID, it means it was never successfully created
-          LOGGER.warn("Order expired without being created: reqId={}, age={} seconds", myReqId, (orderAge / 1000));
+          if (LOGGER.isInfoEnabled()) {
+              LOGGER.info("Order never created: reqId={}, age={} seconds", myReqId, (orderAge / 1000));
+          }
           if (orderCallback != null) {
             orderCallback.removeOrder(myReqId);
           }
       } else if (expired && orderId != null) {
           // If the order is expired, remove it from OrderManagement
-          LOGGER.info("Calling OrderManagement to remove expired order: reqId={}, orderID={}", myReqId, orderId);
+          if (LOGGER.isInfoEnabled()) {
+              LOGGER.info("Order is expired and will be cancelled: reqId={}, orderId={}", myReqId, orderId);
+          }
           if (orderCallback != null) {
             orderCallback.orderDead(this);
           }
@@ -599,11 +617,15 @@ public String getVerb() {
       if (orderCallback != null) {
     	  orderCallback.mapOrderIdToReqId(getOrderId(), myReqId);
       }
-      LOGGER.info("Received full update for order: reqId={}, orderId={}, active={}", myReqId, getOrderId(), active);
+      if (LOGGER.isInfoEnabled()) {
+        LOGGER.info("Order ID updated: reqId={}, orderId={}", myReqId, getOrderId());
+      }
 
       // If the order is closed, notify the order manager
       if (closed && orderCallback != null) {
-        LOGGER.info("Order is now dead: reqId={}, orderId={}", myReqId, getOrderId());
+        if (LOGGER.isInfoEnabled()) {
+          LOGGER.info("Order is now dead: reqId={}, orderId={}", myReqId, getOrderId());
+        }
         orderCallback.orderDead(this);
       }
     } catch (Exception e) {

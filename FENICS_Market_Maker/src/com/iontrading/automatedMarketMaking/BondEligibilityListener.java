@@ -60,7 +60,9 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
      * Constructor
      */
     public BondEligibilityListener() {
-        LOGGER.info("BondEligibilityListener initialized");
+        if (LOGGER.isInfoEnabled()) {
+            LOGGER.info("BondEligibilityListener initialized");
+        }
 
         // Start periodic eligibility check
         scheduler.scheduleAtFixedRate(
@@ -72,7 +74,9 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
         
         // Register shutdown hook
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            LOGGER.info("Shutting down BondEligibilityListener scheduler");
+            if (LOGGER.isInfoEnabled()) {
+                LOGGER.info("Shutting down BondEligibilityListener scheduler");
+            }
             scheduler.shutdown();
             try {
                 if (!scheduler.awaitTermination(5, TimeUnit.SECONDS)) {
@@ -92,9 +96,11 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
         synchronized (eligibilityListeners) {
             eligibilityListeners.add(listener);
         }
-        LOGGER.info("Added eligibility change listener: {}", listener.getClass().getSimpleName());
+        if (LOGGER.isInfoEnabled()) {
+            LOGGER.info("Added eligibility change listener: {}", listener.getClass().getSimpleName());
+        }
     }
-    
+
     /**
      * Remove eligibility change listener
      */
@@ -102,9 +108,11 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
         synchronized (eligibilityListeners) {
             eligibilityListeners.remove(listener);
         }
-        LOGGER.info("Removed eligibility change listener: {}", listener.getClass().getSimpleName());
+        if (LOGGER.isInfoEnabled()) {
+            LOGGER.info("Removed eligibility change listener: {}", listener.getClass().getSimpleName());
+        }
     }
-    
+
     /**
      * Notify listeners of eligibility change
      */
@@ -114,7 +122,9 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
                 try {
                     listener.onEligibilityChange(cusip, isEligible, bondData);
                 } catch (Exception e) {
-                    LOGGER.error("Error notifying eligibility listener: {}", e.getMessage(), e);
+                    if (LOGGER.isErrorEnabled()) {
+                        LOGGER.error("Error notifying eligibility listener: {}", e.getMessage(), e);
+                    }
                 }
             }
         }
@@ -193,7 +203,9 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
         }
         
         if (!wasEligible) {
-            LOGGER.info("Bond {} added to eligible list (instrument: {})", cusip, instrumentId);
+            if (LOGGER.isInfoEnabled()) {
+                LOGGER.info("Bond {} added to eligible list (instrument: {})", cusip, instrumentId);
+            }
             notifyEligibilityChange(cusip, true, consolidatedData.getConsolidatedView());
         }
     }
@@ -214,7 +226,9 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
             bondData.getConsolidatedView() : null;
         
         if (wasEligible) {
-            LOGGER.info("Bond {} removed from eligible list", cusip);
+            if (LOGGER.isInfoEnabled()) {
+                LOGGER.info("Bond {} removed from eligible list", cusip);
+            }
             notifyEligibilityChange(cusip, false, consolidatedView);
         }
     }
@@ -249,7 +263,9 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
             boolean eligibleC = true;   
             boolean eligibleREG = true;   
 
-            LOGGER.info("Evaluating eligibility for bond & bondDataObj: {} {}", cusip, bondDataObj);
+            if (LOGGER.isInfoEnabled()) {
+                LOGGER.info("Evaluating eligibility for bond & bondDataObj: {} {}", cusip, bondDataObj);
+            }
 
             // Handle different input types
             if (bondDataObj instanceof BondConsolidatedData) {
@@ -261,20 +277,26 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
                 Map<String, Object> typedMap = (Map<String, Object>) bondDataObj;
                 bondData = typedMap;
             } else {
-                LOGGER.info("Unsupported bond data type for eligibility check: {}", 
-                    bondDataObj != null ? bondDataObj.getClass().getName() : "null");
+                if (LOGGER.isInfoEnabled()) {
+                    LOGGER.info("Unsupported bond data type for eligibility check: {}", 
+                        bondDataObj != null ? bondDataObj.getClass().getName() : "null");
+                }
                 return new EligibilityResult(false, false);
             }
-            
+
             // Check if bond has required data
             if (bondData == null || bondData.isEmpty()) {
-                LOGGER.debug("Bond {} ineligible: no bond data", cusip);
+                if (LOGGER.isDebugEnabled()) {
+                    LOGGER.debug("Bond {} ineligible: no bond data", cusip);
+                }
                 return new EligibilityResult(false, false);
             }
 
             // Check maturity date (must be at least 2 months from now)
             Object maturityObj = bondData.get("STATIC_DateMaturity");
-            LOGGER.info("Checking maturity date for bond {}: {}", cusip, maturityObj);
+            if (LOGGER.isInfoEnabled()) {
+                LOGGER.info("Checking maturity date for bond {}: {}", cusip, maturityObj);
+            }
             java.time.LocalDate maturityDate = null;
             java.time.LocalDate twoMonthsFromNow = java.time.LocalDate.now().plusMonths(2);
             if (maturityObj != null) {
@@ -289,11 +311,15 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
                         maturityDate = java.time.LocalDate.of(year, month, day);
                         // Check if maturity date is at least 2 months from now
                         if (maturityDate.isBefore(twoMonthsFromNow)) {
-                            LOGGER.info("Bond {} ineligible: maturity date {} is less than 2 months away", 
-                                cusip, maturityDate);
+                            if (LOGGER.isInfoEnabled()) {
+                                LOGGER.info("Bond {} ineligible: maturity date {} is less than 2 months away",
+                                        cusip, maturityDate);
+                            }
                             return new EligibilityResult(false, false);
                         }
-                        LOGGER.info("Parsed maturity date from integer: {} → {}", dateInt, maturityDate);
+                        if (LOGGER.isInfoEnabled()) {
+                            LOGGER.info("Parsed maturity date from integer: {} → {}", dateInt, maturityDate);
+                        }
                     } else {
                         String maturityStr = maturityObj.toString();
                         // Try different string date formats in sequence
@@ -308,8 +334,10 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
                                 maturityDate = java.time.LocalDate.parse(maturityStr, formatter);
                                 // Check if maturity date is at least 2 months from now
                                 if (maturityDate.isBefore(twoMonthsFromNow)) {
-                                    LOGGER.info("Bond {} ineligible: maturity date {} is less than 2 months away", 
-                                        cusip, maturityDate);
+                                    if (LOGGER.isInfoEnabled()) {
+                                        LOGGER.info("Bond {} ineligible: maturity date {} is less than 2 months away",
+                                            cusip, maturityDate);
+                                    }
                                     return new EligibilityResult(false, false);
                                 }
                             } catch (Exception e2) {
@@ -320,35 +348,47 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
                                     maturityDate = java.time.LocalDate.parse(maturityStr, formatter);
                                     // Check if maturity date is at least 2 months from now
                                     if (maturityDate.isBefore(twoMonthsFromNow)) {
-                                        LOGGER.info("Bond {} ineligible: maturity date {} is less than 2 months away", 
-                                            cusip, maturityDate);
+                                        if (LOGGER.isInfoEnabled()) {
+                                            LOGGER.info("Bond {} ineligible: maturity date {} is less than 2 months away",
+                                                cusip, maturityDate);
+                                        }
                                         return new EligibilityResult(false, false);
                                     }
                                 } catch (Exception e3) {
-                                    LOGGER.info("Could not parse maturity date for bond {}: {}", 
+                                    if (LOGGER.isInfoEnabled()) {
+                                        LOGGER.info("Could not parse maturity date for bond {}: {}", 
                                         cusip, maturityStr);
+                                    }
                                 }
                             }
                         }
                     }
                 } catch (Exception e) {
-                    LOGGER.warn("Error parsing maturity date: {}", e.getMessage());
+                    if (LOGGER.isWarnEnabled()) {
+                        LOGGER.warn("Error parsing maturity date: {}", e.getMessage());
+                    }
                 }
             }
-            
+
             // Check SOMA holdings (must be at least $1 billion)
             Object somaObj = bondData.get("SDS_SOMA");
-            LOGGER.info("Checking SOMA holdings for bond {}: {}", cusip, somaObj);
-            
+            if (LOGGER.isInfoEnabled()) {
+                LOGGER.info("Checking SOMA holdings for bond {}: {}", cusip, somaObj);
+            }
+
             if (somaObj != null) {
                 try {
                     double soma = Double.parseDouble(somaObj.toString());
-                    LOGGER.info("Parsed SOMA value: {} → ${}", somaObj, String.format("%,.2f", soma));
+                    if (LOGGER.isInfoEnabled()) {
+                        LOGGER.info("Parsed SOMA value: {} → {}", somaObj, String.format("%.2f", soma));
+                    }
 
                     // Check if SOMA is less than $1 billion
                     if (soma < 1_000_000_000) {
-                        LOGGER.info("Bond {} ineligible: SOMA holdings {} is less than $1 billion", 
-                            cusip, soma);
+                        if (LOGGER.isInfoEnabled()) {
+                            LOGGER.info("Bond {} ineligible: SOMA holdings {} is less than $1 billion",
+                                cusip, soma);
+                        }
                         return new EligibilityResult(false, false);
                     }
                 } catch (Exception e) {
@@ -360,28 +400,38 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
             // Check CalcNetExtPos for the current date (must be at least -$200 million)
             Object termCodeObj = bondData.get("POS_TermCode");
             Object calcNetExtPosObj = bondData.get("POS_CalcNetExtPos");
-            LOGGER.info("Checking CalcNetExtPos for bond {}: {}", cusip, calcNetExtPosObj);
+            if (LOGGER.isInfoEnabled()) {
+                LOGGER.info("Checking CalcNetExtPos for bond {}: {}", cusip, calcNetExtPosObj);
+            }
 
             if (calcNetExtPosObj != null && termCodeObj != null) {
                 try {
                     double calcNetExtPos = Double.parseDouble(calcNetExtPosObj.toString());
                     String termCode = termCodeObj.toString();
-                    LOGGER.info("Parsed CalcNetExtPos value, TermCode: {} → ${}, {}", calcNetExtPosObj, String.format("%,.2f", calcNetExtPos), termCode);
+                    if (LOGGER.isInfoEnabled()) {
+                        LOGGER.info("Parsed CalcNetExtPos value, TermCode: {} → ${}, {}", calcNetExtPosObj, String.format("%,.2f", calcNetExtPos), termCode);
+                    }
                     // Check if CalcNetExtPos is less than -$200 million
                     if (calcNetExtPos < -200_000_000 && "C".equals(termCode)) {
-                        LOGGER.info("Bond {} ineligible: CalcNetExtPos {} is less than -$200 million for C term", 
-                            cusip, calcNetExtPos);
+                        if (LOGGER.isInfoEnabled()) {
+                            LOGGER.info("Bond {} ineligible: CalcNetExtPos {} is less than -$200 million for C term",
+                                cusip, calcNetExtPos);
+                        }
                         eligibleC = false;
                     } else if (calcNetExtPos < -500_000_000 && "REG".equals(termCode)) {
-                        LOGGER.info("Bond {} ineligible: CalcNetExtPos {} is greater than or equal to -$200 million for REG term", 
-                            cusip, calcNetExtPos);
+                        if (LOGGER.isInfoEnabled()) {
+                            LOGGER.info("Bond {} ineligible: CalcNetExtPos {} is greater than or equal to -$200 million for REG term",
+                                cusip, calcNetExtPos);
+                        }
                         eligibleREG = false;
                     }
                 } catch (Exception e) {
-                    LOGGER.warn("Error checking CalcNetExtPos for bond {}: {}", cusip, e.getMessage());
+                    if (LOGGER.isWarnEnabled()) {
+                        LOGGER.warn("Error checking CalcNetExtPos for bond {}: {}", cusip, e.getMessage());
+                    }
                 }
             }
-            
+
             // If yesterday's Cash market was rich, not eligible for C market making
             Object mfaData = bondData.get("mfaData");
             if (mfaData != null && mfaData instanceof Map) {
@@ -402,10 +452,14 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
                                 eligibleC = false;
                                 eligibleREG = false;
                             }
-                            LOGGER.info("Today C spread to GC is too high to offer C|REG for cusip {}: {}", mfaRate, cusip);
+                            if (LOGGER.isInfoEnabled()) {
+                                LOGGER.info("Today C spread to GC is too high to offer C|REG for cusip {}: {}", mfaRate, cusip);
+                            }
 
                         } catch (NumberFormatException e) {
-                            LOGGER.warn("Invalid MFA rate format for {}: {}", cusip, rateAvg);
+                            if (LOGGER.isWarnEnabled()) {
+                                LOGGER.warn("Invalid MFA rate format for {}: {}", cusip, rateAvg);
+                            }
                         }
                     }
                 }
@@ -418,10 +472,14 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
                             if (mfaRate > 15) {
                                 eligibleREG = false;
                             }
-                            LOGGER.info("Today REG spread to GC is too high to offer REG for cusip {}: {}", mfaRate, cusip);
+                            if (LOGGER.isInfoEnabled()) {
+                                LOGGER.info("Today REG spread to GC is too high to offer REG for cusip {}: {}", mfaRate, cusip);
+                            }
 
                         } catch (NumberFormatException e) {
-                            LOGGER.warn("Invalid MFA rate format for {}: {}", cusip, rateAvg);
+                            if (LOGGER.isWarnEnabled()) {
+                                LOGGER.warn("Invalid MFA rate format for {}: {}", cusip, rateAvg);
+                            }
                         }
                     }
                 }
@@ -434,10 +492,14 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
                             if (mfaRate > 15) {
                                 eligibleC = false;
                             }
-                            LOGGER.info("Yest C spread to GC is too high to offer C for cusip {}: {}", mfaRate, cusip);
+                            if (LOGGER.isInfoEnabled()) {
+                                LOGGER.info("Yest C spread to GC is too high to offer C for cusip {}: {}", mfaRate, cusip);
+                            }
 
                         } catch (NumberFormatException e) {
-                            LOGGER.warn("Invalid MFA rate format for {}: {}", cusip, rateAvg);
+                            if (LOGGER.isWarnEnabled()) {
+                                LOGGER.warn("Invalid MFA rate format for {}: {}", cusip, rateAvg);
+                            }
                         }
                     }
                 }
@@ -450,10 +512,14 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
                             if (mfaRate > 15) {
                                 eligibleC = false;
                             }
-                            LOGGER.info("Yest REG spread to GC is too high to offer REG for cusip {}: {}", mfaRate, cusip);
+                            if (LOGGER.isInfoEnabled()) {
+                                LOGGER.info("Yest REG spread to GC is too high to offer REG for cusip {}: {}", mfaRate, cusip);
+                            }
 
                         } catch (NumberFormatException e) {
-                            LOGGER.warn("Invalid MFA rate format for {}: {}", cusip, rateAvg);
+                            if (LOGGER.isWarnEnabled()) {
+                                LOGGER.warn("Invalid MFA rate format for {}: {}", cusip, rateAvg);
+                            }
                         }
                     }
                 }
@@ -462,7 +528,9 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
             return new EligibilityResult(eligibleC, eligibleREG);
 
         } catch (Exception e) {
-            LOGGER.error("Error evaluating eligibility for bond {}: {}", cusip, e.getMessage(), e);
+            if (LOGGER.isErrorEnabled()) {
+                LOGGER.error("Error evaluating eligibility for bond {}: {}", cusip, e.getMessage(), e);
+            }
             return new EligibilityResult(false, false);
         }
     }
@@ -485,8 +553,10 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
      */
     private void performPeriodicEligibilityCheck() {
         try {
-            LOGGER.info("Performing periodic eligibility check for {} bonds", consolidatedBondData.size());
-            
+            if (LOGGER.isInfoEnabled()) {
+                LOGGER.info("Performing periodic eligibility check for {} bonds", consolidatedBondData.size());
+            }
+
             int eligibleCount = 0;
             int ineligibleCount = 0;
             
@@ -507,8 +577,9 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
                         bondToInstrumentMaps.computeIfAbsent(cusip, k -> new ConcurrentHashMap<>()).put("C", instrumentId);
                         notifyEligibilityChange(cusip, true, bondData.getConsolidatedView());
                         eligibleCount++;
-                        
-                        LOGGER.info("Bond {} added to eligible list (instrument: {})", cusip, instrumentId);
+                        if (LOGGER.isInfoEnabled()) {
+                            LOGGER.info("Bond {} added to eligible list (instrument: {})", cusip, instrumentId);
+                        }
                     }
                 } else if (!shouldBeEligible.eligibleForTermC && currentlyEligible) {
                     // Bond became ineligible
@@ -523,23 +594,28 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
                         bondToInstrumentMaps.computeIfAbsent(cusip, k -> new ConcurrentHashMap<>()).put("REG", instrumentId);
                         notifyEligibilityChange(cusip, true, bondData.getConsolidatedView());
                         eligibleCount++;
-
+                    }
+                    if (LOGGER.isInfoEnabled()) {
                         LOGGER.info("Bond {} added to eligible list (instrument: {})", cusip, instrumentId);
                     }
                 } else if (!shouldBeEligible.eligibleForTermREG && currentlyEligible) {
-                    // Bond remains ineligible
-                    removeEligibleBond(cusip);
-                    ineligibleCount++;
-                }
+                // Bond remains ineligible
+                removeEligibleBond(cusip);
+                ineligibleCount++;
             }
-            
-            if (eligibleCount > 0 || ineligibleCount > 0) {
-                LOGGER.info("Eligibility check complete: {} added, {} removed, {} total eligible", 
+        }
+
+        if (eligibleCount > 0 || ineligibleCount > 0) {
+            if (LOGGER.isInfoEnabled()) {
+                LOGGER.info("Eligibility check complete: {} added, {} removed, {} total eligible",
                     eligibleCount, ineligibleCount, eligibleBonds.size());
             }
-            
+        }
+
         } catch (Exception e) {
-            LOGGER.error("Error in periodic eligibility check: {}", e.getMessage(), e);
+            if (LOGGER.isErrorEnabled()) {
+                LOGGER.error("Error in periodic eligibility check: {}", e.getMessage(), e);
+            }
         }
     }
     
@@ -647,7 +723,9 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
     @Override
     public void onSubscribe(MkvObject mkvObject) {
         // Default implementation - not needed for this listener
-        LOGGER.debug("onSubscribe called for object: {}", mkvObject.getName());
+        if (LOGGER.isDebugEnabled()) {
+            LOGGER.debug("onSubscribe called for object: {}", mkvObject.getName());
+        }
     }
 
     // MkvRecordListener implementation
@@ -659,29 +737,40 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
     @Override
     public void onPublish(MkvObject mkvObject, boolean pub_unpub, boolean dwl) {
         // Default implementation - not required for this listener
-        LOGGER.debug("onPublish called for object: {}, pub_unpub: {}, dwl: {}", 
+        if (LOGGER.isDebugEnabled()) {
+            LOGGER.debug("onPublish called for object: {}, pub_unpub: {}, dwl: {}", 
                     mkvObject.getName(), pub_unpub, dwl);
+        }
     }
 
     @Override
     public void onPublishIdle(String component, boolean start) {
         // Default implementation - not required for this listener
-        LOGGER.debug("onPublishIdle called for component: {}, start: {}", component, start);
+        if (LOGGER.isDebugEnabled()) {
+            LOGGER.debug("onPublishIdle called for component: {}, start: {}", component, start);
+        }
     }
 
     @Override
     public void onFullUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply,
             boolean isSnapshot) {
-        LOGGER.info("BondEligibilityListener received MKV record"); 
-            
+
+        if (LOGGER.isInfoEnabled()) {
+            LOGGER.info("BondEligibilityListener received MKV record");
+        }
+
         try {
             // Update monitoring counters
-            LOGGER.info("Received full update in BondEligibilityListener for record: {}", mkvRecord.getName());
+            if (LOGGER.isInfoEnabled()) {
+                LOGGER.info("Received full update in BondEligibilityListener for record: {}", mkvRecord.getName());
+            }
             lastUpdateTimestamp.set(System.currentTimeMillis());
             
             String recordName = mkvRecord.getName();
-            LOGGER.info("Received record update: {} (snapshot: {})", recordName, isSnapshot);
-            
+            if (LOGGER.isInfoEnabled()) {
+                LOGGER.info("Received record update: {} (snapshot: {})", recordName, isSnapshot);
+            }
+
             // Extract CUSIP based on record type
             String cusip = null;
             String recordType = null;
@@ -707,12 +796,16 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
                 recordType = "MFA";
             }
             else {
-                LOGGER.debug("Ignoring record {}: unrecognized pattern", recordName);
+                if (LOGGER.isDebugEnabled()) {
+                    LOGGER.debug("Ignoring record {}: unrecognized pattern", recordName);
+                }
                 return;
             }
-            
+
             if (cusip == null) {
-                LOGGER.warn("Could not extract CUSIP from record: {}", recordName);
+                if (LOGGER.isWarnEnabled()) {
+                    LOGGER.warn("Could not extract CUSIP from record: {}", recordName);
+                }
                 return;
             }
             
@@ -726,15 +819,23 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
             // Update appropriate section based on record type
             switch (recordType) {
                 case "SDS":
-                    LOGGER.info("Updating SDS data for CUSIP: {}", cusip);
+                    if (LOGGER.isInfoEnabled()) {
+                        LOGGER.info("Updating SDS data for CUSIP: {}", cusip);
+                    }
                     bondData.updateSdsData(extractedData);
-                    LOGGER.info("Extracted SDS data for CUSIP {}: {}", cusip, extractedData);
+                    if (LOGGER.isInfoEnabled()) {
+                        LOGGER.info("Extracted SDS data for CUSIP {}: {}", cusip, extractedData);
+                    }
                     break;
-                    
+
                 case "BOND":
-                    LOGGER.info("Updating static bond data for CUSIP: {}", cusip);
+                    if (LOGGER.isInfoEnabled()) {
+                        LOGGER.info("Updating static bond data for CUSIP: {}", cusip);
+                    }
                     bondData.updateStaticData(extractedData);
-                    LOGGER.info("Extracted static bond data for CUSIP {}: {}", cusip, extractedData);
+                    if (LOGGER.isInfoEnabled()) {
+                        LOGGER.info("Extracted static bond data for CUSIP {}: {}", cusip, extractedData);
+                    }
                     // Extract instrument ID if available
                     Object instrumentId = extractedData.get("InstrumentId");
                     if (instrumentId != null) {
@@ -743,15 +844,23 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
                     break;
                     
                 case "POSITION":
-                    LOGGER.info("Updating position data for CUSIP: {}", cusip);
+                    if (LOGGER.isInfoEnabled()) {
+                        LOGGER.info("Updating position data for CUSIP: {}", cusip);
+                    }
                     bondData.updatePositionData(extractedData);
-                    LOGGER.info("Extracted position data for CUSIP {}: {}", cusip, extractedData);
+                    if (LOGGER.isInfoEnabled()) {
+                        LOGGER.info("Extracted position data for CUSIP {}: {}", cusip, extractedData);
+                    }
                     break;
 
                 case "MFA":
-                    LOGGER.info("Updating MFA data for CUSIP: {}", cusip);
+                    if (LOGGER.isInfoEnabled()) {
+                        LOGGER.info("Updating MFA data for CUSIP: {}", cusip);
+                    }
                     bondData.updateMfaData(extractedData);
-                    LOGGER.info("Extracted MFA data for CUSIP {}: {}", cusip, extractedData);
+                    if (LOGGER.isInfoEnabled()) {
+                        LOGGER.info("Extracted MFA data for CUSIP {}: {}", cusip, extractedData);
+                    }
                     break;
             }
 
@@ -774,10 +883,12 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
             // Use the supply's cursor mechanism for iteration
             MkvSupply mkvSupply = mkvRecord.getSupply();
             if (mkvSupply == null) {
-                LOGGER.warn("No supply available for record: {}", mkvRecord.getName());
+                if (LOGGER.isWarnEnabled()) {
+                    LOGGER.warn("No supply available for record: {}", mkvRecord.getName());
+                }
                 return extractedData;
             }
-            
+
             // Start with the first field index
             int cursor = mkvSupply.firstIndex();
             
@@ -798,19 +909,25 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
                         if (fieldValue != null && !fieldValue.equals(oldValue)) {
                             extractedData.put(fieldName, fieldValue);
                             changed = true;
-                            LOGGER.debug("Field updated: {} = {}", fieldName, fieldValue);
+                            if (LOGGER.isDebugEnabled()) {
+                                LOGGER.debug("Field updated: {} = {}", fieldName, fieldValue);
+                            }
                         } else if (fieldValue == null && oldValue != null) {
                             extractedData.put(fieldName, "null");
                             changed = true;
-                            LOGGER.debug("Field nulled: {}", fieldName);
+                            if (LOGGER.isDebugEnabled()) {
+                                LOGGER.debug("Field nulled: {}", fieldName);
+                            }
                         }
                     }
-                    
+
                     // Move to the next field
                     cursor = mkvSupply.nextIndex(cursor);
                     
                 } catch (Exception e) {
-                    LOGGER.warn("Error processing field at cursor {}: {}", cursor, e.getMessage());
+                    if (LOGGER.isWarnEnabled()) {
+                        LOGGER.warn("Error processing field at cursor {}: {}", cursor, e.getMessage());
+                    }
                     // Try to continue with the next field
                     if (cursor != -1) {
                         cursor = mkvSupply.nextIndex(cursor);
@@ -821,14 +938,18 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
             }
             
             if (changed) {
-                LOGGER.debug("Extracted {} fields with changes from record {}", 
-                    extractedData.size(), mkvRecord.getName());
+                if (LOGGER.isDebugEnabled()) {
+                    LOGGER.debug("Extracted {} fields with changes from record {}", 
+                            extractedData.size(), mkvRecord.getName());
+                }
             }
-            
+
         } catch (Exception e) {
-            LOGGER.error("Error in cursor iteration for record {}: {}", mkvRecord.getName(), e.getMessage(), e);
+            if (LOGGER.isErrorEnabled()) {
+                LOGGER.error("Error in cursor iteration for record {}: {}", mkvRecord.getName(), e.getMessage(), e);
+            }
         }
-        
+
         return extractedData;
     }
 
@@ -839,8 +960,9 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
     private String extractCusipFromSdsRecord(String recordName) {
         try {
             if (recordName == null) return null;
-            
-            LOGGER.info("Extracting CUSIP from SDS record: {}", recordName);
+            if (LOGGER.isInfoEnabled()) {
+                LOGGER.info("Extracting CUSIP from SDS record: {}", recordName);
+            }
             String[] parts = recordName.split("\\.");
             if (parts.length < 4) return null;
             
@@ -858,7 +980,9 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
             
             return null;
         } catch (Exception e) {
-            LOGGER.error("Error extracting CUSIP from SDS record: {}", e.getMessage(), e);
+            if (LOGGER.isErrorEnabled()) {
+                LOGGER.error("Error extracting CUSIP from SDS record: {}", e.getMessage(), e);
+            }
             return null;
         }
     }
@@ -870,7 +994,9 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
     private String extractCusipFromBondRecord(String recordName) {
         try {
             if (recordName == null) return null;
-            LOGGER.info("Extracting CUSIP from bond record: {}", recordName);
+            if (LOGGER.isInfoEnabled()) {
+                LOGGER.info("Extracting CUSIP from bond record: {}", recordName);
+            }
             String[] parts = recordName.split("\\.");
             if (parts.length < 4) return null;
             
@@ -882,7 +1008,9 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
             
             return null;
         } catch (Exception e) {
-            LOGGER.error("Error extracting CUSIP from bond record: {}", e.getMessage(), e);
+            if (LOGGER.isErrorEnabled()) {
+                LOGGER.error("Error extracting CUSIP from bond record: {}", e.getMessage(), e);
+            }
             return null;
         }
     }
@@ -894,7 +1022,9 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
     private String extractCusipFromMfaRecord(String recordName) {
         try {
             if (recordName == null) return null;
-            LOGGER.info("Extracting CUSIP from MFA record: {}", recordName);
+            if (LOGGER.isInfoEnabled()) {
+                LOGGER.info("Extracting CUSIP from MFA record: {}", recordName);
+            }
             String[] parts = recordName.split("\\.");
             if (parts.length < 4) return null;
             
@@ -911,7 +1041,9 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
             
             return null;
         } catch (Exception e) {
-            LOGGER.error("Error extracting CUSIP from MFA record: {}", e.getMessage(), e);
+            if (LOGGER.isErrorEnabled()) {
+                LOGGER.error("Error extracting CUSIP from MFA record: {}", e.getMessage(), e);
+            }
             return null;
         }
     }
@@ -923,7 +1055,9 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
     private String extractCusipFromPositionRecord(String recordName) {
         try {
             if (recordName == null) return null;
-            LOGGER.info("Extracting CUSIP from position record: {}", recordName);
+            if (LOGGER.isInfoEnabled()) {
+                LOGGER.info("Extracting CUSIP from position record: {}", recordName);
+            }
             String[] parts = recordName.split("\\.");
             if (parts.length < 4) return null;
             
@@ -977,16 +1111,20 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
                 
                 // Add to eligible list
                 eligibleBonds.add(cusip);
-                LOGGER.info("Bond {} added to eligible list (instrument: {})", cusip, instrumentId);
-                
+                if (LOGGER.isInfoEnabled()) {
+                    LOGGER.info("Bond {} added to eligible list (instrument: {})", cusip, instrumentId);
+                }
+
                 // Notify listeners with consolidated data
                 notifyEligibilityChange(cusip, true, bondData.getConsolidatedView());
 
             } else if (!shouldBeEligible.eligibleForTermC && currentlyEligible) {
                 // Remove from eligible list
                 eligibleBonds.remove(cusip);
-                LOGGER.info("Bond {} removed from eligible list", cusip);
-                
+                if (LOGGER.isInfoEnabled()) {
+                    LOGGER.info("Bond {} removed from eligible list", cusip);
+                }
+
                 // Notify listeners
                 notifyEligibilityChange(cusip, false, bondData.getConsolidatedView());
                 // Handle REG term eligibility
@@ -998,13 +1136,17 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
                 }
                 
                 eligibleBonds.add(cusip);
-                LOGGER.info("Bond {} added to eligible REG list (instrument: {})", cusip, instrumentId);
-                
+                if (LOGGER.isInfoEnabled()) {
+                    LOGGER.info("Bond {} added to eligible REG list (instrument: {})", cusip, instrumentId);
+                }
+
                 notifyEligibilityChange(cusip, true, bondData.getConsolidatedView());
             } else if (!shouldBeEligible.eligibleForTermREG && currentlyEligible) {
                 // Remove from eligible REG list
                 eligibleBonds.remove(cusip);
-                LOGGER.info("Bond {} removed from eligible REG list", cusip);
+                if (LOGGER.isInfoEnabled()) {
+                    LOGGER.info("Bond {} removed from eligible REG list", cusip);
+                }
                 notifyEligibilityChange(cusip, false, bondData.getConsolidatedView());
             }
 
