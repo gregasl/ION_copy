@@ -245,6 +245,8 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
   private final AtomicReference<GCBest> sharedGCBestCash = new AtomicReference<>();
   private final AtomicReference<GCBest> sharedGCBestREG = new AtomicReference<>();
 
+  private static final double MAX_PRICE_DEVIATION = 0.05; // 5 bps max price deviation for hedging orders
+
   // Map to track the last known fill quantity for each order
   private final Map<Integer, Double> orderFillQuantities = new ConcurrentHashMap<>();
 
@@ -658,18 +660,6 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
         }
     }
 
-    /**
-     * Updates the market maker configuration
-     * 
-     * @param config The new configuration
-     */
-    public void updateMarketMakerConfig(MarketMakerConfig config) {
-        if (marketMaker != null && config != null) {
-            marketMaker.updateConfiguration(config);
-            this.marketMakerConfig = config;
-            LOGGER.info("Market maker configuration updated: {}", config);
-        }
-    }
 
     /**
      * Gets the market maker instance
@@ -943,17 +933,30 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
         LOGGER.info("Executing MM_CONFIG command - updating market maker configuration");
         
         try {
-            // Extract configuration parameters
-            Boolean autoEnabled = (Boolean) controlMessage.getOrDefault("autoEnabled", marketMakerConfig.isAutoEnabled());
-            Number updateInterval = (Number) controlMessage.getOrDefault("updateInterval", 
+        // Extract configuration parameters with proper defaults
+        Boolean autoEnabled = (Boolean) controlMessage.getOrDefault("autoEnabled", marketMakerConfig.isAutoEnabled());
+        Number updateInterval = (Number) controlMessage.getOrDefault("updateInterval", 
             marketMakerConfig.getQuoteUpdateIntervalSeconds());
-            
-            // Create new configuration
-            MarketMakerConfig newConfig = new MarketMakerConfig(
-                autoEnabled,
-                updateInterval.intValue()
-            );
-            
+        
+        // Extract other optional parameters
+        String marketSource = (String) controlMessage.getOrDefault("marketSource", marketMakerConfig.getMarketSource());
+        Boolean autoHedge = (Boolean) controlMessage.getOrDefault("autoHedge", marketMakerConfig.isAutoHedge());
+        Double minSize = ((Number) controlMessage.getOrDefault("minSize", marketMakerConfig.getMinSize())).doubleValue();
+        
+        // Create new configuration using Builder pattern
+        MarketMakerConfig newConfig = new MarketMakerConfig.Builder()
+            .setAutoEnabled(autoEnabled)
+            .setQuoteUpdateIntervalSeconds(updateInterval.intValue())
+            .setMarketSource(marketSource)
+            .setAutoHedge(autoHedge)
+            .setMinSize(minSize)
+            .setOrderType(marketMakerConfig.getOrderType())
+            .setTimeInForce(marketMakerConfig.getTimeInForce())
+            .setTargetVenues(marketMakerConfig.getTargetVenues())
+            .setCashMarketHours(marketMakerConfig.getCashMarketOpenTime(), marketMakerConfig.getCashMarketCloseTime())
+            .setRegMarketHours(marketMakerConfig.getRegMarketOpenTime(), marketMakerConfig.getRegMarketCloseTime())
+            .build();
+        
             // Update the configuration
             updateMarketMakerConfig(newConfig);
             
@@ -1328,6 +1331,7 @@ private void trySubscribeAndRemoveListener(MkvObject mkvObject, MkvPublishManage
             
             double orderPrice = 0.0;
             String market = null;
+            boolean validVenue = false;
             // Get the best price information for this instrument
             Best bestMarket = latestBestByInstrument.get(instrumentId);
             if (bestMarket == null) {
@@ -1346,16 +1350,37 @@ private void trySubscribeAndRemoveListener(MkvObject mkvObject, MkvPublishManage
                 }
             }
             
+            validVenue = marketMaker.isTargetVenue(market);
+            if (!validVenue) {
+                LOGGER.warn("Invalid market venue for hedging: {}", market);
+                return; // Cannot hedge on invalid venue
+            }
             // Now we use the market variable to get the trader
             String trader = getTraderForVenue(market);
+            String hedgeDirection = null;
+            if (VerbStr.equals("Buy")) {
+                hedgeDirection = "Sell"; // Hedge buy with sell
+            } else if (VerbStr.equals("Sell")) {
+                hedgeDirection = "Buy"; // Hedge sell with buy
+            } else {
+                LOGGER.warn("Invalid verb for hedging: {}", VerbStr);
+                return; // Cannot hedge unknown verb
+            }
+
+            // Check if execution price is approximately near the best price
+            if (Math.abs(orderPrice - price) > MAX_PRICE_DEVIATION) {
+                LOGGER.warn("Order price deviation too high: orderPrice={}, execPrice={}, maxDeviation={}",
+                    orderPrice, price, MAX_PRICE_DEVIATION);
+                return; // Reject hedge if price is too far off
+            }
 
             if (!(trader == null) && orderPrice > 0.0 && newQtyFilled > 0.0) {
                 LOGGER.info("Adding order: market={}, trader={}, instrumentId={}, verb={}, qtyFilled={}, price={}",
-                    market, trader, instrumentId, VerbStr, newQtyFilled, orderPrice);
-                addOrder(market, trader, instrumentId, VerbStr, newQtyFilled, orderPrice, "Limit", "FAS");
+                    market, trader, instrumentId, hedgeDirection, newQtyFilled, orderPrice);
+                addOrder(market, trader, instrumentId, hedgeDirection, newQtyFilled, orderPrice, "Limit", "FAS");
             } else {
                 LOGGER.warn("No trader configured for market: {}", market);
-                return; // Cannot process without trader
+                return; // Cannot process without trader+
             }
 
 
@@ -2044,7 +2069,28 @@ public void cancelAllOrders() {
             }
         }
     }
-
     LOGGER.info("All outstanding orders cancelled");
+    }
+    /**
+     * Updates the market maker configuration
+     * 
+     * @param newConfig The new configuration to apply
+     */
+    public void updateMarketMakerConfig(MarketMakerConfig newConfig) {
+        try {
+            // Store the new configuration
+            this.marketMakerConfig = newConfig;
+            
+            // Update the market maker with the new configuration
+            if (marketMaker != null) {
+                marketMaker.updateConfig(newConfig);
+                LOGGER.info("Market maker configuration updated successfully");
+            } else {
+                LOGGER.warn("Market maker is null, configuration stored but not applied");
+            }
+        } catch (Exception e) {
+            LOGGER.error("Error updating market maker configuration: {}", e.getMessage(), e);
+            throw e; // Re-throw to be handled by the caller
+        }
     }
 }

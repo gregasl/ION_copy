@@ -21,7 +21,8 @@ public final class MarketMakerConfig {
     private final boolean autoHedge;
     private final boolean defaultMarketMakingAllowed;
     private final double minSize;
-    
+    private final double defaultIntraMarketSpread;
+
     // Market hours - pre-computed for fast access
     private final int regMarketOpenMinutes;
     private final int regMarketCloseMinutes;
@@ -36,7 +37,11 @@ public final class MarketMakerConfig {
     // Performance optimization - cache current market status
     private final boolean isDuringRegHours;
     private final boolean isDuringCashHours;
-    
+    private volatile boolean isDuringRegHoursCache;
+    private volatile boolean isDuringCashHoursCache;
+    private volatile long lastMarketHoursCheck = 0;
+    private static final long MARKET_HOURS_CACHE_MS = 30000; // 30 seconds
+
     private MarketMakerConfig(Builder builder) {
         // Core settings
         this.autoEnabled = builder.autoEnabled;
@@ -47,6 +52,7 @@ public final class MarketMakerConfig {
         this.autoHedge = builder.autoHedge;
         this.defaultMarketMakingAllowed = builder.defaultMarketMakingAllowed;
         this.minSize = builder.minSize;
+        this.defaultIntraMarketSpread = builder.defaultIntraMarketSpread;
         this.enforceMarketHours = builder.enforceMarketHours;
         
         // Pre-compute venue collections for performance
@@ -65,6 +71,8 @@ public final class MarketMakerConfig {
             (currentMinutes >= regMarketOpenMinutes && currentMinutes <= regMarketCloseMinutes) : true;
         this.isDuringCashHours = enforceMarketHours ? 
             (currentMinutes >= cashMarketOpenMinutes && currentMinutes <= cashMarketCloseMinutes) : true;
+        this.isDuringRegHoursCache = this.isDuringRegHours;
+        this.isDuringCashHoursCache = this.isDuringCashHours;
     }
     
     // Hot path method - optimized for speed
@@ -83,6 +91,7 @@ public final class MarketMakerConfig {
     public boolean isAutoHedge() { return autoHedge; }
     public boolean isDefaultMarketMakingAllowed() { return defaultMarketMakingAllowed; }
     public double getMinSize() { return minSize; }
+    public double getDefaultIntraMarketSpread() { return defaultIntraMarketSpread; }
     public boolean isEnforceMarketHours() { return enforceMarketHours; }
     public int getCashMarketOpenMinutes() { return cashMarketOpenMinutes; }
     public int getCashMarketCloseMinutes() { return cashMarketCloseMinutes; }
@@ -111,9 +120,29 @@ public final class MarketMakerConfig {
     public String[] getTargetVenues() { return targetVenuesArray.clone(); } // Defensive copy
     
     // Market hours access
-    public boolean isDuringRegHours() { return isDuringRegHours; }
-    public boolean isDuringCashHours() { return isDuringCashHours; }
-    
+    public boolean isDuringRegHours() {
+        long now = System.currentTimeMillis();
+        if (now - lastMarketHoursCheck > MARKET_HOURS_CACHE_MS) {
+            synchronized(this) {
+                if (now - lastMarketHoursCheck > MARKET_HOURS_CACHE_MS) {
+                    // Recalculate market hours
+                    int currentMinutes = LocalTime.now().getHour() * 60 + LocalTime.now().getMinute();
+                    this.isDuringRegHoursCache = !enforceMarketHours || 
+                        (currentMinutes >= regMarketOpenMinutes && currentMinutes <= regMarketCloseMinutes);
+                    this.isDuringCashHoursCache = !enforceMarketHours || 
+                        (currentMinutes >= cashMarketOpenMinutes && currentMinutes <= cashMarketCloseMinutes);
+                    lastMarketHoursCheck = now;
+                }
+            }
+        }
+        return isDuringRegHoursCache;
+    }
+
+    public boolean isDuringCashHours() {
+        isDuringRegHours(); // Trigger cache refresh if needed
+        return isDuringCashHoursCache;
+    }    
+
     // Builder pattern for construction
     public static class Builder {
         private boolean autoEnabled = false;
@@ -123,6 +152,7 @@ public final class MarketMakerConfig {
         private String timeInForce = "FAS";
         private boolean autoHedge = false;
         private boolean defaultMarketMakingAllowed = true;
+        private double defaultIntraMarketSpread = 0.01;
         private double minSize = 25.0;
         private boolean enforceMarketHours = true;
         

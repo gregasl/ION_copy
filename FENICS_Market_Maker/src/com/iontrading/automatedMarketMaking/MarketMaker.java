@@ -16,6 +16,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.time.Duration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -83,7 +84,7 @@ public class MarketMaker implements IOrderManager {
     private boolean isMfaInformationSubscribed = false;
 
     // Configuration for the market maker
-    private final MarketMakerConfig config;
+    private MarketMakerConfig config;
     
     private final BondEligibilityListener bondEligibilityListener;
     private final Set<String> trackedInstruments = ConcurrentHashMap.newKeySet();
@@ -177,31 +178,6 @@ public class MarketMaker implements IOrderManager {
                 LOGGER.info("MarketMaker initialized with bond eligibility integration");
             }
 
-            // Start periodic market making for eligible bonds
-            scheduler.scheduleAtFixedRate(
-                () -> makeMarketsForEligibleBonds("C"), 
-                5, // Initial delay (seconds) 
-                config.getQuoteUpdateIntervalSeconds(), // Run every 30 seconds
-                TimeUnit.SECONDS
-            );
-
-                        // Start periodic market making for eligible bonds
-            scheduler.scheduleAtFixedRate(
-                () -> makeMarketsForEligibleBonds("REG"), 
-                5, // Initial delay (seconds) 
-                config.getQuoteUpdateIntervalSeconds(), // Run every 30 seconds
-                TimeUnit.SECONDS
-            );
-            
-            // Add a diagnostic check task
-            scheduler.scheduleAtFixedRate(
-                this::logDiagnosticStatistics, 
-                30, // Initial delay (seconds) 
-                60, // Run every minute
-                TimeUnit.SECONDS
-            );
-
-
             if (LOGGER.isInfoEnabled()) {
                 LOGGER.info("MarketMaker.constructor: Successfully created MarketMaker instance");
             }
@@ -275,22 +251,6 @@ public class MarketMaker implements IOrderManager {
                 LOGGER.info("MarketMaker initialized with bond eligibility integration");
             }
 
-            // Start periodic market making for eligible bonds
-            scheduler.scheduleAtFixedRate(
-                () -> makeMarketsForEligibleBonds("C"), 
-                5, // Initial delay (seconds) 
-                config.getQuoteUpdateIntervalSeconds(), // Run every 30 seconds
-                TimeUnit.SECONDS
-            );
-
-            // Start periodic market making for eligible bonds
-            scheduler.scheduleAtFixedRate(
-                () -> makeMarketsForEligibleBonds("REG"), 
-                5, // Initial delay (seconds) 
-                config.getQuoteUpdateIntervalSeconds(), // Run every 30 seconds
-                TimeUnit.SECONDS
-            );
-
             if (LOGGER.isInfoEnabled()) {
                 LOGGER.info("MarketMaker.constructor: Successfully created MarketMaker instance with custom config");
             }
@@ -313,7 +273,46 @@ public class MarketMaker implements IOrderManager {
         // Initialize initial status for each term code based on current time
         updateTermCodeActiveStatus();
         
-        // Schedule daily start/stop tasks
+        // Log current market status for startup diagnostics
+        boolean cashActive = termCodeActiveStatus.getOrDefault("C", false);
+        boolean regActive = termCodeActiveStatus.getOrDefault("REG", false);
+        
+        LOGGER.info("Current market status at startup: Cash={}, REG={}", 
+            cashActive ? "OPEN" : "CLOSED", regActive ? "OPEN" : "CLOSED");
+
+        // Calculate delays for periodic market making based on actual market hours
+        long cashMarketMakingDelay = calculateMarketMakingDelay("C");
+        long regMarketMakingDelay = calculateMarketMakingDelay("REG");    
+
+        LOGGER.info("Market making delays: Cash starts in {} seconds, REG starts in {} seconds", 
+            cashMarketMakingDelay, regMarketMakingDelay);
+
+        // Schedule periodic market making with market-hours-aware delays
+        scheduler.scheduleAtFixedRate(
+            () -> {
+                // Safety check - only make markets if term code is active
+                if (termCodeActiveStatus.getOrDefault("C", false) && enabled) {
+                    makeMarketsForEligibleBonds("C");
+                }
+            }, 
+            cashMarketMakingDelay, // Wait until Cash market opens (or start immediately if already open)
+            config.getQuoteUpdateIntervalSeconds(),
+            TimeUnit.SECONDS
+        );
+
+        scheduler.scheduleAtFixedRate(
+            () -> {
+                // Safety check - only make markets if term code is active
+                if (termCodeActiveStatus.getOrDefault("REG", false) && enabled) {
+                    makeMarketsForEligibleBonds("REG");
+                }
+            }, 
+            regMarketMakingDelay, // Wait until REG market opens (or start immediately if already open)
+            config.getQuoteUpdateIntervalSeconds(),
+            TimeUnit.SECONDS
+        );
+        
+        // Schedule daily market open/close events (these handle the termCodeActiveStatus flags)
         scheduler.scheduleAtFixedRate(
             () -> startTermCodeMarketMaking("C"), 
             getSecondsUntilTime(getCashMarketOpenTime()),
@@ -342,7 +341,7 @@ public class MarketMaker implements IOrderManager {
             TimeUnit.SECONDS
         );
         
-        // Also schedule a check every minute to handle any timing issues
+        // Check market status every minute for edge cases
         scheduler.scheduleAtFixedRate(
             this::updateTermCodeActiveStatus,
             60, // Start after 1 minute
@@ -350,9 +349,50 @@ public class MarketMaker implements IOrderManager {
             TimeUnit.SECONDS
         );
         
+        // Add the diagnostic check task
+        scheduler.scheduleAtFixedRate(
+            this::logDiagnosticStatistics, 
+            30, // Initial delay (seconds) 
+            60, // Run every minute
+            TimeUnit.SECONDS
+        );
+        
         LOGGER.info("Market schedule initialized - C: {}-{}, REG: {}-{}", 
             getCashMarketOpenTime(), getCashMarketCloseTime(),
             getRegMarketOpenTime(), getRegMarketCloseTime());
+    }
+
+    /**
+     * Calculate delay until market making should start for a specific term code
+     * Returns immediate start (10 seconds) if market is already open, 
+     * or seconds until market opens if currently closed
+     */
+    private long calculateMarketMakingDelay(String termCode) {
+        LocalTime now = LocalTime.now();
+        LocalTime marketOpen;
+        
+        if ("C".equals(termCode)) {
+            marketOpen = getCashMarketOpenTime();
+        } else if ("REG".equals(termCode)) {
+            marketOpen = getRegMarketOpenTime();
+        } else {
+            LOGGER.warn("Unknown term code: {}, defaulting to 60 second delay", termCode);
+            return 60; // Default 1 minute delay for unknown term codes
+        }
+        
+        // If we're already past market open time today, start in 10 seconds
+        if (now.isAfter(marketOpen)) {
+            LOGGER.info("{} market is already open, starting market making in 10 seconds", termCode);
+            return 10;
+        }
+        
+        // Calculate seconds until market opens
+        long secondsUntilOpen = Duration.between(now, marketOpen).getSeconds();
+        
+        LOGGER.info("{} market opens at {}, starting market making in {} seconds ({} minutes)", 
+            termCode, marketOpen, secondsUntilOpen, secondsUntilOpen / 60);
+        
+        return secondsUntilOpen;
     }
 
     /**
@@ -438,35 +478,31 @@ public class MarketMaker implements IOrderManager {
             if (LOGGER.isInfoEnabled()) {
                 LOGGER.info("Cash market status changed to: {}", cashActive ? "ACTIVE" : "INACTIVE");
             }
-            if (cashActive && enabled) {
-                makeMarketsForEligibleBonds("C");
-            } else if (!cashActive) {
+            if (!cashActive) {
                 cancelAllOrders("C");
             }
         }
         
+        // Handle market open - trigger one-time market making (scheduler will continue)
+        if (!cashWasActive && cashActive && enabled) {
+            LOGGER.info("Cash market opened - triggering initial C market making");
+            scheduler.schedule(() -> {
+                try {
+                    makeMarketsForEligibleBonds("C");
+                    LOGGER.info("Initial C market making completed - scheduler will continue regular updates");
+                } catch (Exception e) {
+                    LOGGER.error("Error in initial C market making: {}", e.getMessage(), e);
+                }
+            }, 5, TimeUnit.SECONDS);
+        }
+
         if (regActive != regWasActive) {
             if (LOGGER.isInfoEnabled()) {
                 LOGGER.info("REG market status changed to: {}", regActive ? "ACTIVE" : "INACTIVE");
             }
-            if (regActive && enabled) {
-                makeMarketsForEligibleBonds("REG");
-            } else if (!regActive) {
+            if (!regActive) {
                 cancelAllOrders("REG");
             }
-        }
-    }
-
-    /**
-     * Check if time is within a range (handles overnight ranges)
-     */
-    private boolean isTimeInRange(LocalTime time, LocalTime start, LocalTime end) {
-        if (start.isAfter(end)) {
-            // Overnight range (e.g., 22:00-06:00)
-            return !time.isAfter(end) || !time.isBefore(start);
-        } else {
-            // Same-day range
-            return !time.isBefore(start) && !time.isAfter(end);
         }
     }
 
@@ -1215,7 +1251,6 @@ public class MarketMaker implements IOrderManager {
                         LOGGER.info("Order dead was a bid for {}", quote.getCusip());
                     }
                     quote.setBidOrder(null, null, 0);
-                    break;
                 }
                 
                 if (askOrder != null && askOrder.getMyReqId() == order.getMyReqId()) {
@@ -1223,9 +1258,11 @@ public class MarketMaker implements IOrderManager {
                         LOGGER.info("Order dead was an ask for {}", quote.getCusip());
                     }
                     quote.setAskOrder(null, null, 0);
-                    break;
                 }
             }
+
+            // Remove any quotes that are now empty
+            activeQuotes.values().removeIf(quote -> quote.getBidOrder() == null && quote.getAskOrder() == null);
 
             if (LOGGER.isInfoEnabled()) {
                 LOGGER.info("orderDead: Order dead notification processed");
@@ -1242,8 +1279,6 @@ public class MarketMaker implements IOrderManager {
             LOGGER.info("addOrder: Starting order creation: Source={}, Trader={}, Instrument={}, Side={}, Qty={}, Price={}, Type={}, TIF={}", 
                 MarketSource, TraderId, instrId, verb, qty, price, type, tif);
         }
-        String.format("Source=%s, Trader=%s, Instrument=%s, Side=%s, Qty=%.2f, Price=%.4f, Type=%s, TIF=%s", 
-            MarketSource, TraderId, instrId, verb, qty, price, type, tif);
 
         // Delegate to the main OrderManagement instance
         MarketOrder order = orderManager.addOrder(MarketSource, TraderId, instrId, verb, qty, price, type, tif);
@@ -1264,7 +1299,23 @@ public class MarketMaker implements IOrderManager {
     @Override
     public void best(Best best, double cash_gc, double reg_gc, GCBest gcBestCash, GCBest gcBestREG) {
         // Increment total update counter
-
+        String id = best.getId();
+        if (id == null) {
+            emptyIdCounter.incrementAndGet();
+            return;
+        }
+        
+        String instrumentId = best.getInstrumentId();
+        if (!instrumentId.endsWith("C_Fixed") && !instrumentId.endsWith("REG_Fixed")) {
+            nonOvernightCounter.incrementAndGet();
+            return;
+        }
+        
+        if (!enabled) return;
+        // Batch update counters to reduce atomic operations
+        int updates = marketUpdateCounter.incrementAndGet();
+        instrumentUpdateCounters.computeIfAbsent(id, k -> new AtomicInteger(0)).incrementAndGet();
+        
         synchronized(gcBestLock) {
             this.latestGcBestCash = gcBestCash;
             this.latestGcBestREG = gcBestREG;
@@ -1272,96 +1323,16 @@ public class MarketMaker implements IOrderManager {
             this.latestRegGcRate = reg_gc;
         }
 
-        if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("MarketMaker.best() called with Best object: {}", best);
-        }
-        // Process the market update
-        String id = best.getId();
-        String instrumentId = best.getInstrumentId();
-
-        // Enhanced logging for empty ID
-        if (id == null || id.isEmpty()) {
-            int emptyCount = emptyIdCounter.incrementAndGet();
-            
-            // Only log periodically to avoid spam
-            if (emptyCount % 100 == 1) {
-                if (LOGGER.isWarnEnabled()) {
-                    LOGGER.warn("Received market update with empty instrument ID, skipping (count: {})", emptyCount);
-                }
-                // Log full details of the Best object for debugging
-                if (LOGGER.isDebugEnabled()) {
-                    LOGGER.debug("Empty ID Best object details: {}", best.toString());
-                }
-
-                // Try to get debug info about what's in the Best object
-                try {
-                    StringBuilder sb = new StringBuilder();
-                    sb.append("Best object inspection: ");
-                    sb.append("instrumentId=").append(best.getInstrumentId());
-                    sb.append(", bid=").append(best.getBid());
-                    sb.append(", ask=").append(best.getAsk());
-                    sb.append(", bidSrc=").append(best.getBidSrc());
-                    sb.append(", askSrc=").append(best.getAskSrc());
-                if (LOGGER.isDebugEnabled()) {
-                    LOGGER.debug(sb.toString());
-                }
-                } catch (Exception e) {
-                    if (LOGGER.isErrorEnabled()) {
-                        LOGGER.error("Error inspecting Best object: {}", e.getMessage());
-                    }
-                }
-            }
-            return;
-        }
-
-        // Check for non-overnight instruments
-        if (!id.endsWith("C_Fixed") && !id.endsWith("REG_Fixed")) {
-            if (LOGGER.isWarnEnabled()) {
-                LOGGER.warn("Skipping non-overnight instrument: {}", id);
-            }
-            // Add more information about the instrument for debugging
-            if (LOGGER.isDebugEnabled()) {
-                LOGGER.debug("Non-overnight instrument details - ID: {}, InstrumentId: {}, Bid: {}, Ask: {}", 
-                    id, instrumentId, best.getBid(), best.getAsk());
-            }
-            return;
-        }
+        // Process based on term code - avoid string operations
+        boolean isCash = instrumentId.endsWith("C_Fixed");
+        processMarketUpdate(best, isCash ? gcBestCash : gcBestREG);
         
-        // Count updates per instrument
-        if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("MarketMaker:  received market update within best() for instrument: {}", id);
-        }
-        instrumentUpdateCounters.computeIfAbsent(id, k -> new AtomicInteger(0)).incrementAndGet();
-        
-        if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("MarketMaker:  update count for instrument {}: {}", id, instrumentUpdateCounters.get(id).get());
-            LOGGER.debug("MarketMaker:  best() called with Best object: {}", best);
-            LOGGER.debug("best: Received market update for {}: bid={}, ask={}, bidSrc={}, askSrc={}", 
-                id, best.getBid(), best.getAsk(), best.getBidSrc(), best.getAskSrc());
-            LOGGER.debug("MarketMaker:  Processing market update for instrument: {}", id);
-        }
-        if (id.endsWith("C_Fixed")) {
-            if (LOGGER.isDebugEnabled()) {
-                LOGGER.debug("MarketMaker:  Processing market update for CASH instrument");
-            }
-            processMarketUpdate(best, gcBestCash);
-        } else if (id.endsWith("REG_Fixed")) {
-            // For REG_Fixed instruments, use REG GC rates
-            if (LOGGER.isDebugEnabled()) {
-                LOGGER.debug("MarketMaker:  Processing market update for REG instrument");
-            }
-            processMarketUpdate(best, gcBestREG);
-        } else {
-            LOGGER.warn("MarketMaker:  Unexpected instrument type: {}", id);
-        }
-
-        // Increment processed counter - we made it to processing the update
         processedUpdateCounter.incrementAndGet();
-
-        if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("best: Market update processed");
+        
+        // Only log every 1000 updates to reduce I/O
+        if (updates % 1000 == 0) {
+            LOGGER.info("Processed {} market updates", updates);
         }
-
     }
 
     /**
@@ -2373,6 +2344,50 @@ public class MarketMaker implements IOrderManager {
     }
 
     /**
+     * Updates the configuration for this market maker.
+     * 
+     * @param newConfig The new configuration to apply
+     */
+    public void updateConfig(MarketMakerConfig newConfig) {
+        if (LOGGER.isInfoEnabled()) {
+            LOGGER.info("updateConfig: Updating market maker configuration");
+        }
+        
+        if (newConfig == null) {
+            throw new IllegalArgumentException("New configuration cannot be null");
+        }
+        
+        MarketMakerConfig oldConfig = this.config;
+        this.config = newConfig;
+        
+        if (LOGGER.isInfoEnabled()) {
+            LOGGER.info("Configuration updated: autoEnabled={} -> {}, minSize={} -> {}", 
+                oldConfig.isAutoEnabled(), newConfig.isAutoEnabled(),
+                oldConfig.getMinSize(), newConfig.getMinSize());
+        }
+        
+        // Apply the new configuration settings
+        // If auto-enabled is being turned on, we may need to start trading
+        if (newConfig.isAutoEnabled() && !isRunning()) {
+            if (LOGGER.isInfoEnabled()) {
+                LOGGER.info("Starting automated market making due to config update");
+            }
+            startAutomatedMarketMaking();
+        } 
+        // If auto-enabled is being turned off, we may need to stop trading
+        else if (!newConfig.isAutoEnabled() && isRunning()) {
+            if (LOGGER.isInfoEnabled()) {
+                LOGGER.info("Stopping automated market making due to config update");
+            }
+            stopAutomatedMarketMaking();
+        }
+        
+        if (LOGGER.isInfoEnabled()) {
+            LOGGER.info("updateConfig: Configuration update completed");
+        }
+    }
+
+    /**
      * Prepares the market maker for shutdown without making MKV calls.
      * First phase of the two-phase shutdown process.
      */
@@ -2558,7 +2573,7 @@ public class MarketMaker implements IOrderManager {
      * @param venue The venue to check
      * @return true if it's a target venue, false otherwise
      */
-    private boolean isTargetVenue(String venue) {
+    public boolean isTargetVenue(String venue) {
         if (LOGGER.isInfoEnabled()) {
             LOGGER.info("isTargetVenue: Checking if venue is targeted: {}", venue);
         }
@@ -2873,30 +2888,14 @@ public class MarketMaker implements IOrderManager {
             // }
 
             // Get the best bid and ask prices and sources
-            double bestBid = best.getBid();
-            double bestAsk = best.getAsk();
+            double referenceBid = best.getBid();
+            double referenceAsk = best.getAsk();
             String bidSource = best.getBidSrc();
             String askSource = best.getAskSrc();
-            if (LOGGER.isInfoEnabled()) {
-                LOGGER.info("Bid Source: {}, Ask Source: {}", bidSource, askSource);
-            }
-            // Log the best prices
-            if (LOGGER.isInfoEnabled()) {
-                LOGGER.info("Best prices for bond {}: bid={}, ask={}", bondId, bestBid, bestAsk);
-            }
 
-            // Skip if we don't have valid prices or sources
-            if (bestBid <= 0 || bestAsk <= 0 || bidSource == null || askSource == null) {
-                if (LOGGER.isInfoEnabled()) {
-                    LOGGER.info("Skipping symmetric quoting - invalid prices or sources: " +
-                        "bid={}, ask={}, bidSrc={}, askSrc={}",
-                    bestBid, bestAsk, bidSource, askSource);
-                return;
-                }
-            }   
             // Check if either bid or ask is from one of our target venues
-            boolean validBidSource = isTargetVenue(bidSource);
-            boolean validAskSource = isTargetVenue(askSource);
+            boolean validBidSource = isTargetVenue(bidSource) && referenceBid > 0;
+            boolean validAskSource = isTargetVenue(askSource) && referenceAsk > 0;
             
             if (!validBidSource && !validAskSource) {
                 if (LOGGER.isDebugEnabled()) {
@@ -2905,59 +2904,22 @@ public class MarketMaker implements IOrderManager {
                 return;
             }
 
-            if (LOGGER.isInfoEnabled()) {
-                LOGGER.info("Valid symmetric market data for bond {}: bid={}/{}, ask={}/{}",
-                    bondId, bestBid, bidSource, bestAsk, askSource);
-            }
-
             // Calculate our quoting prices
-            double ourBidPrice = 0;
-            double ourAskPrice = 0;
-            String referenceBidSource = null;
-            String referenceAskSource = null;
+            GCBest gcBest = "C".equals(termCode) ? getLatestGcBestCash() : getLatestGcBestREG();
             
-            if (validBidSource) {
-                ourBidPrice = bestBid + 0.01;
-                referenceBidSource = bidSource;
-                if (LOGGER.isDebugEnabled()) {
-                    LOGGER.debug("Valid bid source, our bid price will be: {}", ourBidPrice);
-                }
+            // Calculate our quote prices with spread
+            double spreadAdjustment = config.getDefaultIntraMarketSpread(); // 1bp spread
+            double ourBidPrice = validBidSource ? referenceBid + spreadAdjustment : 
+                                (gcBest != null ? gcBest.getBid() + spreadAdjustment : 0);
+            double ourAskPrice = validAskSource ? referenceAsk - spreadAdjustment : 
+                                (gcBest != null ? gcBest.getAsk() - spreadAdjustment : 0);
+            
+            // Validate minimum spread
+            if (ourBidPrice > 0 && ourAskPrice > 0 && (ourAskPrice - ourBidPrice) < config.getDefaultIntraMarketSpread()) {
+                LOGGER.debug("Spread too tight for {}: bid={}, ask={}", bondId, ourBidPrice, ourAskPrice);
+                return;
             }
 
-            if (validAskSource) {
-                ourAskPrice = bestAsk - 0.01;
-                referenceAskSource = askSource;
-                if (LOGGER.isDebugEnabled()) {
-                    LOGGER.debug("Valid ask source, our ask price will be: {}", ourAskPrice);
-                }
-            }
-            
-            // // Enforce minimum spread if both sides are valid
-            // if (validBidSource && validAskSource) {
-            //     double currentSpread = ourAskPrice - ourBidPrice;
-            //     if (currentSpread < config.getMinSpread()) {
-            //         // Adjust prices to meet minimum spread
-            //         double midpoint = (ourBidPrice + ourAskPrice) / 2;
-            //         ourBidPrice = midpoint - (config.getMinSpread() / 2);
-            //         ourAskPrice = midpoint + (config.getMinSpread() / 2);
-            //         LOGGER.info("Enforcing minimum spread of {}, adjusted prices: bid={}, ask={}",
-            //             config.getMinSpread(), ourBidPrice, ourAskPrice);
-            //     }
-            // }
-            
-            // Validate that our prices are reasonable
-            // if (validBidSource && (ourBidPrice <= 0 || ourBidPrice < config.getMinPrice() || ourBidPrice > config.getMaxPrice())) {
-            //     LOGGER.warn("Invalid calculated bid price: {} (min={}, max={})", 
-            //         ourBidPrice, config.getMinPrice(), config.getMaxPrice());
-            //     validBidSource = false;
-            // }
-            
-            // if (validAskSource && (ourAskPrice <= 0 || ourAskPrice < config.getMinPrice() || ourAskPrice > config.getMaxPrice())) {
-            //     LOGGER.warn("Invalid calculated ask price: {} (min={}, max={})", 
-            //         ourAskPrice, config.getMinPrice(), config.getMaxPrice());
-            //     validAskSource = false;
-            // }
-            //
             // Get the native instrument ID using the correct instrument ID
             String nativeInstrument = null;
             if (depthListener != null) {
@@ -2995,12 +2957,12 @@ public class MarketMaker implements IOrderManager {
 
                 if (validBidSource) {
                     placeOrder(bondId, nativeInstrument, "Buy", config.getMinSize(),
-                        ourBidPrice, referenceBidSource);
+                        ourBidPrice, bidSource);
                 }
                 
                 if (validAskSource) {
-                    placeOrder(bondId, nativeInstrument, "Sell", config.getMinSize(), 
-                        ourAskPrice, referenceAskSource);
+                    placeOrder(bondId, nativeInstrument, "Sell", config.getMinSize(),
+                        ourAskPrice, askSource);
                 }
 
                 if (LOGGER.isDebugEnabled()) {
@@ -3011,8 +2973,8 @@ public class MarketMaker implements IOrderManager {
             // Only update quotes that need updating based on price changes or dead orders
                 updateExistingSymmetricQuotesWithDupeCheck(
                     existingQuote, bondId, nativeInstrument,
-                    validBidSource, ourBidPrice, referenceBidSource, hasActiveBid,
-                    validAskSource, ourAskPrice, referenceAskSource, hasActiveAsk);
+                    validBidSource, ourBidPrice, bidSource, hasActiveBid,
+                    validAskSource, ourAskPrice, askSource, hasActiveAsk);
                 if (LOGGER.isDebugEnabled()) {
                     LOGGER.debug("processSymmetricQuoting: Updated existing quotes for bond: {}", bondId);
                 }
@@ -3167,4 +3129,5 @@ public class MarketMaker implements IOrderManager {
             return latestRegGcRate;
         }
     }
+    
 }
