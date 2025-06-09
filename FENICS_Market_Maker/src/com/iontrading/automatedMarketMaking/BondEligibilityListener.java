@@ -59,11 +59,10 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
     private final AtomicLong lastUpdateTimestamp = new AtomicLong(0);
     private final AtomicLong consecutiveErrorCount = new AtomicLong(0);
     
-    private static final Pattern SDS_CUSIP_PATTERN = Pattern.compile("ALL\\.POSITION_US\\.SDS\\.([^:]+)");
+    private static final Pattern SDS_CUSIP_PATTERN = Pattern.compile("ALL\\.POSITION_US\\.SDS\\.([^:]+)(?::.+)?");
     private static final Pattern BOND_CUSIP_PATTERN = Pattern.compile("USD\\.CM_BOND\\.VMO_REPO_US\\.(.+)");
     private static final Pattern POSITION_CUSIP_PATTERN = Pattern.compile("USD\\.IU_POSITION\\.VMO_REPO_US\\.([^_]+)");
     private static final Pattern MFA_CUSIP_PATTERN = Pattern.compile("ALL\\.STATISTICS\\.MFA\\.MFA_([^_]+)_");
-
 
     /**
      * Constructor
@@ -126,6 +125,12 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
      * Notify listeners of eligibility change
      */
     private void notifyEligibilityChange(String cusip, boolean isEligible, Map<String, Object> bondData) {
+        
+        if (cusip == null) {
+           LOGGER.error("notifyEligibilityChange: cusip is null, cannot notify listeners");
+            return;
+        }
+        
         synchronized (eligibilityListeners) {
             for (EligibilityChangeListener listener : eligibilityListeners) {
                 try {
@@ -171,10 +176,21 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
     /**
      * Get instrument ID for a bond
      */
-    public String getInstrumentIdForBond(String bondId, String TermCode) {
+    public String getInstrumentIdForBond(String bondId, String termCode) {
+        if (bondId == null) {
+            LOGGER.warn("getInstrumentIdForBond: bondId is null, termCode={}", termCode);
+            return null;
+        }
+    
+        if (termCode == null) {
+            LOGGER.warn("getInstrumentIdForBond: termCode is null, bondId={}", bondId);
+            return null;
+        }
+
         Map<String, String> instrumentMap = bondToInstrumentMaps.get(bondId);
         if (instrumentMap == null) return null;
-        return instrumentMap.get(TermCode);
+    
+        return instrumentMap.get(termCode);
     }
 
     /**

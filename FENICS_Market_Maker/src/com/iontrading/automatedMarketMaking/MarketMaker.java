@@ -1710,6 +1710,11 @@ public class MarketMaker implements IOrderManager {
             LOGGER.info("handleEligibilityChange: Bond={} isEligible={}", cusip, isEligible);
         }
 
+        if (cusip == null) {
+            LOGGER.error("handleEligibilityChange: cusip is null, ignoring eligibility change");
+            return;
+        }
+
         if (!enabled) {
             if (LOGGER.isInfoEnabled()) {
                 LOGGER.info("handleEligibilityChange: Market maker not enabled, ignoring change");
@@ -1921,6 +1926,11 @@ public class MarketMaker implements IOrderManager {
      */
     private void tryCreateOrUpdateMarkets(String bondId, String termCode) {
         try {
+            if (bondId == null) {
+               LOGGER.error("tryCreateOrUpdateMarkets: bondId is null, cannot create markets");
+                return;
+            }
+            
             // Get the instrument ID that corresponds to this bond ID
             String instrumentId = bondEligibilityListener.getInstrumentIdForBond(bondId, termCode);
             if (instrumentId == null) {
