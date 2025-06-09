@@ -404,7 +404,6 @@ public class Instrument {
                 String src = getSourceByIndex(i);
                 String nativeId = getIdByIndex(i);
                 String attr = getAttributeByIndex(i);
-                double qtyMin = Double.parseDouble(getQtyMinByIndex(i)); 
                 Boolean isAttrAON = getAONByIndex(i);
 
                 if (src != null && !src.isEmpty()) {
@@ -413,7 +412,6 @@ public class Instrument {
                     .append(", id=").append(nativeId)
                     .append(", attr=").append(attr)
                     .append(", isAttrAON=").append(isAttrAON)
-                    .append(", qtyMin=").append(qtyMin)
                     .append("\n");
                 }
             }

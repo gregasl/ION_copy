@@ -42,7 +42,6 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
     
     // Store eligible bonds
     private final Set<String> eligibleBonds = ConcurrentHashMap.newKeySet();
-    private final Map<String, Set<String>> eligibleBondsByTermCode = new ConcurrentHashMap<>();
 
     // Store bond to instrument mapping
     public final Map<String, Map<String, String>> bondToInstrumentMaps = new ConcurrentHashMap<>();    
@@ -124,17 +123,17 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
     /**
      * Notify listeners of eligibility change
      */
-    private void notifyEligibilityChange(String cusip, boolean isEligible, Map<String, Object> bondData) {
-        
-        if (cusip == null) {
-           LOGGER.error("notifyEligibilityChange: cusip is null, cannot notify listeners");
+    private void notifyEligibilityChange(String Id, boolean isEligible, Map<String, Object> bondData) {
+
+        if (Id == null) {
+            LOGGER.error("notifyEligibilityChange: Id is null, cannot notify listeners");
             return;
         }
         
         synchronized (eligibilityListeners) {
             for (EligibilityChangeListener listener : eligibilityListeners) {
                 try {
-                    listener.onEligibilityChange(cusip, isEligible, bondData);
+                    listener.onEligibilityChange(Id, isEligible, bondData);
                 } catch (Exception e) {
                     if (LOGGER.isErrorEnabled()) {
                         LOGGER.error("Error notifying eligibility listener: {}", e.getMessage(), e);
@@ -142,14 +141,6 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
                 }
             }
         }
-    }
-    
-    /**
-     * Get eligible bonds for a specific term code
-     */
-    public Set<String> getEligibleBonds(String termCode) {
-        Set<String> eligible = eligibleBondsByTermCode.get(termCode);
-        return eligible != null ? new HashSet<>(eligible) : new HashSet<>();
     }
 
     /**
@@ -162,17 +153,14 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
     /**
      * Check if a specific bond is eligible for a specific term code
      */
-    public boolean isBondEligible(String cusip, String termCode) {
-        return isEligibleForTermCode(cusip, termCode);
+    public boolean isIdEligible(String Id) {
+        if (Id == null) {
+            LOGGER.warn("isIdEligible: Id is null");
+            return false;
+        }
+        return isEligible(Id);
     }
 
-
-    /**
-     * Check if a bond is eligible for any term code
-     */
-    public boolean isBondEligible(String cusip) {
-        return eligibleBonds.contains(cusip);
-    }
     /**
      * Get instrument ID for a bond
      */
@@ -200,30 +188,26 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
         BondConsolidatedData data = consolidatedBondData.get(cusip);
         return data != null ? data.getConsolidatedView() : null;
     }
-    
-    private boolean isEligibleForTermCode(String cusip, String termCode) {
-        Set<String> eligibleForTerm = eligibleBondsByTermCode.get(termCode);
-        return eligibleForTerm != null && eligibleForTerm.contains(cusip);
+
+    private boolean isEligible(String Id) {
+        return eligibleBonds.contains(Id);
     }
 
     /**
      * Add a bond as eligible for market making
      */
-    public void addEligibleBond(String cusip, String instrumentId, String termCode, Map<String, Object> bondData) {
-        eligibleBondsByTermCode.computeIfAbsent(termCode, k -> ConcurrentHashMap.newKeySet()).add(cusip);
-        boolean wasEligible = isEligibleForTermCode(cusip, termCode);
-        eligibleBonds.add(cusip);
+    public void addEligibleBond(String Id, Map<String, Object> bondData) {
+        boolean wasEligible = isIdEligible(Id);
+        eligibleBonds.add(Id);
 
         // Get or create the instrument map for this bond
         Map<String, String> instrumentMap = bondToInstrumentMaps.computeIfAbsent(
-            cusip, k -> new ConcurrentHashMap<>());
-        
-        // Add the instrument ID for the specific market/term
-        instrumentMap.put(termCode, instrumentId);
+            Id, k -> new ConcurrentHashMap<>());
+
 
         // Update to use consolidatedBondData instead of bondDataMap
         BondConsolidatedData consolidatedData = consolidatedBondData.computeIfAbsent(
-            cusip, k -> new BondConsolidatedData(k));
+            Id, k -> new BondConsolidatedData(k));
         
         // Add data based on prefix conventions
         for (Map.Entry<String, Object> entry : bondData.entrySet()) {
@@ -249,48 +233,31 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
         
         if (!wasEligible) {
             if (LOGGER.isInfoEnabled()) {
-                LOGGER.info("Bond {} added to eligible list (instrument: {})", cusip, instrumentId);
+                LOGGER.info("Bond {} added to eligible list (iD: {})", Id);
             }
-            notifyEligibilityChange(cusip, true, consolidatedData.getConsolidatedView());
+            notifyEligibilityChange(Id, true, consolidatedData.getConsolidatedView());
         }
     }
 
-        
     /**
      * Remove a bond from eligible list
      */
-    public void removeEligibleBond(String cusip, String termCode) {
-        Set<String> eligibleForTerm = eligibleBondsByTermCode.get(termCode);
-        boolean wasEligible = isEligibleForTermCode(cusip, termCode);
-        // Remove the specific term code from the bond's instrument map
-
-        if (eligibleForTerm != null) {
-            eligibleForTerm.remove(cusip);
-            if (eligibleForTerm.isEmpty()) {
-               eligibleBondsByTermCode.remove(termCode);
-            }
-        }
-
-        Map<String, String> instrumentMap = bondToInstrumentMaps.get(cusip);
-        if (instrumentMap != null) {
-            instrumentMap.remove(termCode);
-            // If the map is now empty, remove the entire entry
-            if (instrumentMap.isEmpty()) {
-                bondToInstrumentMaps.remove(cusip);
-                eligibleBonds.remove(cusip);
-            }
+    public void removeEligibleBond(String Id) {
+        boolean wasEligible = isIdEligible(Id);
+        if (wasEligible) {
+            eligibleBonds.remove(Id);
         }
 
         // Update to use consolidatedBondData instead of bondDataMap
-        BondConsolidatedData bondData = consolidatedBondData.get(cusip);
+        BondConsolidatedData bondData = consolidatedBondData.get(Id);
         Map<String, Object> consolidatedView = bondData != null ? 
             bondData.getConsolidatedView() : null;
         
         if (wasEligible) {
             if (LOGGER.isInfoEnabled()) {
-                LOGGER.info("Bond {} removed from eligible {} list", cusip, termCode);
+                LOGGER.info("Bond {} removed from eligible list", Id);
             }
-            notifyEligibilityChange(cusip, false, consolidatedView);
+            notifyEligibilityChange(Id, false, consolidatedView);
         }
     }
     
@@ -323,6 +290,12 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
             Map<String, Object> bondData;
             boolean eligibleC = true;   
             boolean eligibleREG = true;   
+            if (!isValidCusip(cusip)) {
+                if (LOGGER.isInfoEnabled()) {
+                    LOGGER.info("Invalid CUSIP for eligibility check: {}", cusip);
+                }
+                return new EligibilityResult(false, false);
+            }
 
             if (LOGGER.isInfoEnabled()) {
                 LOGGER.info("Evaluating eligibility for bond & bondDataObj: {} {}", cusip, bondDataObj);
@@ -629,49 +602,47 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
                 BondConsolidatedData bondData = entry.getValue();
 
                 EligibilityResult shouldBeEligible = shouldBondBeEligible(cusip, bondData);
-                boolean currentlyEligibleC = isEligibleForTermCode(cusip, "C");
-                boolean currentlyEligibleREG = isEligibleForTermCode(cusip, "REG");
-            
+                
+                String IdC = cusip + "_C_Fixed";
+                String IdREG = cusip + "_REG_Fixed";
+
+                boolean currentlyEligibleC = isIdEligible(IdC);
+                boolean currentlyEligibleREG = isIdEligible(IdREG);
+
                 // Handle C term changes
             if (shouldBeEligible.eligibleForTermC && !currentlyEligibleC) {
                 // Bond became eligible
-                String instrumentId = extractInstrumentId(cusip, bondData);
-                    if (instrumentId != null) {
-                        addEligibleBond(cusip, instrumentId, "C", bondData.getConsolidatedView());
-                        eligibleCCount++;
-                        if (LOGGER.isInfoEnabled()) {
-                            LOGGER.info("Bond {} added to eligible list (instrument: {})", cusip, instrumentId);
-                        }
-                    }
-                } else if (!shouldBeEligible.eligibleForTermC && currentlyEligibleC) {
-                    // Bond became ineligible
-                    removeEligibleBond(cusip, "C");
-                    ineligibleCCount++;
+                    addEligibleBond(IdC, bondData.getConsolidatedView());
+                    eligibleCCount++;
                     if (LOGGER.isInfoEnabled()) {
-                        LOGGER.info("Bond {} removed from eligible list (termCode: {})", cusip, "C");
+                        LOGGER.info("Bond added to eligible list (instrument: {})", IdC);
                     }
-                } 
-
-                if (shouldBeEligible.eligibleForTermREG && !currentlyEligibleREG) {
-                    String instrumentId = extractInstrumentId(cusip, bondData);
-                    if (instrumentId != null) {
-                        addEligibleBond(cusip, instrumentId, "REG", bondData.getConsolidatedView());
-                        eligibleREGCount++;
+                    else if (!shouldBeEligible.eligibleForTermC && currentlyEligibleC) {
+                        // Bond became ineligible
+                        removeEligibleBond(IdC);
+                        ineligibleCCount++;
                         if (LOGGER.isInfoEnabled()) {
-                            LOGGER.info("Bond {} added to eligible list (instrument: {})", cusip, instrumentId);
-                        }
-                    }
-                    else if (!shouldBeEligible.eligibleForTermREG && currentlyEligibleREG) {
-                        // Bond remains ineligible
-                        removeEligibleBond(cusip, "REG");
-                        ineligibleREGCount++;
-                        if (LOGGER.isInfoEnabled()) {
-                            LOGGER.info("Bond {} removed from eligible list (termCode: {})", cusip, "REG");
+                            LOGGER.info("Bond removed from eligible list (termCode: {})", "C");
                         }
                     }
                 }
-            }
 
+            if (shouldBeEligible.eligibleForTermREG && !currentlyEligibleREG) {
+                    addEligibleBond(IdREG, bondData.getConsolidatedView());
+                    eligibleREGCount++;
+                    if (LOGGER.isInfoEnabled()) {
+                        LOGGER.info("Bond added to eligible list (instrument: {})", IdREG);
+                    }
+                } else if (!shouldBeEligible.eligibleForTermREG && currentlyEligibleREG) {
+                    // Bond remains ineligible
+                    removeEligibleBond(IdREG);
+                    ineligibleREGCount++;
+                    if (LOGGER.isInfoEnabled()) {
+                        LOGGER.info("Bond removed from eligible list (termCode: {})", "REG");
+                    }
+                }
+            }
+            
             if (eligibleCCount > 0 || ineligibleCCount > 0 || eligibleREGCount > 0 || ineligibleREGCount > 0) {
                 if (LOGGER.isInfoEnabled()) {
                     LOGGER.info("Eligibility check complete: {} added, {} removed, {} total eligible",
@@ -683,99 +654,6 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
             if (LOGGER.isErrorEnabled()) {
                 LOGGER.error("Error in periodic eligibility check: {}", e.getMessage(), e);
             }
-        }
-    }
-
-    /**
-     * Extract instrument ID from bond data
-     * This works with both consolidated data objects and raw extracted data
-     */
-    private String extractInstrumentId(String cusip, Object bondDataObj) {
-        try {
-            // Handle the case where we get a BondConsolidatedData object
-            if (bondDataObj instanceof BondConsolidatedData) {
-                BondConsolidatedData bondData = (BondConsolidatedData) bondDataObj;
-                
-                // Try each data source in priority order
-                
-                // 1. Check static data for instrument ID
-                Map<String, Object> staticData = bondData.getStaticData();
-                if (staticData != null) {
-                    Object instrumentId = staticData.get("InstrumentId");
-                    if (instrumentId != null) {
-                        return instrumentId.toString();
-                    }
-                }
-                
-                // 2. Check position data for instrument ID or references
-                Map<String, Object> positionData = bondData.getPositionData();
-                if (positionData != null) {
-                    Object instrumentId = positionData.get("InstrumentId");
-                    if (instrumentId != null) {
-                        return instrumentId.toString();
-                    }
-                }
-                
-                // 3. Check SDS data for any relevant mapping
-                Map<String, Object> sdsData = bondData.getSdsData();
-                if (sdsData != null) {
-                    Object instrumentId = sdsData.get("InstrumentId");
-                    if (instrumentId != null) {
-                        return instrumentId.toString();
-                    }
-                }
-
-                // 4. Check MFA data for any relevant mapping
-                Map<String, Object> mfaData = bondData.getMfaData();
-                if (mfaData != null) {
-                    Object instrumentId = mfaData.get("Id");
-                    if (instrumentId != null) {
-                        return instrumentId.toString();
-                    }
-                }
-            }
-            // Handle regular Map<String, Object>
-            else if (bondDataObj instanceof Map) {
-                @SuppressWarnings("unchecked")
-                Map<String, Object> bondData = (Map<String, Object>) bondDataObj;
-                
-                // First try direct instrument ID
-                Object instrumentId = bondData.get("InstrumentId");
-                if (instrumentId != null) {
-                    return instrumentId.toString();
-                }
-                // Then try with prefixes
-                String[] prefixes = {"STATIC_", "POS_", "SDS_", "MFA_"};
-                for (String prefix : prefixes) {
-                    Object prefixedId = bondData.get(prefix + "InstrumentId");
-                    if (prefixedId != null) {
-                        return prefixedId.toString();
-                    }
-                }
-                
-                // Look for related fields that might contain instrument ID
-                String[] relatedFields = {"SecurityId", "InstrRef", "Id"};
-                for (String field : relatedFields) {
-                    Object relatedValue = bondData.get(field);
-                    if (relatedValue != null && relatedValue.toString().contains("INSTRUMENT")) {
-                        return relatedValue.toString();
-                    }
-                }
-            }
-            
-            // Check if we already have a mapping
-            Map<String, String> instrumentMap = bondToInstrumentMaps.get(cusip);
-            if (instrumentMap != null && !instrumentMap.isEmpty()) {
-                return instrumentMap.values().iterator().next(); // Return first available instrument
-            }
-            
-            // Fallback: construct instrument ID from CUSIP
-            LOGGER.debug("Using fallback instrument ID for CUSIP: {}", cusip);
-            return "USD.CM_INSTRUMENT.VMO_REPO_US." + cusip + "_C_Fixed";
-            
-        } catch (Exception e) {
-            LOGGER.error("Error extracting instrument ID for bond {}: {}", cusip, e.getMessage(), e);
-            return null;
         }
     }
     
@@ -1079,43 +957,57 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
     }
 
     /**
+     * Return VMO Id format
+     */
+    private String IdfromCUSIP (String cusip, String termCode) {
+        // Basic validation - adjust as needed
+        if (cusip == null || termCode == null) {
+            LOGGER.warn("Cannot create ID from null values: cusip={}, termCode={}", cusip, termCode);
+            return null;
+        }
+
+        if (isValidCusip(cusip)) {
+            return cusip + "_" + termCode + "_Fixed";
+        }
+        return null;
+    }
+
+    /**
      * Evaluate bond eligibility based on consolidated data
      */
     private void evaluateBondEligibility(String cusip, BondConsolidatedData bondData) {
         try {
             EligibilityResult shouldBeEligible = shouldBondBeEligible(cusip, bondData);
-            boolean currentlyEligibleC = isEligibleForTermCode(cusip, "C");
-            boolean currentlyEligibleREG = isEligibleForTermCode(cusip, "REG"); 
-
+            String IdC = IdfromCUSIP(cusip, "C");
+            String IdREG = IdfromCUSIP(cusip, "REG");
+            boolean currentlyEligibleC = isIdEligible(IdC);
+            boolean currentlyEligibleREG = isIdEligible(IdREG);
 
             
             if (shouldBeEligible.eligibleForTermC && !currentlyEligibleC) {
                 // Add bond as eligible for the specified term code
-                String instrumentId = extractInstrumentId(cusip, bondData);
-                addEligibleBond(cusip, instrumentId, "C", bondData.getConsolidatedView());
+                addEligibleBond(IdC, bondData.getConsolidatedView());
                 if (LOGGER.isInfoEnabled()) {
-                    LOGGER.info("Bond {} added to eligible C list (instrument: {})", cusip, instrumentId);
+                    LOGGER.info("Bond added to eligible C list (instrument: {})", IdC);
                 }
             } else if (!shouldBeEligible.eligibleForTermC && currentlyEligibleC) {
-                removeEligibleBond(cusip, "C");
+                removeEligibleBond(IdC);
                 if (LOGGER.isInfoEnabled()) {
-                    LOGGER.info("Bond {} removed from eligible C list", cusip);
+                    LOGGER.info("Bond {} removed from eligible C list", IdC);
                 }
             }
             
             if (shouldBeEligible.eligibleForTermREG && !currentlyEligibleREG) {
                 // Add bond as eligible for REG term
-                String instrumentId = extractInstrumentId(cusip, bondData);
-                addEligibleBond(cusip, instrumentId, "REG", bondData.getConsolidatedView());
+                addEligibleBond(IdREG, bondData.getConsolidatedView());
                 if (LOGGER.isInfoEnabled()) {
-                    LOGGER.info("Bond {} added to eligible REG list (instrument: {})", cusip, instrumentId);
+                    LOGGER.info("Bond {} added to eligible REG list (instrument: {})", cusip, IdREG);
                 }
-                notifyEligibilityChange(cusip, true, bondData.getConsolidatedView());
             } else if (!shouldBeEligible.eligibleForTermREG && currentlyEligibleREG) {
                 // Remove from eligible REG list
-                removeEligibleBond(cusip, "REG");
+                removeEligibleBond(IdREG);
                 if (LOGGER.isInfoEnabled()) {
-                    LOGGER.info("Bond {} removed from eligible REG list", cusip);
+                    LOGGER.info("Bond {} removed from eligible REG list", IdREG);
                 }
             }
 

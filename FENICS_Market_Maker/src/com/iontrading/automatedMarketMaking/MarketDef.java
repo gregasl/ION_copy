@@ -65,7 +65,7 @@ public class MarketDef {
             "Id8", "Src8", "Attribute8", "QtyMin8", "Id9", "Src9", "Attribute9", "QtyMin9",
             "Id10", "Src10", "Attribute10", "QtyMin10", "Id11", "Src11", "Attribute11", "QtyMin11",
             "Id12", "Src12", "Attribute12", "QtyMin12", "Id13", "Src13", "Attribute13", "QtyMin13",
-            "Id14", "Src14", "Attribute14", "QtyMin14", "Id15", "Src15", "Attribute15", "QtyMin15",
+            "Id14", "Src14", "Attribute14", "QtyMin14", "Id15", "Src15", "Attribute15", "QtyMin15"
     };
     
     /**
