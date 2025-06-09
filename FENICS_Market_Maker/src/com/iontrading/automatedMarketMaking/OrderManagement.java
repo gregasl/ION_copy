@@ -106,13 +106,12 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
 
         ApplicationLogging.setLogLevels("DEBUG",
             "com.iontrading.automatedMarketMaking.Instrument",
-                        "com.iontrading.automatedMarketMaking.MarketMaker"
+            "com.iontrading.automatedMarketMaking.MarketMaker",
+            "com.iontrading.automatedMarketMaking.OrderManagement"
         );
 
         // Core business logic at INFO
         ApplicationLogging.setLogLevels("INFO",
-            "com.iontrading.automatedMarketMaking.OrderManagement",
-            "com.iontrading.automatedMarketMaking.Instrument",
             "com.iontrading.automatedMarketMaking.BondEligibilityListener",
             "com.iontrading.automatedMarketMaking.EligibilityChangeListener",
             "com.iontrading.automatedMarketMaking.MarketOrder"
@@ -195,6 +194,8 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
   
   private final Map<String, String> venueToTraderMap = new HashMap<>();
   // Pattern identifiers from MarketDef
+  private static final String ORDER_PATTERN = MarketDef.ORDER_PATTERN;
+  private static final String[] ORDER_FIELDS = MarketDef.ORDER_FIELDS;
   private static final String DEPTH_PATTERN = MarketDef.DEPTH_PATTERN;
   private static final String[] DEPTH_FIELDS = MarketDef.DEPTH_FIELDS;
   private static final String INSTRUMENT_PATTERN = MarketDef.INSTRUMENT_PATTERN;
@@ -1037,6 +1038,9 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
             // Subscribe to the depth pattern
             subscribeToPattern();
             
+            // Subscribe to order records
+            subscribeToRecord();
+
             // Set up a monitor to check subscription status periodically
             setupPatternSubscriptionMonitor();
             
@@ -1307,6 +1311,8 @@ private void trySubscribeAndRemoveListener(MkvObject mkvObject, MkvPublishManage
             String appName = mkvRecord.getValue("CompNameOrigin").getString();
             String src = mkvRecord.getValue("OrigSrc").getString();
 
+            LOGGER.info("Processing full update for record: {}, appName={}, src={}", 
+                mkvRecord.getName(), appName, src);
             if (!"MarketMaker".equals(appName) || !"FENICS_USREPO".equals(src)) {
                 return; // Not a market maker order nor a FENICS execution
             }
@@ -1317,8 +1323,11 @@ private void trySubscribeAndRemoveListener(MkvObject mkvObject, MkvPublishManage
             String origId = mkvRecord.getValue("OrigId").getString();
             String VerbStr = mkvRecord.getValue("VerbStr").getString();
             String tradeStatus = mkvRecord.getValue("TradingStatusStr").getString();
-            double qtyFill = mkvRecord.getValue("QtyFill").getReal();
+            double qtyFill = mkvRecord.getValue("QtyHit").getReal();
             double price = mkvRecord.getValue("Price").getReal();
+
+            LOGGER.info("Received order update: orderId={}, instrumentId={}, origId={}, verb={}, status={}, qtyFill={}, price={}",
+                orderId, instrumentId, origId, VerbStr, tradeStatus, qtyFill, price);
 
             MarketOrder order = getOrderByOrderId(origId);
             if (order == null) {
@@ -1574,53 +1583,91 @@ private void trySubscribeAndRemoveListener(MkvObject mkvObject, MkvPublishManage
    */
   public void onSupply(MkvChain chain, String record, int pos,
       MkvChainAction action) {
-        if (LOGGER.isDebugEnabled()) {
-          LOGGER.debug("Order chain update: chain={}, record={}, pos={}, action={}",
-              chain.getName(), record, pos, action);
-        }
-    switch (action.intValue()) {
-    case MkvChainAction.INSERT_code:
-    case MkvChainAction.APPEND_code:
-      // For new records, subscribe to receive updates
-      LOGGER.info("New record in chain, subscribing: {}", record);
-      subscribeToRecord(record);
-      break;
-    case MkvChainAction.SET_code:
-      // For a SET action (chain is being completely redefined),
-      // subscribe to all records in the chain
-      LOGGER.info("Chain SET action, subscribing to all records");
-      for (Iterator iter = chain.iterator(); iter.hasNext();) {
-        String recName = (String) iter.next();
-        LOGGER.info("Subscribing to chain record: {}", recName);
-        subscribeToRecord(recName);
-      }
-      break;
-    case MkvChainAction.DELETE_code:
-    LOGGER.debug("Ignoring DELETE action for record: {}", record);
-      break;
-    }
+    //     if (LOGGER.isDebugEnabled()) {
+    //       LOGGER.debug("Order chain update: chain={}, record={}, pos={}, action={}",
+    //           chain.getName(), record, pos, action);
+    //     }
+    // switch (action.intValue()) {
+    // case MkvChainAction.INSERT_code:
+    // case MkvChainAction.APPEND_code:
+    //   // For new records, subscribe to receive updates
+    //   LOGGER.info("New record in chain, subscribing: {}", record);
+    //   subscribeToRecord(record);
+    //   break;
+    // case MkvChainAction.SET_code:
+    //   // For a SET action (chain is being completely redefined),
+    //   // subscribe to all records in the chain
+    //   LOGGER.info("Chain SET action, subscribing to all records");
+    //   for (Iterator iter = chain.iterator(); iter.hasNext();) {
+    //     String recName = (String) iter.next();
+    //     LOGGER.info("Subscribing to chain record: {}", recName);
+    //     subscribeToRecord(recName);
+    //   }
+    //   break;
+    // case MkvChainAction.DELETE_code:
+    // LOGGER.debug("Ignoring DELETE action for record: {}", record);
+    //   break;
+    //}
   }
 
-  /**
-   * Sets up a subscription to an order record.
-   * This allows receiving updates for the record.
-   * 
-   * @param record The name of the record to subscribe to
-   */
-  private void subscribeToRecord(String record) {
+private void subscribeToRecord() {
     try {
-      LOGGER.info("Subscribing to record: {}", record);
 
-      // Get the record object
-      MkvRecord rec = Mkv.getInstance().getPublishManager().getMkvRecord(record);
-      
-      // Subscribe to receive updates for the configured fields
-      rec.subscribe(MarketDef.ORDER_FIELDS, this);
-      LOGGER.info("Successfully subscribed to record: {}", record);
+        LOGGER.info("Subscribing to instrument data using pattern: {}", INSTRUMENT_PATTERN);
+
+        // Get the publish manager to access patterns
+        MkvPublishManager pm = Mkv.getInstance().getPublishManager();
+       
+        // Look up the pattern object
+        MkvObject obj = pm.getMkvObject(ORDER_PATTERN);
+       
+        if (obj != null && obj.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
+            LOGGER.info("Found order pattern, subscribing: {}", ORDER_PATTERN);
+
+            // Initialize with the full field list from MarketDef
+            List<String> fieldsList = new ArrayList<>(Arrays.asList(ORDER_FIELDS));
+            boolean subscribed = false;
+            
+            // Keep trying with fewer fields until subscription succeeds
+            while (!subscribed && !fieldsList.isEmpty()) {
+                try {
+                    String[] fields = fieldsList.toArray(new String[0]);
+                    ((MkvPattern) obj).subscribe(fields, this);
+                    subscribed = true;
+
+                    LOGGER.info("Successfully subscribed to order pattern with {} fields", fieldsList.size());
+                } catch (Exception e) {
+                    // Get the last field that was removed (if any)
+                    String lastField = fieldsList.size() < Arrays.asList(ORDER_FIELDS).size() ?
+                        Arrays.asList(ORDER_FIELDS).get(fieldsList.size()) : "unknown";
+                    LOGGER.warn("Subscription failed with field: {}. Retrying with {} fields.", lastField, fieldsList.size());
+                }
+            }
+        } else {
+            LOGGER.warn("Order pattern not found: {}", ORDER_PATTERN);
+        }
     } catch (Exception e) {
-      LOGGER.error("Error subscribing to record: {}, error: {}", record, e.getMessage(), e);
+        LOGGER.error("Error subscribing to order pattern: {}", e.getMessage(), e);
+        LOGGER.error("Error details", e);
     }
-  }
+}
+
+//    * @param record The name of the record to subscribe to
+//    */
+//   private void subscribeToRecord(String record) {
+//     try {
+//       LOGGER.info("Subscribing to record: {}", record);
+
+//       // Get the record object
+//       MkvRecord rec = Mkv.getInstance().getPublishManager().getMkvRecord(record);
+      
+//       // Subscribe to receive updates for the configured fields
+//       rec.subscribe(MarketDef.ORDER_FIELDS, this);
+//       LOGGER.info("Successfully subscribed to record: {}", record);
+//     } catch (Exception e) {
+//       LOGGER.error("Error subscribing to record: {}, error: {}", record, e.getMessage(), e);
+//     }
+//   }
 
 private void initializeHeartbeat() {
     heartbeatScheduler.scheduleAtFixedRate(() -> {
