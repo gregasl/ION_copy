@@ -103,14 +103,19 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
     public static void configureDevelopmentLogging() {
         // Set global default to WARN
         ApplicationLogging.setGlobalLogLevel("WARN");
-        
+
+        ApplicationLogging.setLogLevels("DEBUG",
+            "com.iontrading.automatedMarketMaking.Instrument",
+                        "com.iontrading.automatedMarketMaking.MarketMaker"
+        );
+
         // Core business logic at INFO
         ApplicationLogging.setLogLevels("INFO",
             "com.iontrading.automatedMarketMaking.OrderManagement",
+            "com.iontrading.automatedMarketMaking.Instrument",
             "com.iontrading.automatedMarketMaking.BondEligibilityListener",
             "com.iontrading.automatedMarketMaking.EligibilityChangeListener",
-            "com.iontrading.automatedMarketMaking.MarketOrder",
-            "com.iontrading.automatedMarketMaking.MarketMaker"
+            "com.iontrading.automatedMarketMaking.MarketOrder"
         );
 
         // Infrastructure at ERROR
@@ -121,10 +126,8 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
             "com.iontrading.automatedMarketMaking.Best",
             "com.iontrading.automatedMarketMaking.BondConsolidatedData",
             "com.iontrading.automatedMarketMaking.DepthListener",
-            "com.iontrading.automatedMarketMaking.Instrument",
             "com.iontrading.automatedMarketMaking.GCBest",
             "com.iontrading.automatedMarketMaking.GCLevelResult",
-            "com.iontrading.automatedMarketMaking.Instrument",
             "com.iontrading.automatedMarketMaking.IOrderManager",
             "com.iontrading.automatedMarketMaking.MarketMakerConfig"
         );
