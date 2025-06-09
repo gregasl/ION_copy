@@ -32,7 +32,7 @@ public class MarketDef {
 	 * The standard order fields to subscribe to for CM_ORDER records.
 	 * These fields provide essential information about order state and execution.
 	 */
-	public static String[] ORDER_FIELDS = { "Id", "InstrumentId", "OrderNo", "OrigId", "OrigSrc", "QtyFill", "QtyTotal", "Active",
+	public static String[] ORDER_FIELDS = { "Id", "InstrumentId", "OrderNo", "OrigId", "QtyHit", "OrigSrc", "QtyFill", "QtyTotal", "Active",
 			"CompNameOrigin", "TradingStatusStr", "QtyStatus", "Price", "Verb", "VerbStr", "FreeText", "UserData" };
 
 	/**
@@ -71,6 +71,7 @@ public class MarketDef {
     /**
      * Pattern names for market data subscriptions
      */
+    public static final String ORDER_PATTERN = "USD.CM_ORDER.VMO_REPO_US.";
     public static final String DEPTH_PATTERN = "USD.CM_DEPTH.VMO_REPO_US.";
     public static final String INSTRUMENT_PATTERN = "USD.CM_INSTRUMENT.VMO_REPO_US.";
     
