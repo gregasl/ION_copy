@@ -202,7 +202,7 @@ public class marketDataSubscriberPROD {
 
     // Fields for subscription
     private String[] fieldsOrder = new String[]{
-            "Active", "ActiveStr", "Code", "CompNameOrigin", "CurrentAction", "CurrentActionStr", "Date", "Desc", "Id", "InstrumentId", "IndQtyGoal", "MarketStatus", 
+            "Active", "ActiveStr", "Code", "CompNameOrigin", "CurrentAction", "CurrentActionStr", "Date", "Desc", "Id", "InstrumentId", "IntQtyGoal", "MarketStatus", 
             "OrderNo", "OrigCode", "OrigId", "OrigSrc", "Price", "QtyFill", "QtyGoal", "QtyHidden", "QtyHit", "QtyHitDeleted", "QtyHitExt", "QtyHitWorkUp", 
             "QtyLocked", "QtyLost", "QtyMin", "QtyOvertraded", "QtyShown", "QtyStatus", "QtyStatusStr", "QtyTick", "QtyTot", "QtyTotReq", "StatusStr", 
             "Time", "TimeCreation", "TimeInForce", "TimeUpd", "Trader", "TradingStatus", "TradingStatusStr", "Verb", "VerbStr", "Yield" 
