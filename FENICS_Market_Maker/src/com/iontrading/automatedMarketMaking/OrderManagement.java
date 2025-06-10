@@ -251,8 +251,8 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
 
   private static final double MAX_PRICE_DEVIATION = 0.05; // 5 bps max price deviation for hedging orders
 
-  // Map to track the last known fill quantity for each order
-  private final Map<Integer, Double> orderFillQuantities = new ConcurrentHashMap<>();
+  // Add this field to the OrderManagement class
+  private final Map<String, Boolean> orderActiveStatusMap = new ConcurrentHashMap<>();
 
   private final Map<String, Best> latestBestByInstrument = new ConcurrentHashMap<String, Best>() {
     private static final int MAX_SIZE = 5000;
@@ -1050,6 +1050,102 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
         }
     }
 
+private void subscribeToRecord() {
+    try {
+        // Get the publish manager to access patterns
+        MkvPublishManager pm = Mkv.getInstance().getPublishManager();
+       
+        // Look up the pattern object
+        MkvObject obj = pm.getMkvObject(ORDER_PATTERN);
+       
+        if (obj != null && obj.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
+            // Subscribe within a synchronized block
+            synchronized (subscriptionLock) {
+                // Check again inside synchronization to avoid race conditions
+                if (!isPatternSubscribed) {
+                    LOGGER.info("Found order pattern, subscribing: {}", ORDER_PATTERN);
+
+                    ((MkvPattern) obj).subscribe(ORDER_FIELDS, this);
+
+                    // Mark that we've successfully subscribed
+                    isPatternSubscribed = true;
+
+                    LOGGER.info("Successfully subscribed to order pattern");
+                }
+            }
+        } else {
+            LOGGER.warn("Order pattern not found: {}", ORDER_PATTERN);
+
+            // Create a single shared listener instance instead of an anonymous one
+            final MkvPublishListener patternListener = new MkvPublishListener() {
+                @Override
+                public void onPublish(MkvObject mkvObject, boolean pub_unpub, boolean dwl) {
+                    // Only proceed if we're not already subscribed
+                    if (isPatternSubscribed) {
+                        return;
+                    }
+                    
+                    // Check if this is our pattern being published
+                    if (pub_unpub && mkvObject.getName().equals(ORDER_PATTERN) &&
+                        mkvObject.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
+                        trySubscribeAndRemoveOrderListener(mkvObject, pm, this);
+                    }
+                }
+               
+                @Override
+                public void onPublishIdle(String component, boolean start) {
+                    // Only proceed if we're not already subscribed
+                    if (isPatternSubscribed) {
+                        return;
+                    }
+                    
+                    // Try looking for the pattern again at idle time
+                    MkvObject obj = pm.getMkvObject(ORDER_PATTERN);
+
+                    if (obj != null && obj.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
+                        trySubscribeAndRemoveOrderListener(obj, pm, this);
+                    }
+                }
+               
+                @Override
+                public void onSubscribe(MkvObject mkvObject) {
+                    // Not needed
+                }
+            };
+            
+            // Add the shared listener
+            pm.addPublishListener(patternListener);
+        }
+    } catch (Exception e) {
+        LOGGER.error("Error subscribing to pattern: {}", e.getMessage(), e);
+    }
+}
+
+// Helper method to handle subscription and listener removal safely
+private void trySubscribeAndRemoveOrderListener(MkvObject mkvObject, MkvPublishManager pm, MkvPublishListener listener) {
+    synchronized (subscriptionLock) {
+        // Check again inside synchronization to avoid race conditions
+        if (isPatternSubscribed) {
+            return;
+        }
+        
+        try {
+            LOGGER.info("Pattern found, subscribing: {}", ORDER_PATTERN);
+
+            ((MkvPattern) mkvObject).subscribe(ORDER_FIELDS, this);
+            isPatternSubscribed = true;
+
+            LOGGER.info("Successfully subscribed to pattern");
+
+            // Remove the listener now that we've subscribed - safely outside the callback
+            // but still inside synchronization
+            pm.removePublishListener(listener);
+        } catch (Exception e) {
+            LOGGER.error("Error subscribing to pattern: {}", e.getMessage(), e);
+        }
+    }
+  }
+
   /**
  * Subscribes to the instrument pattern to load instrument mapping data.
  * Uses an adaptive field subscription approach that handles missing fields.
@@ -1154,7 +1250,7 @@ private void subscribeToPattern() {
                     // Check if this is our pattern being published
                     if (pub_unpub && mkvObject.getName().equals(DEPTH_PATTERN) &&
                         mkvObject.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
-                        trySubscribeAndRemoveListener(mkvObject, pm, this);
+                        trySubscribeAndRemoveDepthListener(mkvObject, pm, this);
                     }
                 }
                
@@ -1169,7 +1265,7 @@ private void subscribeToPattern() {
                     MkvObject obj = pm.getMkvObject(DEPTH_PATTERN);
                     
                     if (obj != null && obj.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
-                        trySubscribeAndRemoveListener(obj, pm, this);
+                        trySubscribeAndRemoveDepthListener(obj, pm, this);
                     }
                 }
                
@@ -1188,7 +1284,7 @@ private void subscribeToPattern() {
 }
 
 // Helper method to handle subscription and listener removal safely
-private void trySubscribeAndRemoveListener(MkvObject mkvObject, MkvPublishManager pm, MkvPublishListener listener) {
+private void trySubscribeAndRemoveDepthListener(MkvObject mkvObject, MkvPublishManager pm, MkvPublishListener listener) {
     synchronized (subscriptionLock) {
         // Check again inside synchronization to avoid race conditions
         if (isPatternSubscribed) {
@@ -1300,6 +1396,10 @@ private void trySubscribeAndRemoveListener(MkvObject mkvObject, MkvPublishManage
     }
   }
 
+    public int timeToInt(LocalTime t) {
+        return t.getHour() * 10000 + t.getMinute() * 100 + t.getSecond();
+    }
+
     /**
      * Process full updates for CM_ORDER records.
      * Detects order fills and triggers hedge trades when appropriate.
@@ -1307,47 +1407,76 @@ private void trySubscribeAndRemoveListener(MkvObject mkvObject, MkvPublishManage
     @Override
     public void onFullUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolean isSnap) {
         try {
+            
+            
             // Check if this is our order by looking at CompNameOrigin (should match our app ID)
+            String active = mkvRecord.getValue("ActiveStr").getString();
             String appName = mkvRecord.getValue("CompNameOrigin").getString();
             String src = mkvRecord.getValue("OrigSrc").getString();
-
-            LOGGER.info("Processing full update for record: {}, appName={}, src={}", 
-                mkvRecord.getName(), appName, src);
-            if (!"MarketMaker".equals(appName) || !"FENICS_USREPO".equals(src)) {
-                return; // Not a market maker order nor a FENICS execution
-            }
-            
-            // Get order details
             String orderId = mkvRecord.getValue("Id").getString();
-            String instrumentId = mkvRecord.getValue("InstrumentId").getString();
+            String Id = mkvRecord.getValue("InstrumentId").getString();
             String origId = mkvRecord.getValue("OrigId").getString();
             String VerbStr = mkvRecord.getValue("VerbStr").getString();
             String tradeStatus = mkvRecord.getValue("TradingStatusStr").getString();
-            double qtyFill = mkvRecord.getValue("QtyHit").getReal();
+            double qtyFill = mkvRecord.getValue("QtyFill").getReal();
             double price = mkvRecord.getValue("Price").getReal();
+            double intQtyGoal = mkvRecord.getValue("IntQtyGoal").getReal();
+            double qtyHit = mkvRecord.getValue("QtyHit").getReal();
+            double qtyStatus = mkvRecord.getValue("QtyStatus").getReal();
+            String qtyStatusStr = mkvRecord.getValue("QtyStatusStr").getString();
+            double qtyTot = mkvRecord.getValue("QtyTot").getReal();
+            int time = mkvRecord.getValue("Time").getInt();
 
-            LOGGER.info("Received order update: orderId={}, instrumentId={}, origId={}, verb={}, status={}, qtyFill={}, price={}",
-                orderId, instrumentId, origId, VerbStr, tradeStatus, qtyFill, price);
+            String activityKey = origId; // Using origId as the unique identifier
+            Boolean previouslyActive = orderActiveStatusMap.get(activityKey);
+            boolean currentlyActive = "Yes".equals(active);
 
-            MarketOrder order = getOrderByOrderId(origId);
-            if (order == null) {
-                LOGGER.debug("Order not found in cache: origId={}", origId);
+            // Store current status for future reference
+            orderActiveStatusMap.put(activityKey, currentlyActive);
+
+            // Process only if transitioning from active to inactive
+            if (previouslyActive != null && previouslyActive && !currentlyActive) {
+                LOGGER.info("Order status change detected for origId={}: ActiveStr changed from Yes to No", origId);
+            } else {
+                // Not a transition from active to inactive, skip processing
+                if (previouslyActive == null) {
+                    LOGGER.debug("First time seeing order origId={}, active status={}", origId, active);
+                } else if (!previouslyActive && !currentlyActive) {
+                    LOGGER.debug("Order origId={} remains inactive, skipping", origId);
+                } else if (previouslyActive && currentlyActive) {
+                    LOGGER.debug("Order origId={} remains active, skipping", origId);
+                } else if (!previouslyActive && currentlyActive) {
+                    LOGGER.debug("Order origId={} transitioned from inactive to active, skipping", origId);
+                }
                 return;
             }
-            double prevQtyFilled = order.getQtyFilled();
-            double newQtyFilled = qtyFill - prevQtyFilled;
-            order.setQtyFilled(qtyFill);
+
+            LOGGER.info("Processing full update for record: {}, active={}, appName={}, src={}, Id={}, orderId={}, origId={}, VerbStr={}, tradeStatus={}, qtyFill={}, price={}, intQtyGoal={}, qtyHit={}, qtyStatus={}, qtyStatusStr={}, qtyTot={}, time={}", 
+                mkvRecord.getName(), active, appName, src, Id, orderId, origId, VerbStr, tradeStatus, qtyFill, price, intQtyGoal, qtyHit, qtyStatus, qtyStatusStr, qtyTot, time);
+
+            if (!"MarketMaker".equals(appName) || !"FENICS_USREPO".equals(src) || active.equals("Yes")) {
+                return; // Not a market maker order nor a FENICS_USREPO order, or already active
+            }
+            LocalTime now = LocalTime.now();
+            int timeInMkvFormat = timeToInt(now);
+
+            // Compare against the MKV time received from the record
+            if (time < timeInMkvFormat - 60) {
+                LOGGER.warn("Processing an order update that's more than 60 seconds old: {}", time);
+                return;
+            }
 
             LOGGER.debug("Processing order update: origId={}, orderId={}, status={}, fill={}", 
                 origId, orderId, tradeStatus, qtyFill);
-            
+
+
             double orderPrice = 0.0;
             String market = null;
             boolean validVenue = false;
             // Get the best price information for this instrument
-            Best bestMarket = latestBestByInstrument.get(instrumentId);
+            Best bestMarket = latestBestByInstrument.get(Id);
             if (bestMarket == null) {
-                LOGGER.warn("No best market found for instrument: {}", instrumentId);
+                LOGGER.warn("No best market found for instrument: {}", Id);
                 return; // Cannot process without best market
             } else {
                 if (VerbStr.equals("Buy")) {
@@ -1386,20 +1515,21 @@ private void trySubscribeAndRemoveListener(MkvObject mkvObject, MkvPublishManage
                 return; // Reject hedge if price is too far off
             }
 
-            if (!(trader == null) && orderPrice > 0.0 && newQtyFilled > 0.0) {
-                LOGGER.info("Adding order: market={}, trader={}, instrumentId={}, verb={}, qtyFilled={}, price={}",
-                    market, trader, instrumentId, hedgeDirection, newQtyFilled, orderPrice);
-                addOrder(market, trader, instrumentId, hedgeDirection, newQtyFilled, orderPrice, "Limit", "FAS");
+            String nativeId = getNativeInstrumentId(Id, market, false);
+
+            if (!(trader == null) && orderPrice > 0.0 && qtyHit > 0.0) {
+                LOGGER.info("Adding order: market={}, trader={}, Id={}, nativeId={}, verb={}, qtyFilled={}, price={}",
+                    market, trader, Id, nativeId, hedgeDirection, qtyHit, orderPrice);
+                addOrder(market, trader, nativeId, hedgeDirection, qtyHit, orderPrice, "Limit", "FAS");
             } else {
                 LOGGER.warn("No trader configured for market: {}", market);
                 return; // Cannot process without trader+
             }
 
-
-            // Handle order completion/cancellation
-            if (!"Active".equals(tradeStatus)) {
-                orderDead(order);
-            }
+            // // Handle order completion/cancellation
+            // if (!"Active".equals(tradeStatus)) {
+            //     orderDead(order);
+            // }
         } catch (Exception e) {
             LOGGER.error("Error processing order update: {}", e.getMessage(), e);
         }
@@ -1541,39 +1671,52 @@ private void trySubscribeAndRemoveListener(MkvObject mkvObject, MkvPublishManage
    */
   @Override
     public void best(Best best, double cash_gc, double reg_gc, GCBest gcBestCash, GCBest gcBestREG) {
-            LOGGER.debug("OrderManagement.best() called: instrument={}, ask=%.6f ({}), bid=%.6f ({}), cash_gc=%.6f, reg_gc=%.6f", 
+        try {
+            // Validate the best object
+            if (best == null || best.getId() == null || best.getInstrumentId() == null) {
+                LOGGER.warn("Received invalid best object: {}", best);
+                return; // Cannot process invalid best
+            }
+       
+            LOGGER.debug("OrderManagement.best() called: instrument={}, instrumentId={}, ask=({}), bid=({}), cash_gc=({}), reg_gc=({})", 
                 best.getId(), 
+                best.getInstrumentId(), 
                 best.getAsk(), best.getAskSrc(), 
                 best.getBid(), best.getBidSrc(),
                 cash_gc, reg_gc);
 
 
-        // Store the latest best for this instrument
-        latestCashGC.set(cash_gc);
-        latestRegGC.set(reg_gc);
-        if (gcBestCash != null) sharedGCBestCash.set(gcBestCash);
-        if (gcBestREG != null) sharedGCBestREG.set(gcBestREG);
-        latestBestByInstrument.put(best.getInstrumentId(), best);
+            // Store the latest best for this instrument
+            latestCashGC.set(cash_gc);
+            latestRegGC.set(reg_gc);
+            if (gcBestCash != null) sharedGCBestCash.set(gcBestCash);
+            if (gcBestREG != null) sharedGCBestREG.set(gcBestREG);
+            latestBestByInstrument.put(best.getId(), best);
 
-        // Call marketMaker.best() if it's available and initialized
-        if (marketMaker != null) {
-            try {
-                // Get the latest GC rates safely
-                double currentCashGC = latestCashGC.get();
-                double currentRegGC = latestRegGC.get();
-                GCBest gcBestCashCopy = sharedGCBestCash.get();
-                GCBest gcBestREGCopy = sharedGCBestREG.get();
-                
-                LOGGER.info("Forwarding best price to market maker: instrument={}, ask=({}), bid=({})",
-                    best.getId(), best.getAsk(), best.getBid());    
-                // Pass the best information to the market maker
-                marketMaker.best(best, currentCashGC, currentRegGC, gcBestCashCopy, gcBestREGCopy);
-            } catch (Exception e) {
-                LOGGER.error("Error forwarding best price to market maker: {}", e.getMessage(), e);
+            // Call marketMaker.best() if it's available and initialized
+            if (marketMaker != null) {
+                try {
+                    // Get the latest GC rates safely
+                    double currentCashGC = latestCashGC.get();
+                    double currentRegGC = latestRegGC.get();
+                    GCBest gcBestCashCopy = sharedGCBestCash.get();
+                    GCBest gcBestREGCopy = sharedGCBestREG.get();
+
+                    LOGGER.info("Forwarding best price to market maker: instrument={}, instrumentId={}, ask=({}), bid=({})",
+                        best.getId(), best.getInstrumentId(), best.getAsk(), best.getBid());
+                    // Pass the best information to the market maker
+                    marketMaker.best(best, currentCashGC, currentRegGC, gcBestCashCopy, gcBestREGCopy);
+                } catch (Exception e) {
+                    LOGGER.error("Error forwarding best price to market maker: {}", e.getMessage(), e);
+                }
             }
+
+        } catch (Exception e) {
+                LOGGER.error("Error validating best object: {}", e.getMessage(), e);
+                return; // Cannot process if validation fails
         }
     }
-
+    
     public Map<String, Best> getLatestBestByInstrument() {
         return latestBestByInstrument;
     }
@@ -1609,48 +1752,6 @@ private void trySubscribeAndRemoveListener(MkvObject mkvObject, MkvPublishManage
     //   break;
     //}
   }
-
-private void subscribeToRecord() {
-    try {
-
-        LOGGER.info("Subscribing to instrument data using pattern: {}", INSTRUMENT_PATTERN);
-
-        // Get the publish manager to access patterns
-        MkvPublishManager pm = Mkv.getInstance().getPublishManager();
-       
-        // Look up the pattern object
-        MkvObject obj = pm.getMkvObject(ORDER_PATTERN);
-       
-        if (obj != null && obj.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
-            LOGGER.info("Found order pattern, subscribing: {}", ORDER_PATTERN);
-
-            // Initialize with the full field list from MarketDef
-            List<String> fieldsList = new ArrayList<>(Arrays.asList(ORDER_FIELDS));
-            boolean subscribed = false;
-            
-            // Keep trying with fewer fields until subscription succeeds
-            while (!subscribed && !fieldsList.isEmpty()) {
-                try {
-                    String[] fields = fieldsList.toArray(new String[0]);
-                    ((MkvPattern) obj).subscribe(fields, this);
-                    subscribed = true;
-
-                    LOGGER.info("Successfully subscribed to order pattern with {} fields", fieldsList.size());
-                } catch (Exception e) {
-                    // Get the last field that was removed (if any)
-                    String lastField = fieldsList.size() < Arrays.asList(ORDER_FIELDS).size() ?
-                        Arrays.asList(ORDER_FIELDS).get(fieldsList.size()) : "unknown";
-                    LOGGER.warn("Subscription failed with field: {}. Retrying with {} fields.", lastField, fieldsList.size());
-                }
-            }
-        } else {
-            LOGGER.warn("Order pattern not found: {}", ORDER_PATTERN);
-        }
-    } catch (Exception e) {
-        LOGGER.error("Error subscribing to order pattern: {}", e.getMessage(), e);
-        LOGGER.error("Error details", e);
-    }
-}
 
 //    * @param record The name of the record to subscribe to
 //    */
@@ -1892,21 +1993,6 @@ private void setupPatternSubscriptionMonitor() {
         LOGGER.error("Error checking for expired orders: {}", e.getMessage(), e);
     }
 }
-
-
-    /**
-     * Get the current tracked fill quantity for an order
-     */
-    private double getTrackedFillQty(int reqId) {
-        return orderFillQuantities.getOrDefault(reqId, 0.0);
-    }
-
-    /**
-     * Update the tracked fill quantity for an order
-     */
-    private void updateTrackedFillQty(int reqId, double fillQty) {
-        orderFillQuantities.put(reqId, fillQty);
-    }
 
 /**
  * Initiates shutdown process for the application.
