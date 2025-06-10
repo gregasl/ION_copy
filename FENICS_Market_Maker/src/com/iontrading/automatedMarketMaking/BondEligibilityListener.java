@@ -333,7 +333,7 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
             }
             java.time.LocalDate maturityDate = null;
             java.time.LocalDate twoMonthsFromNow = java.time.LocalDate.now().plusMonths(2);
-            if (maturityObj != null) {
+            if (maturityObj != null) { 
                 try {
                     // First check if it's an integer (MKV date format)
                     if (maturityObj instanceof Integer || maturityObj instanceof Long) {
@@ -402,6 +402,11 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
                         LOGGER.warn("Error parsing maturity date: {}", e.getMessage());
                     }
                 }
+            } else {
+                if (LOGGER.isInfoEnabled()) {
+                    LOGGER.info("No maturity date found for bond {}", cusip);
+                }
+                return new EligibilityResult(false, false);
             }
 
             // Check SOMA holdings (must be at least $1 billion)
@@ -953,7 +958,7 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
      */
     private boolean isValidCusip(String cusip) {
         // Basic validation - adjust as needed
-        return cusip != null && cusip.length() == 9;
+        return cusip != null && cusip.length() == 9 && cusip.startsWith("9") && !cusip.startsWith("W")  && !cusip.startsWith("R");
     }
 
     /**

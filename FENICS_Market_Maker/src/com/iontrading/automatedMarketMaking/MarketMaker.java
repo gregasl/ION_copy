@@ -123,7 +123,7 @@ public class MarketMaker implements IOrderManager {
     private final Map<String, String> instrumentToBondCache = new ConcurrentHashMap<>();
 
     private final Map<String, Long> lastOrderUpdateTime = new ConcurrentHashMap<>();
-    private static final long MIN_UPDATE_INTERVAL_MS = 1000; // 5 seconds minimum between updates
+    private static final long MIN_UPDATE_INTERVAL_MS = 2000; // 500 milliseconds minimum between updates
 
     public String getApplicationId() {
         // Return a unique identifier for this market maker instance
@@ -1414,30 +1414,43 @@ public class MarketMaker implements IOrderManager {
             // Get existing quote status if any
             ActiveQuote existingQuote = activeQuotes.get(id);
             
+            String previousBidSource = null;
+            String previousAskSource = null;
+            if (existingQuote != null) {
+                previousBidSource = existingQuote.getBidReferenceSource();
+                previousAskSource = existingQuote.getAskReferenceSource();
+            }
+
+
+            boolean bidFromTargetVenue = isTargetVenue(best.getBidSrc());
+            boolean askFromTargetVenue = isTargetVenue(best.getAskSrc());
+            
             // Skip processing for minimal market movements that don't affect us
-            if (best != null && existingQuote != null) {
-                boolean bidFromTargetVenue = isTargetVenue(best.getBidSrc());
-                boolean askFromTargetVenue = isTargetVenue(best.getAskSrc());
-                
-                // If neither side is from a venue we care about, skip processing
-                if (!bidFromTargetVenue && !askFromTargetVenue) {
-                    if (LOGGER.isDebugEnabled()) {
-                        LOGGER.debug("Skipping update - neither side from target venue: {}/{}", 
-                            best.getBidSrc(), best.getAskSrc());
-                    }
-                    return;
+            boolean targetSourceDisappeared = false;
+            if (existingQuote != null) {
+                // Check if we previously had market-based quotes that would be affected
+                boolean hadMarketBasedBid = existingQuote.isMarketBasedBid() && 
+                    isTargetVenue(previousBidSource);
+                boolean hadMarketBasedAsk = existingQuote.isMarketBasedAsk() && 
+                    isTargetVenue(previousAskSource);
+                    
+                // Detect if a target venue that was previously providing prices disappeared
+                if ((hadMarketBasedBid && !bidFromTargetVenue) || 
+                    (hadMarketBasedAsk && !askFromTargetVenue)) {
+                    
+                    targetSourceDisappeared = true;
+                    LOGGER.info("Target source disappeared for {}: was bid={}, ask={}, now bid={}, ask={}", 
+                        id, previousBidSource, previousAskSource, best.getBidSrc(), best.getAskSrc());
                 }
-                
-                // If prices haven't moved significantly, skip processing
-                if ((bidFromTargetVenue && existingQuote.isMarketBasedBid() && 
-                    Math.abs(best.getBid() - existingQuote.getBidPrice()) < 0.01) ||
-                    (askFromTargetVenue && existingQuote.isMarketBasedAsk() && 
-                    Math.abs(best.getAsk() - existingQuote.getAskPrice()) < 0.01)) {
-                    if (LOGGER.isDebugEnabled()) {
-                        LOGGER.debug("Skipping update - price change below threshold");
-                    }
-                    return;
+            }
+            
+            // MODIFIED LOGIC: Only skip if we have no relevant data changes
+            if (!bidFromTargetVenue && !askFromTargetVenue && !targetSourceDisappeared) {
+                if (LOGGER.isDebugEnabled()) {
+                    LOGGER.debug("Skipping update - neither side from target venue: {}/{}", 
+                        best.getBidSrc(), best.getAskSrc());
                 }
+                return;
             }
 
             // Determine term code from instrument ID
@@ -1781,98 +1794,6 @@ private PricingDecision calculateGcOnlyPrices(String bondId, String termCode, GC
     
     return decision;
 }
-
-    // /**
-    //  * Process market data updates and update our quotes accordingly.
-    //  * Called by the DepthListener when market data changes.
-    //  * 
-    //  * @param best The updated best prices
-    //  */
-    // public void processMarketUpdate(Best best, GCBest gcBest) {
-    //     long updateCount = marketUpdateCounter.get();
-        
-    //     if (updateCount % 1000 == 0) {
-    //         LOGGER.debug("Processed {} market updates", updateCount);
-    //     }
-    //     try {
-    //         //String instrumentId = best.getInstrumentId();
-    //         String Id = best.getId(); // This should be the instrument ID from VMO.CM_INSTRUMENT
-
-    //         if (Id == null || Id.isEmpty()) {
-    //             if (LOGGER.isDebugEnabled()) {
-    //                 LOGGER.debug("processMarketUpdate: Empty best ID, skipping");
-    //             }
-    //             return;
-    //         }
-
-
-    //         // Check if this bond is in our tracked instruments
-    //         if (!trackedInstruments.contains(Id)) {
-    //             if (LOGGER.isInfoEnabled()) {
-    //                 LOGGER.info("processMarketUpdate: Bond not in tracked instruments: {}", Id);
-    //             }
-    //             return;
-    //         }
-
-    //         // Check if we already have active quotes for this bond
-    //         ActiveQuote existingQuote = activeQuotes.get(Id);
-    //         boolean hasActiveBid = false;
-    //         boolean hasActiveAsk = false;
-            
-    //         if (existingQuote != null) {
-    //             // Check if we have active orders that are still alive
-    //             MarketOrder bidOrder = existingQuote.getBidOrder();
-    //             MarketOrder askOrder = existingQuote.getAskOrder();
-                
-    //             hasActiveBid = (bidOrder != null && !bidOrder.isDead());
-    //             hasActiveAsk = (askOrder != null && !askOrder.isDead());
-    //             if (LOGGER.isInfoEnabled()) {
-    //                 LOGGER.info("Existing quote status for bond {}: activeBid={}, activeAsk={}", 
-    //                     Id, hasActiveBid, hasActiveAsk);
-    //             }
-    //         }
-
-    //         if (LOGGER.isDebugEnabled()) {
-    //             LOGGER.debug("processMarketUpdate:  Processing market update for bond: {}", Id);
-    //         }
-            
-    //         String termCode;
-    //         if (Id.endsWith("C_Fixed")) {
-    //             termCode = "C";
-    //         } else if (Id.endsWith("REG_Fixed")) {
-    //             termCode = "REG";
-    //         } else {
-    //             if (LOGGER.isWarnEnabled()) {
-    //                 LOGGER.warn("processMarketUpdate: Unsupported instrument type for bond: {}", Id);
-    //             }
-    //             return; // Unsupported instrument type
-    //         }
-            
-    //         // Determine if we have sufficient market data for symmetric quoting
-    //         boolean hasValidMarketData = (best != null && 
-    //                                     (isTargetVenue(best.getBidSrc()) || isTargetVenue(best.getAskSrc())));
-    
-    //         // Determine if we have sufficient GC data for GC-based quoting
-    //         boolean hasValidGCData = (gcBest != null && (gcBest.getBid() > 0 || gcBest.getAsk() > 0));
-
-    //         if (hasValidMarketData) {
-    //             processSymmetricQuoting(best, termCode, Id, hasActiveBid, hasActiveAsk);
-    //         }
-
-    //         if (hasValidGCData) {
-    //             processGCQuoting(gcBest, termCode, Id, hasActiveBid, hasActiveAsk);
-    //         }
-
-    //         if (LOGGER.isDebugEnabled()) {
-    //             LOGGER.debug("processMarketUpdate: Market update processed for bond: {}", Id);
-    //         }
-
-    //     } catch (Exception e) {
-    //         if (LOGGER.isErrorEnabled()) {
-    //             LOGGER.error("Error processing market update: {}", e.getMessage(), e);
-    //         }
-    //     }
-    // }
 
     /**
      * Log diagnostic statistics periodically
@@ -3601,6 +3522,11 @@ private PricingDecision calculateGcOnlyPrices(String bondId, String termCode, GC
      */
     private void cancelOrder(MarketOrder order, String cusip) {
         try {
+
+            if (LOGGER.isInfoEnabled()) {
+                LOGGER.info("cancelOrder: Cancelling order for CUSIP={}, orderId={}", 
+                    cusip, order.getOrderId());
+            }
             if (order == null || order.getOrderId() == null) {
                 return;
             }
@@ -3773,29 +3699,29 @@ private PricingDecision calculateGcOnlyPrices(String bondId, String termCode, GC
                     LOGGER.debug("Calculated ask using market data: {} - {} = {}", 
                         referenceAsk, spreadAdjustment, decision.askPrice);
                 }
-            } else if (validGcAsk) {
-                // Secondary: Use GC ask as reference with adjustment
-                decision.askPrice = gcAskRate - spreadAdjustment;
-                decision.askSource = "GC_" + termCode;
-                decision.hasAsk = true;
-                decision.isGcBasedAsk = true;
+            // } else if (validGcAsk) {
+            //     // Secondary: Use GC ask as reference with adjustment
+            //     decision.askPrice = gcAskRate - spreadAdjustment;
+            //     decision.askSource = "GC_" + termCode;
+            //     decision.hasAsk = true;
+            //     decision.isGcBasedAsk = true;
                 
-                if (LOGGER.isDebugEnabled()) {
-                    LOGGER.debug("Calculated ask using GC data: {} - {} = {}", 
-                        gcAskRate, spreadAdjustment, decision.askPrice);
-                }
-            } else if (decision.hasBid && mfaSpread > 0) {
-                // If we have a valid bid and MFA spread, derive ask from bid + spread
-                decision.askPrice = decision.bidPrice + mfaSpread;
-                decision.askSource = decision.bidSource + "_MFA_DERIVED";
-                decision.hasAsk = true;
-                decision.isGcBasedAsk = decision.isGcBasedBid; // Inherit source type
-                decision.isMarketBasedAsk = decision.isMarketBasedBid;
+            //     if (LOGGER.isDebugEnabled()) {
+            //         LOGGER.debug("Calculated ask using GC data: {} - {} = {}", 
+            //             gcAskRate, spreadAdjustment, decision.askPrice);
+            //     }
+            // } else if (decision.hasBid && mfaSpread > 0) {
+            //     // If we have a valid bid and MFA spread, derive ask from bid + spread
+            //     decision.askPrice = decision.bidPrice + mfaSpread;
+            //     decision.askSource = decision.bidSource + "_MFA_DERIVED";
+            //     decision.hasAsk = true;
+            //     decision.isGcBasedAsk = decision.isGcBasedBid; // Inherit source type
+            //     decision.isMarketBasedAsk = decision.isMarketBasedBid;
                 
-                if (LOGGER.isDebugEnabled()) {
-                    LOGGER.debug("Derived ask using bid + MFA spread: {} + {} = {}", 
-                        decision.bidPrice, mfaSpread, decision.askPrice);
-                }
+            //     if (LOGGER.isDebugEnabled()) {
+            //         LOGGER.debug("Derived ask using bid + MFA spread: {} + {} = {}", 
+            //             decision.bidPrice, mfaSpread, decision.askPrice);
+            //     }
             } else {
                 // No valid reference for ask
                 decision.hasAsk = false;
