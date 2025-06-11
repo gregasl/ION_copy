@@ -20,17 +20,17 @@ import org.slf4j.LoggerFactory;
 public class Best {
 
 	 // Price attribute bitmask constants
-    private static final int PRICE_NOT_TRADABLE = 0x0001;
-    private static final int PRICE_CREDIT_UNKNOWN = 0x0002;
-    private static final int PRICE_IMPLIED = 0x0004;
-    private static final int PRICE_INDICATIVE = 0x0008;
-    private static final int PRICE_AON = 0x0010;
-    private static final int PRICE_MINE = 0x0020;  // Price belongs to the bank
-    private static final int PRICE_OCO = 0x0040;
-    private static final int PRICE_VOICE = 0x0080;
-    private static final int PRICE_CCP = 0x0100;
-    private static final int PRICE_BILATERAL = 0x0200;
-    private static final int PRICE_NOT_ETRADABLE = 0x0400;
+    public static final int PRICE_NOT_TRADABLE = 0x0001;
+    public static final int PRICE_CREDIT_UNKNOWN = 0x0002;
+    public static final int PRICE_IMPLIED = 0x0004;
+    public static final int PRICE_INDICATIVE = 0x0008;
+    public static final int PRICE_AON = 0x0010;
+    public static final int PRICE_MINE = 0x0020;  // Price belongs to the bank
+    public static final int PRICE_OCO = 0x0040;
+    public static final int PRICE_VOICE = 0x0080;
+    public static final int PRICE_CCP = 0x0100;
+    public static final int PRICE_BILATERAL = 0x0200;
+    public static final int PRICE_NOT_ETRADABLE = 0x0400;
 
     private static final Logger LOGGER = LoggerFactory.getLogger(Best.class);
     private static final String FENICS_USREPO = MarketDef.FENICS_USREPO;
@@ -169,7 +169,7 @@ public class Best {
     }
     
     public void setAskIsAON(int askStatus) {
-        boolean isAon = isBitSet(askStatus, PRICE_AON);
+        boolean isAon = isAON(askStatus);
         if (LOGGER.isDebugEnabled()) {
             LOGGER.debug("Setting askIsAON for instrument {} to {} based on status bitmask: {}", instrumentId, isAon, askStatus);
         }
@@ -290,7 +290,7 @@ public class Best {
     }
 
     public void setBidIsAON(int bidStatus) {
-        boolean isAon = isBitSet(bidStatus, PRICE_AON);
+        boolean isAon = isAON(bidStatus);
         if (LOGGER.isDebugEnabled()) {
             LOGGER.debug("Setting bidIsAON for instrument {} to {} based on status bitmask: {}", instrumentId, isAon, bidStatus);
         }
@@ -451,6 +451,13 @@ public class Best {
         return isBitSet(bitmask, PRICE_MINE);
     }
     
+    /**
+     * Check if the price belongs to the bank (Mine flag)
+     */
+    public boolean isAON(int bitmask) {
+        return isBitSet(bitmask, PRICE_AON);
+    }
+
     /**
      * Returns a string representation of this Best object,
      * showing the instrument ID and prices.

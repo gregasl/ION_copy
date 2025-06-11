@@ -593,6 +593,29 @@ public String getVerb() {
   }
   
   /**
+   * Sets the active status of this order based on MKV updates
+   * 
+   * @param active Whether the order is active
+   */
+  public void setActive(boolean active) {
+      this.orderDead = !active;
+      
+      if (LOGGER.isDebugEnabled()) {
+          LOGGER.debug("Order {} active status set to {}", 
+              orderId != null ? orderId : myReqId, active);
+      }
+  }
+
+  /**
+   * Gets the active status of this order
+   * 
+   * @return true if the order is active, false otherwise
+   */
+  public boolean isActive() {
+      return !orderDead;
+  }
+
+  /**
    * Not interested in partial updates for the order
    */
   public void onPartialUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply,
