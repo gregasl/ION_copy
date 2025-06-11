@@ -105,20 +105,20 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
         ApplicationLogging.setGlobalLogLevel("WARN");
 
         ApplicationLogging.setLogLevels("DEBUG",
-            "com.iontrading.automatedMarketMaking.Instrument",
             "com.iontrading.automatedMarketMaking.MarketMaker",
             "com.iontrading.automatedMarketMaking.OrderManagement"
         );
 
         // Core business logic at INFO
         ApplicationLogging.setLogLevels("INFO",
-            "com.iontrading.automatedMarketMaking.BondEligibilityListener",
-            "com.iontrading.automatedMarketMaking.EligibilityChangeListener",
             "com.iontrading.automatedMarketMaking.MarketOrder"
         );
 
         // Infrastructure at ERROR
         ApplicationLogging.setLogLevels("ERROR",
+            "com.iontrading.automatedMarketMaking.BondEligibilityListener",
+            "com.iontrading.automatedMarketMaking.Instrument",
+            "com.iontrading.automatedMarketMaking.EligibilityChangeListener",
             "com.iontrading.automatedMarketMaking.AsyncLoggingManager",
             "com.iontrading.automatedMarketMaking.ApplicationLogging",
             "com.iontrading.automatedMarketMaking.MarketDef",
@@ -1518,8 +1518,22 @@ private void trySubscribeAndRemoveDepthListener(MkvObject mkvObject, MkvPublishM
             String nativeId = getNativeInstrumentId(Id, market, false);
 
             if (!(trader == null) && orderPrice > 0.0 && qtyHit > 0.0) {
-                LOGGER.info("Adding order: market={}, trader={}, Id={}, nativeId={}, verb={}, qtyFilled={}, price={}",
+                LOGGER.info("Preparing hedging order before self match: market={}, trader={}, Id={}, nativeId={}, verb={}, qtyFilled={}, price={}",
                     market, trader, Id, nativeId, hedgeDirection, qtyHit, orderPrice);
+                if (hedgeDirection.equals("Buy")) {
+                    if (bestMarket.isMinePrice(bestMarket.getAskStatus())) {
+                        LOGGER.info("Self match prevention on the ask side: nativeId={}, qtyHit={}", nativeId, qtyHit);
+                        return;
+                    }
+                    LOGGER.info("Hedging offer lifted with buy order: nativeId={}, qtyHit={}", nativeId, qtyHit);                    
+                } else {
+                    if (bestMarket.isMinePrice(bestMarket.getBidStatus())) {
+                        LOGGER.info("Self match prevention on the bid side: nativeId={}, qtyHit={}", nativeId, qtyHit);
+                        return;
+                    }
+                    LOGGER.info("Hedging bid hit with sell order: nativeId={}, qtyHit={}", nativeId, qtyHit);
+                }
+                
                 addOrder(market, trader, nativeId, hedgeDirection, qtyHit, orderPrice, "Limit", "FAS");
             } else {
                 LOGGER.warn("No trader configured for market: {}", market);

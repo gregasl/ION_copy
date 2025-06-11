@@ -1332,13 +1332,25 @@ public class MarketMaker implements IOrderManager {
                 if (latestGcBestCash == null) {
                     significantCashGcChange = true;
                 } else {
+                    
+                    GCLevelResult latestGcBestCash = gcBestCash.getGCLevel();
+                    GCLevelResult thisLatestGcBestCash = this.latestGcBestCash.getGCLevel();
+                    if (latestGcBestCash == null || thisLatestGcBestCash == null) {
+                        significantCashGcChange = true; // If we can't compare, treat as significant change
+                    } else {
+                        // Compare bid and ask prices for significant changes
                     // Detect significant changes (e.g., > 1 bp)
                     significantCashGcChange = 
-                        Math.abs(gcBestCash.getBid() - latestGcBestCash.getBid()) >= 0.02 || 
-                        Math.abs(gcBestCash.getAsk() - latestGcBestCash.getAsk()) >= 0.02;
-                }
+                        (latestGcBestCash.getBidPrice() != null && 
+                         thisLatestGcBestCash.getBidPrice() != null && 
+                         Math.abs(latestGcBestCash.getBidPrice() - thisLatestGcBestCash.getBidPrice()) >= 0.02) || 
+                        (latestGcBestCash.getAskPrice() != null && 
+                         thisLatestGcBestCash.getAskPrice() != null && 
+                         Math.abs(latestGcBestCash.getAskPrice() - thisLatestGcBestCash.getAskPrice()) >= 0.02);
+                    }
                 this.latestGcBestCash = gcBestCash;
                 this.latestCashGcRate = cash_gc;
+                }
             }
             
             // Check for REG GC changes
@@ -1347,12 +1359,24 @@ public class MarketMaker implements IOrderManager {
                     significantRegGcChange = true;
                 } else {
                     // Detect significant changes (e.g., > 0.5 bp)
+                    GCLevelResult latestGcBestREG = gcBestREG.getGCLevel();
+                    GCLevelResult thisLatestGcBestREG = this.latestGcBestREG.getGCLevel();
+                    if (latestGcBestREG == null || thisLatestGcBestREG == null) {
+                        significantRegGcChange = true; // If we can't compare, treat as significant change
+                    } else {
+                        // Compare bid and ask prices for significant changes
+                        // Detect significant changes (e.g., > 1 bp)
                     significantRegGcChange = 
-                        Math.abs(gcBestREG.getBid() - latestGcBestREG.getBid()) >= 0.02 || 
-                        Math.abs(gcBestREG.getAsk() - latestGcBestREG.getAsk()) >= 0.02;
+                        (latestGcBestREG.getBidPrice() != null && 
+                         thisLatestGcBestREG.getBidPrice() != null && 
+                         Math.abs(latestGcBestREG.getBidPrice() - thisLatestGcBestREG.getBidPrice()) >= 0.02) || 
+                        (latestGcBestREG.getAskPrice() != null && 
+                         thisLatestGcBestREG.getAskPrice() != null && 
+                         Math.abs(latestGcBestREG.getAskPrice() - thisLatestGcBestREG.getAskPrice()) >= 0.02);
                 }
                 this.latestGcBestREG = gcBestREG;
                 this.latestRegGcRate = reg_gc;
+                }
             }
         }
 
@@ -1360,16 +1384,16 @@ public class MarketMaker implements IOrderManager {
         boolean isCash = id.endsWith("C_Fixed");
         processMarketUpdate(best, isCash ? gcBestCash : gcBestREG);
         
-        // If GC rates changed significantly, update all GC-based quotes
-        if (significantCashGcChange) {
-            LOGGER.info("Significant Cash GC rate change detected, updating GC-based quotes");
-            onGcRateUpdate("C", gcBestCash);
-        }
+        // // If GC rates changed significantly, update all GC-based quotes
+        // if (significantCashGcChange) {
+        //     LOGGER.info("Significant Cash GC rate change detected, updating GC-based quotes");
+        //     onGcRateUpdate("C", gcBestCash);
+        // }
         
-        if (significantRegGcChange) {
-            LOGGER.info("Significant REG GC rate change detected, updating GC-based quotes");
-            onGcRateUpdate("REG", gcBestREG);
-        }
+        // if (significantRegGcChange) {
+        //     LOGGER.info("Significant REG GC rate change detected, updating GC-based quotes");
+        //     onGcRateUpdate("REG", gcBestREG);
+        // }
 
         processedUpdateCounter.incrementAndGet();
         
@@ -1610,190 +1634,193 @@ public class MarketMaker implements IOrderManager {
     }
 }
 
-/**
- * Handle GC rate updates
- * Called when GC rates change significantly
- */
-public void onGcRateUpdate(String termCode, GCBest newGcBest) {
-    if (newGcBest == null || !enabled) {
-        return;
-    }
+// /**
+//  * Handle GC rate updates
+//  * Called when GC rates change significantly
+//  */
+// public void onGcRateUpdate(String termCode, GCBest newGcBest) {
+//     if (newGcBest == null || !enabled) {
+//         return;
+//     }
+//     GCLevelResult gcLevel = newGcBest.getGCLevel();
+//     if (gcLevel == null) {
+//         if (LOGGER.isWarnEnabled()) {
+//             LOGGER.warn("Invalid GC level data for term code {}: {}", termCode, gcLevel);
+//         }
+//         return;
+//     }
+
+//     // Store the updated GC rates
+//     if ("C".equals(termCode)) {
+//         synchronized(gcBestLock) {
+//             latestGcBestCash = newGcBest;
+//             latestCashGcRate = gcLevel.getBidPrice(); // Or some average/mid if preferred
+//         }
+//     } else if ("REG".equals(termCode)) {
+//         synchronized(gcBestLock) {
+//             latestGcBestREG = newGcBest;
+//             latestRegGcRate = gcLevel.getBidPrice(); // Or some average/mid if preferred
+//         }
+//     } else {
+//         if (LOGGER.isWarnEnabled()) {
+//             LOGGER.warn("Unknown term code in GC update: {}", termCode);
+//         }
+//         return;
+//     }
     
-    if (LOGGER.isInfoEnabled()) {
-        LOGGER.info("GC rate update for {}: bid={}, ask={}", 
-            termCode, newGcBest.getBid(), newGcBest.getAsk());
-    }
-    
-    // Store the updated GC rates
-    if ("C".equals(termCode)) {
-        synchronized(gcBestLock) {
-            latestGcBestCash = newGcBest;
-            latestCashGcRate = newGcBest.getBid(); // Or some average/mid if preferred
-        }
-    } else if ("REG".equals(termCode)) {
-        synchronized(gcBestLock) {
-            latestGcBestREG = newGcBest;
-            latestRegGcRate = newGcBest.getBid(); // Or some average/mid if preferred
-        }
-    } else {
-        if (LOGGER.isWarnEnabled()) {
-            LOGGER.warn("Unknown term code in GC update: {}", termCode);
-        }
-        return;
-    }
-    
-    // Only update GC-based orders
-    updateGcBasedQuotesOnly(termCode, newGcBest);
-}
+//     // Only update GC-based orders
+//     updateGcBasedQuotesOnly(termCode, newGcBest);
+// }
 
 /**
  * Update only GC-based quotes when GC rates change
  * @param termCode The term code (C or REG)
  * @param gcBest The new GC reference data
  */
-public void updateGcBasedQuotesOnly(String termCode, GCBest gcBest) {
-    if (LOGGER.isInfoEnabled()) {
-        LOGGER.info("Updating only GC-based quotes for term code: {}", termCode);
-    }
+// public void updateGcBasedQuotesOnly(String termCode, GCBest gcBest) {
+//     if (LOGGER.isInfoEnabled()) {
+//         LOGGER.info("Updating only GC-based quotes for term code: {}", termCode);
+//     }
     
-    if (!enabled || gcBest == null) {
-        return;
-    }
+//     if (!enabled || gcBest == null) {
+//         return;
+//     }
     
-    int updatedBids = 0;
-    int updatedAsks = 0;
+//     int updatedBids = 0;
+//     int updatedAsks = 0;
     
-    for (Map.Entry<String, ActiveQuote> entry : activeQuotes.entrySet()) {
-        String bondId = entry.getKey();
-        ActiveQuote quote = entry.getValue();
+//     for (Map.Entry<String, ActiveQuote> entry : activeQuotes.entrySet()) {
+//         String bondId = entry.getKey();
+//         ActiveQuote quote = entry.getValue();
         
-        // Check if this is for the right term code
-        if (bondId.endsWith(termCode + "_Fixed")) {
-            // Only process quotes that are GC-based
-            if (quote.isGcBasedBid() || quote.isGcBasedAsk()) {
-                // Get the instrument ID that corresponds to this bond ID
-                String nativeInstrument = null;
-                if (depthListener != null) {
-                    nativeInstrument = depthListener.getInstrumentFieldBySourceString(
-                        bondId, config.getMarketSource(), false);
-                }
+//         // Check if this is for the right term code
+//         if (bondId.endsWith(termCode + "_Fixed")) {
+//             // Only process quotes that are GC-based
+//             if (quote.isGcBasedBid() || quote.isGcBasedAsk()) {
+//                 // Get the instrument ID that corresponds to this bond ID
+//                 String nativeInstrument = null;
+//                 if (depthListener != null) {
+//                     nativeInstrument = depthListener.getInstrumentFieldBySourceString(
+//                         bondId, config.getMarketSource(), false);
+//                 }
                 
-                if (nativeInstrument == null) {
-                    if (LOGGER.isWarnEnabled()) {
-                        LOGGER.warn("No native instrument ID found for {}", bondId);
-                    }
-                    continue;
-                }
+//                 if (nativeInstrument == null) {
+//                     if (LOGGER.isWarnEnabled()) {
+//                         LOGGER.warn("No native instrument ID found for {}", bondId);
+//                     }
+//                     continue;
+//                 }
                 
-                // Recalculate prices based only on GC data
-                PricingDecision decision = calculateGcOnlyPrices(bondId, termCode, gcBest);
+//                 // Recalculate prices based only on GC data
+//                 PricingDecision decision = calculateGcOnlyPrices(bondId, termCode, gcBest);
                 
-                // Update only the sides that are GC-based
-                if (decision.hasBid && quote.isGcBasedBid()) {
-                    MarketOrder bidOrder = quote.getBidOrder();
-                    boolean hasActiveBid = (bidOrder != null && !bidOrder.isDead());
+//                 // Update only the sides that are GC-based
+//                 if (decision.hasBid && quote.isGcBasedBid()) {
+//                     MarketOrder bidOrder = quote.getBidOrder();
+//                     boolean hasActiveBid = (bidOrder != null && !bidOrder.isDead());
                     
-                    // Check if price changed enough to update
-                    double currentPrice = quote.getBidPrice();
-                    boolean needsUpdate = !hasActiveBid || 
-                                         Math.abs(currentPrice - decision.bidPrice) >= 0.02;
+//                     // Check if price changed enough to update
+//                     double currentPrice = quote.getBidPrice();
+//                     boolean needsUpdate = !hasActiveBid || 
+//                                          Math.abs(currentPrice - decision.bidPrice) >= 0.02;
                     
-                    if (needsUpdate) {
-                        MarketOrder updatedBid = updateOrder(
-                            bondId, nativeInstrument, "Buy", decision.bidPrice, 
-                            decision.bidSource, hasActiveBid ? bidOrder : null);
+//                     if (needsUpdate) {
+//                         MarketOrder updatedBid = updateOrder(
+//                             bondId, nativeInstrument, "Buy", decision.bidPrice, 
+//                             decision.bidSource, hasActiveBid ? bidOrder : null);
                         
-                        if (updatedBid != null) {
-                            quote.setBidOrder(updatedBid, decision.bidSource, decision.bidPrice);
-                            updatedBids++;
-                            if (LOGGER.isInfoEnabled()) {
-                                LOGGER.info("Updated GC-based bid for {}: {} -> {}", 
-                                    bondId, currentPrice, decision.bidPrice);
-                            }
-                        }
-                    }
-                }
+//                         if (updatedBid != null) {
+//                             quote.setBidOrder(updatedBid, decision.bidSource, decision.bidPrice);
+//                             updatedBids++;
+//                             if (LOGGER.isInfoEnabled()) {
+//                                 LOGGER.info("Updated GC-based bid for {}: {} -> {}", 
+//                                     bondId, currentPrice, decision.bidPrice);
+//                             }
+//                         }
+//                     }
+//                 }
                 
-                // Handle ask side similarly
-                if (decision.hasAsk && quote.isGcBasedAsk()) {
-                    MarketOrder askOrder = quote.getAskOrder();
-                    boolean hasActiveAsk = (askOrder != null && !askOrder.isDead());
+//                 // Handle ask side similarly
+//                 if (decision.hasAsk && quote.isGcBasedAsk()) {
+//                     MarketOrder askOrder = quote.getAskOrder();
+//                     boolean hasActiveAsk = (askOrder != null && !askOrder.isDead());
                     
-                    // Check if price changed enough to update
-                    double currentPrice = quote.getAskPrice();
-                    boolean needsUpdate = !hasActiveAsk || 
-                                         Math.abs(currentPrice - decision.askPrice) >= 0.02;
+//                     // Check if price changed enough to update
+//                     double currentPrice = quote.getAskPrice();
+//                     boolean needsUpdate = !hasActiveAsk || 
+//                                          Math.abs(currentPrice - decision.askPrice) >= 0.02;
                     
-                    if (needsUpdate) {
-                        MarketOrder updatedAsk = updateOrder(
-                            bondId, nativeInstrument, "Sell", decision.askPrice, 
-                            decision.askSource, hasActiveAsk ? askOrder : null);
+//                     if (needsUpdate) {
+//                         MarketOrder updatedAsk = updateOrder(
+//                             bondId, nativeInstrument, "Sell", decision.askPrice, 
+//                             decision.askSource, hasActiveAsk ? askOrder : null);
                         
-                        if (updatedAsk != null) {
-                            quote.setAskOrder(updatedAsk, decision.askSource, decision.askPrice);
-                            updatedAsks++;
-                            if (LOGGER.isInfoEnabled()) {
-                                LOGGER.info("Updated GC-based ask for {}: {} -> {}", 
-                                    bondId, currentPrice, decision.askPrice);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+//                         if (updatedAsk != null) {
+//                             quote.setAskOrder(updatedAsk, decision.askSource, decision.askPrice);
+//                             updatedAsks++;
+//                             if (LOGGER.isInfoEnabled()) {
+//                                 LOGGER.info("Updated GC-based ask for {}: {} -> {}", 
+//                                     bondId, currentPrice, decision.askPrice);
+//                             }
+//                         }
+//                     }
+//                 }
+//             }
+//         }
+//     }
     
-    if (LOGGER.isInfoEnabled()) {
-        LOGGER.info("GC-based update completed for {}: updated {} bids, {} asks", 
-            termCode, updatedBids, updatedAsks);
-    }
-}
+//     if (LOGGER.isInfoEnabled()) {
+//         LOGGER.info("GC-based update completed for {}: updated {} bids, {} asks", 
+//             termCode, updatedBids, updatedAsks);
+//     }
+// }
 
 /**
  * Calculate prices based only on GC data
  */
-private PricingDecision calculateGcOnlyPrices(String bondId, String termCode, GCBest gcBest) {
-    PricingDecision decision = new PricingDecision();
+// private PricingDecision calculateGcOnlyPrices(String bondId, String termCode, GCBest gcBest) {
+//     PricingDecision decision = new PricingDecision();
     
-    try {
-        double spreadAdjustment = config.getDefaultIntraMarketSpread();
+//     try {
+//         double spreadAdjustment = config.getDefaultIntraMarketSpread();
         
-        // Only use GC bid/ask rates
-        double gcBidRate = gcBest.getBid();
-        double gcAskRate = gcBest.getAsk();
+//         GCLevelResult gcLevel = gcBest.getGCLevel();
+//         // Only use GC bid/ask rates
+//         double gcBidRate = gcLevel.getBidPrice();
+//         double gcAskRate = gcLevel.getAskPrice();
+
+//         // Calculate bid price if GC bid is available
+//         if (gcBidRate > 0) {
+//             decision.bidPrice = gcBidRate + spreadAdjustment;
+//             decision.bidSource = "GC_" + termCode;
+//             decision.hasBid = true;
+//             decision.isGcBasedBid = true;
+//         }
         
-        // Calculate bid price if GC bid is available
-        if (gcBidRate > 0) {
-            decision.bidPrice = gcBidRate + spreadAdjustment;
-            decision.bidSource = "GC_" + termCode;
-            decision.hasBid = true;
-            decision.isGcBasedBid = true;
-        }
+//         // Calculate ask price if GC ask is available
+//         if (gcAskRate > 0) {
+//             decision.askPrice = gcAskRate - spreadAdjustment;
+//             decision.askSource = "GC_" + termCode;
+//             decision.hasAsk = true;
+//             decision.isGcBasedAsk = true;
+//         }
         
-        // Calculate ask price if GC ask is available
-        if (gcAskRate > 0) {
-            decision.askPrice = gcAskRate - spreadAdjustment;
-            decision.askSource = "GC_" + termCode;
-            decision.hasAsk = true;
-            decision.isGcBasedAsk = true;
-        }
-        
-        // Check for inverted quotes
-        if (decision.hasBid && decision.hasAsk && decision.bidPrice <= decision.askPrice) {
-            double midPrice = (decision.bidPrice + decision.askPrice) / 2;
-            double minSpread = 0.02; // 2bp minimum spread
+//         // Check for inverted quotes
+//         if (decision.hasBid && decision.hasAsk && decision.bidPrice <= decision.askPrice) {
+//             double midPrice = (decision.bidPrice + decision.askPrice) / 2;
+//             double minSpread = 0.02; // 2bp minimum spread
             
-            decision.bidPrice = midPrice + (minSpread / 2);
-            decision.askPrice = midPrice - (minSpread / 2);
-        }
-    } catch (Exception e) {
-        if (LOGGER.isErrorEnabled()) {
-            LOGGER.error("Error calculating GC-only prices: {}", e.getMessage(), e);
-        }
-    }
+//             decision.bidPrice = midPrice + (minSpread / 2);
+//             decision.askPrice = midPrice - (minSpread / 2);
+//         }
+//     } catch (Exception e) {
+//         if (LOGGER.isErrorEnabled()) {
+//             LOGGER.error("Error calculating GC-only prices: {}", e.getMessage(), e);
+//         }
+//     }
     
-    return decision;
-}
+//     return decision;
+// }
 
     /**
      * Log diagnostic statistics periodically
@@ -2638,14 +2665,16 @@ private PricingDecision calculateGcOnlyPrices(String bondId, String termCode, GC
                 lastGCRate = latestRegGcRate;
             }
         }
-        
+
+        GCLevelResult gcLevel = lastGCBest.getGCLevel();
+
         if (side.equals("Buy")){
             double bid = 0;
-            if (lastGCBest == null || lastGCRate <= 0) {
+            if (gcLevel.getBidPrice() == null || lastGCRate <= 0) {
                 LOGGER.warn("No valid GC rate available for Buy side on bond: " + Id);
                 return -9999; // No valid rate, cannot quote
-            } else if (lastGCBest != null) {
-                bid = lastGCBest.getBid();
+            } else if (gcLevel.getBidPrice() != null) {
+                bid = gcLevel.getBidPrice();
                 if (bid == 0 && lastGCRate > 0) {
                     if (LOGGER.isInfoEnabled()) {
                         LOGGER.info("No valid bid available, using last GC traded value for pricing on Buy side for bond: " + Id);
@@ -2663,13 +2692,13 @@ private PricingDecision calculateGcOnlyPrices(String bondId, String termCode, GC
         double gcAsk = 0.0;
         if (side.equals("Sell")){
             double ask = 0.0;
-            if (lastGCBest == null || lastGCRate <= 0) {
+            if (gcLevel.getAskPrice() == null || lastGCRate <= 0) {
                 if (LOGGER.isWarnEnabled()) {
                     LOGGER.warn("No valid GC rate available for Sell side on bond: " + Id);
                 }
                 gcAsk = -9999; // No valid rate, cannot quote
-            } else if (lastGCBest != null) {
-                ask = lastGCBest.getAsk();
+            } else if (gcLevel.getAskPrice() != null) {
+                ask = gcLevel.getAskPrice();
                 if (ask == 0 && lastGCRate > 0) {
                     if (LOGGER.isInfoEnabled()) {
                         LOGGER.info("Using last GC traded value for pricing on Sell side for bond: " + Id);
@@ -3650,8 +3679,9 @@ private PricingDecision calculateGcOnlyPrices(String bondId, String termCode, GC
             boolean validGcAsk = false;
             
             if (gcBest != null) {
-                gcBidRate = gcBest.getBid();
-                gcAskRate = gcBest.getAsk();
+                GCLevelResult gcLevel = gcBest.getGCLevel();
+                gcBidRate = gcLevel.getBidPrice() != null ? gcLevel.getBidPrice() : 0;
+                gcAskRate = gcLevel.getAskPrice() != null ? gcLevel.getAskPrice() : 0;
                 validGcBid = gcBidRate > 0;
                 validGcAsk = gcAskRate > 0;
             }
@@ -3660,8 +3690,21 @@ private PricingDecision calculateGcOnlyPrices(String bondId, String termCode, GC
             double mfaSpread = getMfaSpreadForBond(bondId, termCode);
             
             // Step 4: Calculate bid price using hierarchy of sources
-            if (validBidSource) {
-                // Primary: Use market data (venue) as reference with adjustment
+            if (validBidSource && validGcBid) {
+                // Use the lower of market data or GC as reference with adjustment
+                double lowerBid = Math.min(referenceBid, gcBidRate);
+                decision.bidPrice = lowerBid + spreadAdjustment;
+                decision.bidSource = (lowerBid == referenceBid) ? bidSource : "GC_" + termCode;
+                decision.hasBid = true;
+                decision.isMarketBasedBid = (lowerBid == referenceBid);
+                decision.isGcBasedBid = (lowerBid == gcBidRate);
+                
+                if (LOGGER.isDebugEnabled()) {
+                    LOGGER.debug("Calculated bid using minimum of market/GC: min({}, {}) + {} = {}", 
+                        referenceBid, gcBidRate, spreadAdjustment, decision.bidPrice);
+                }
+            } else if (validBidSource) {
+                // Only market data available
                 decision.bidPrice = referenceBid + spreadAdjustment;
                 decision.bidSource = bidSource;
                 decision.hasBid = true;
@@ -3672,7 +3715,7 @@ private PricingDecision calculateGcOnlyPrices(String bondId, String termCode, GC
                         referenceBid, spreadAdjustment, decision.bidPrice);
                 }
             } else if (validGcBid) {
-                // Secondary: Use GC bid as reference with adjustment
+                // Only GC data available
                 decision.bidPrice = gcBidRate + spreadAdjustment;
                 decision.bidSource = "GC_" + termCode;
                 decision.hasBid = true;
@@ -3688,8 +3731,21 @@ private PricingDecision calculateGcOnlyPrices(String bondId, String termCode, GC
             }
             
             // Step 5: Calculate ask price using hierarchy of sources
-            if (validAskSource) {
-                // Primary: Use market data (venue) as reference with adjustment
+            if (validAskSource && validGcAsk) {
+                // Use the higher of market data or GC as reference with adjustment
+                double higherAsk = Math.max(referenceAsk, gcAskRate);
+                decision.askPrice = higherAsk - spreadAdjustment;
+                decision.askSource = (higherAsk == referenceAsk) ? askSource : "GC_" + termCode;
+                decision.hasAsk = true;
+                decision.isMarketBasedAsk = (higherAsk == referenceAsk);
+                decision.isGcBasedAsk = (higherAsk == gcAskRate);
+                
+                if (LOGGER.isDebugEnabled()) {
+                    LOGGER.debug("Calculated ask using maximum of market/GC: max({}, {}) - {} = {}", 
+                        referenceAsk, gcAskRate, spreadAdjustment, decision.askPrice);
+                }
+            } else if (validAskSource) {
+                // Only market data available
                 decision.askPrice = referenceAsk - spreadAdjustment;
                 decision.askSource = askSource;
                 decision.hasAsk = true;
@@ -3699,30 +3755,40 @@ private PricingDecision calculateGcOnlyPrices(String bondId, String termCode, GC
                     LOGGER.debug("Calculated ask using market data: {} - {} = {}", 
                         referenceAsk, spreadAdjustment, decision.askPrice);
                 }
-            // } else if (validGcAsk) {
-            //     // Secondary: Use GC ask as reference with adjustment
-            //     decision.askPrice = gcAskRate - spreadAdjustment;
-            //     decision.askSource = "GC_" + termCode;
-            //     decision.hasAsk = true;
-            //     decision.isGcBasedAsk = true;
+            } else if (validGcAsk) {
+                // Only GC data available
+                decision.askPrice = gcAskRate - spreadAdjustment;
+                decision.askSource = "GC_" + termCode;
+                decision.hasAsk = true;
+                decision.isGcBasedAsk = true;
                 
-            //     if (LOGGER.isDebugEnabled()) {
-            //         LOGGER.debug("Calculated ask using GC data: {} - {} = {}", 
-            //             gcAskRate, spreadAdjustment, decision.askPrice);
-            //     }
-            // } else if (decision.hasBid && mfaSpread > 0) {
-            //     // If we have a valid bid and MFA spread, derive ask from bid + spread
-            //     decision.askPrice = decision.bidPrice + mfaSpread;
-            //     decision.askSource = decision.bidSource + "_MFA_DERIVED";
-            //     decision.hasAsk = true;
-            //     decision.isGcBasedAsk = decision.isGcBasedBid; // Inherit source type
-            //     decision.isMarketBasedAsk = decision.isMarketBasedBid;
-                
-            //     if (LOGGER.isDebugEnabled()) {
-            //         LOGGER.debug("Derived ask using bid + MFA spread: {} + {} = {}", 
-            //             decision.bidPrice, mfaSpread, decision.askPrice);
-            //     }
+                if (LOGGER.isDebugEnabled()) {
+                    LOGGER.debug("Calculated ask using GC data: {} - {} = {}", 
+                        gcAskRate, spreadAdjustment, decision.askPrice);
+                }
             } else {
+                // No valid reference for ask
+                decision.hasAsk = false;
+            }
+            
+            // CRITICAL: Ensure ask price is always higher than bid price
+            if (decision.hasBid && decision.hasAsk) {
+                // If bid ≥ ask (inverted quotes), adjust ask to be higher than bid
+                if (decision.bidPrice >= decision.askPrice) {
+                    // Apply minimum spread (e.g., 2bp)
+                    double minSpread = 0.02;
+                    double midPrice = (decision.bidPrice + decision.askPrice) / 2;
+                    
+                    // Adjust both sides around the mid-price
+                    decision.bidPrice = midPrice - (minSpread / 2);
+                    decision.askPrice = midPrice + (minSpread / 2);
+                    
+                    if (LOGGER.isInfoEnabled()) {
+                        LOGGER.info("Fixed inverted quotes for {}: bid={}, ask={}, mid={}, new bid={}, new ask={}", 
+                            bondId, decision.bidPrice, decision.askPrice, midPrice, decision.bidPrice, decision.askPrice);
+                    }
+                }
+            }
                 // No valid reference for ask
                 decision.hasAsk = false;
             }
