@@ -603,9 +603,9 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
             
             // Check all bonds we have data for
             for (Map.Entry<String, BondConsolidatedData> entry : consolidatedBondData.entrySet()) {
-                String cusip = entry.getKey();
+                String key = entry.getKey();
                 BondConsolidatedData bondData = entry.getValue();
-
+                String cusip = bondData.getCusip();
                 EligibilityResult shouldBeEligible = shouldBondBeEligible(cusip, bondData);
                 
                 String IdC = cusip + "_C_Fixed";
@@ -958,7 +958,7 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
      */
     private boolean isValidCusip(String cusip) {
         // Basic validation - adjust as needed
-        return cusip != null && cusip.length() == 9 && cusip.startsWith("9") && !cusip.startsWith("W")  && !cusip.startsWith("R");
+        return cusip != null && cusip.length() == 9 && cusip.startsWith("9") && !cusip.endsWith("W")  && !cusip.endsWith("R");
     }
 
     /**
