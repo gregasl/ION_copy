@@ -1408,7 +1408,6 @@ private void trySubscribeAndRemoveDepthListener(MkvObject mkvObject, MkvPublishM
     public void onFullUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolean isSnap) {
         try {
             
-            
             // Check if this is our order by looking at CompNameOrigin (should match our app ID)
             String active = mkvRecord.getValue("ActiveStr").getString();
             String appName = mkvRecord.getValue("CompNameOrigin").getString();
@@ -1434,6 +1433,19 @@ private void trySubscribeAndRemoveDepthListener(MkvObject mkvObject, MkvPublishM
             // Store current status for future reference
             orderActiveStatusMap.put(activityKey, currentlyActive);
 
+            // Update ActiveQuote status if this is a market maker order
+            if ("MarketMaker".equals(appName) && orderId != null) {
+                if (marketMaker != null) {
+                    // Find the ActiveQuote that contains this order and update its status
+                    if (previouslyActive != null && previouslyActive != currentlyActive) {
+                        updateActiveQuoteStatus(Id, VerbStr, currentlyActive);
+                        
+                        LOGGER.info("Order status changed for {}/{}: active={} -> {}", 
+                            Id, VerbStr, previouslyActive, currentlyActive);
+                    }
+                }
+            }
+
             // Process only if transitioning from active to inactive
             if (previouslyActive != null && previouslyActive && !currentlyActive) {
                 LOGGER.info("Order status change detected for origId={}: ActiveStr changed from Yes to No", origId);
@@ -1456,14 +1468,6 @@ private void trySubscribeAndRemoveDepthListener(MkvObject mkvObject, MkvPublishM
 
             if (!"MarketMaker".equals(appName) || !"FENICS_USREPO".equals(src) || active.equals("Yes")) {
                 return; // Not a market maker order nor a FENICS_USREPO order, or already active
-            }
-            LocalTime now = LocalTime.now();
-            int timeInMkvFormat = timeToInt(now);
-
-            // Compare against the MKV time received from the record
-            if (time < timeInMkvFormat - 60) {
-                LOGGER.warn("Processing an order update that's more than 60 seconds old: {}", time);
-                return;
             }
 
             LOGGER.debug("Processing order update: origId={}, orderId={}, status={}, fill={}", 
@@ -1546,6 +1550,27 @@ private void trySubscribeAndRemoveDepthListener(MkvObject mkvObject, MkvPublishM
             // }
         } catch (Exception e) {
             LOGGER.error("Error processing order update: {}", e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Updates the ActiveQuote status for a specific order
+     * 
+     * @param orderId The order ID
+     * @param side The order side (Buy or Sell)
+     * @param isActive Whether the order is active
+     */
+    private void updateActiveQuoteStatus(String Id, String side, boolean isActive) {
+        if (marketMaker == null) {
+            return;
+        }
+        
+        try {
+            // Ask the market maker to update the appropriate ActiveQuote
+            marketMaker.updateOrderStatus(Id, side, isActive);
+        } catch (Exception e) {
+            LOGGER.error("Error updating ActiveQuote status for order {}/{}: {}", 
+                Id, side, e.getMessage(), e);
         }
     }
 
@@ -1691,8 +1716,7 @@ private void trySubscribeAndRemoveDepthListener(MkvObject mkvObject, MkvPublishM
                 LOGGER.warn("Received invalid best object: {}", best);
                 return; // Cannot process invalid best
             }
-       
-            LOGGER.debug("OrderManagement.best() called: instrument={}, instrumentId={}, ask=({}), bid=({}), cash_gc=({}), reg_gc=({})", 
+            LOGGER.debug("OrderManagement.best() called: instrument={}, instrumentId={}, ask=({}), askSrc=({}), bid=({}), bidSrc=({}), cash_gc=({}), reg_gc=({})", 
                 best.getId(), 
                 best.getInstrumentId(), 
                 best.getAsk(), best.getAskSrc(), 
@@ -2079,63 +2103,23 @@ private void shutdownExecutor(ExecutorService executor, String name) {
             }
         }
         
-        // Create a dedicated thread for order cancellation that we can join
-        final Thread cancellationThread = new Thread(() -> {
-            try {
-                LOGGER.info("Order cancellation thread started");
-                
-                // Cancel market maker orders first
-                if (marketMaker != null) {
-                    try {
-                        LOGGER.info("Cancelling all market maker orders");
-                        boolean allCancelled = marketMaker.cancelAllOrders(10000);
-                        if (!allCancelled) {
-                            LOGGER.warn("Not all market maker orders were cancelled before timeout");
-                        }
-                    } catch (Exception e) {
-                        LOGGER.error("Error cancelling market maker orders: {}", e.getMessage(), e);
-                    }
-                }
-                
-                // Now cancel all pending orders (our own orders, not via market maker)
-                try {
-                    LOGGER.info("Cancelling all order management orders");
-                    cancelAllOrders();
-                } catch (Exception e) {
-                    LOGGER.warn("Error cancelling orders during shutdown: {}", e.getMessage());
-                }
-                
-                LOGGER.info("Order cancellation thread completed");
-            } catch (Exception e) {
-                LOGGER.error("Error in order cancellation thread: {}", e.getMessage(), e);
-            }
-        });
-        
-        // Set a name for the thread for easier debugging
-        cancellationThread.setName("OrderCancellationThread");
-        
+        // Cancel market maker orders directly through OrderManagement
         try {
-            // Start the cancellation thread
-            cancellationThread.start();
-            
-            // Wait for the cancellation thread to complete with a timeout
-            LOGGER.info("Waiting for order cancellation thread to complete (max 15 seconds)");
-            cancellationThread.join(15000); // 15 second timeout
-            
-            if (cancellationThread.isAlive()) {
-                // Thread is still running after timeout
-                LOGGER.warn("Order cancellation thread did not complete within timeout");
-                // Interrupt the thread
-                cancellationThread.interrupt();
-            } else {
-                LOGGER.info("Order cancellation thread completed successfully");
+            LOGGER.info("Cancelling all market maker orders");
+            boolean allCancelled = cancelMarketMakerOrders(10000);  // 10 second timeout
+            if (!allCancelled) {
+                LOGGER.warn("Not all market maker orders were cancelled before timeout");
             }
-        } catch (InterruptedException e) {
-            LOGGER.warn("Interrupted while waiting for order cancellation thread");
-            // Interrupt the cancellation thread
-            cancellationThread.interrupt();
-            // Restore the interrupt
-            Thread.currentThread().interrupt();
+        } catch (Exception e) {
+            LOGGER.error("Error cancelling market maker orders: {}", e.getMessage(), e);
+        }
+        
+        // Now cancel all remaining orders (non-market maker orders)
+        try {
+            LOGGER.info("Cancelling all remaining orders");
+            cancelAllOrders();
+        } catch (Exception e) {
+            LOGGER.warn("Error cancelling orders during shutdown: {}", e.getMessage());
         }
         
         // Complete market maker shutdown (cleanup without MKV operations)
@@ -2165,6 +2149,134 @@ private void shutdownExecutor(ExecutorService executor, String name) {
         
         // Log successful shutdown
         LOGGER.info("OrderManagement shutdown complete");
+    }
+
+    /**
+     * Cancels all orders placed by the market maker component.
+     * Used during shutdown or when disabling the market maker.
+     * 
+     * @param timeoutMs Maximum time to wait for cancellations (in milliseconds)
+     * @return true if all orders were successfully cancelled, false otherwise
+     */
+    public boolean cancelMarketMakerOrders(long timeoutMs) {
+        LOGGER.info("Cancelling all market maker orders");
+        
+        if (marketMaker == null) {
+            LOGGER.info("Market maker is null, no orders to cancel");
+            return true;
+        }
+        
+        try {
+            // Get all active quotes from the market maker
+            Map<String, ActiveQuote> activeQuotes = marketMaker.getActiveQuotes();
+            
+            if (activeQuotes.isEmpty()) {
+                LOGGER.info("No active quotes found, nothing to cancel");
+                return true;
+            }
+            
+            int totalOrderCount = 0;
+            Set<String> pendingCancellations = Collections.newSetFromMap(new ConcurrentHashMap<>());
+            
+            // Count active orders and add them to pending cancellations
+            for (Map.Entry<String, ActiveQuote> entry : activeQuotes.entrySet()) {
+                ActiveQuote quote = entry.getValue();
+                String instrumentId = entry.getKey();
+                
+                // Process bid order
+                MarketOrder bidOrder = quote.getBidOrder();
+                if (bidOrder != null && !bidOrder.isDead() && bidOrder.getOrderId() != null) {
+                    pendingCancellations.add(bidOrder.getOrderId());
+                    totalOrderCount++;
+                    
+                    // Issue cancel request
+                    String traderId = getTraderForVenue(bidOrder.getMarketSource());
+                    LOGGER.info("Cancelling bid order for {}: orderId={}", instrumentId, bidOrder.getOrderId());
+                    
+                    MarketOrder cancelOrder = MarketOrder.orderCancel(
+                        bidOrder.getMarketSource(),
+                        traderId,
+                        bidOrder.getOrderId(),
+                        this
+                    );
+                    
+                    if (cancelOrder == null) {
+                        LOGGER.warn("Failed to create cancel request for bid order: {}", bidOrder.getOrderId());
+                    }
+                }
+                
+                // Process ask order
+                MarketOrder askOrder = quote.getAskOrder();
+                if (askOrder != null && !askOrder.isDead() && askOrder.getOrderId() != null) {
+                    pendingCancellations.add(askOrder.getOrderId());
+                    totalOrderCount++;
+                    
+                    // Issue cancel request
+                    String traderId = getTraderForVenue(askOrder.getMarketSource());
+                    LOGGER.info("Cancelling ask order for {}: orderId={}", instrumentId, askOrder.getOrderId());
+                    
+                    MarketOrder cancelOrder = MarketOrder.orderCancel(
+                        askOrder.getMarketSource(),
+                        traderId,
+                        askOrder.getOrderId(),
+                        this
+                    );
+                    
+                    if (cancelOrder == null) {
+                        LOGGER.warn("Failed to create cancel request for ask order: {}", askOrder.getOrderId());
+                    }
+                }
+            }
+            
+            LOGGER.info("Sent {} cancel requests, waiting for confirmation...", totalOrderCount);
+            
+            if (totalOrderCount == 0) {
+                return true; // Nothing to cancel
+            }
+            
+            // Wait for cancellations to complete
+            long startTime = System.currentTimeMillis();
+            long endTime = startTime + timeoutMs;
+            
+            while (!pendingCancellations.isEmpty() && System.currentTimeMillis() < endTime) {
+                // Check if any orders are still active
+                for (Iterator<String> it = pendingCancellations.iterator(); it.hasNext();) {
+                    String orderId = it.next();
+                    MarketOrder order = getOrderByOrderId(orderId);
+                    
+                    if (order == null || order.isDead()) {
+                        // Order is no longer active or no longer in our cache
+                        it.remove();
+                        LOGGER.info("Confirmed cancellation for order: {}", orderId);
+                    }
+                }
+                
+                // Log progress periodically
+                if ((System.currentTimeMillis() - startTime) % 1000 < 50) { // Approximately every second
+                    LOGGER.info("Waiting for {} order cancellations to complete...", pendingCancellations.size());
+                }
+                
+                // Brief pause to avoid CPU spinning
+                try {
+                    Thread.sleep(50);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    LOGGER.warn("Interrupted while waiting for cancellations");
+                    break;
+                }
+            }
+            
+            boolean allCancelled = pendingCancellations.isEmpty();
+            LOGGER.info("Market maker order cancellation completed: {} of {} orders confirmed cancelled{}",
+                totalOrderCount - pendingCancellations.size(), 
+                totalOrderCount,
+                allCancelled ? "" : " (TIMEOUT OCCURRED)");
+            
+            return allCancelled;
+        } catch (Exception e) {
+            LOGGER.error("Error cancelling market maker orders: {}", e.getMessage(), e);
+            return false;
+        }
     }
 
 /**

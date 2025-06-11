@@ -995,179 +995,6 @@ public class MarketMaker implements IOrderManager {
             LOGGER.info("Cancelled orders for {} bonds with term code: {}", cancelCount, termCode);
         }
     }
-
-    /**
-     * Cancel all active orders.
-     * Used when disabling the market maker.
-     */
-    public boolean cancelAllOrders(long timeoutMs) {
-        if (LOGGER.isInfoEnabled()) {
-            LOGGER.info("cancelAllOrders: Cancelling all market maker orders");
-        }
-
-        // Disable market maker to prevent new orders
-        this.enabled = false;
-        
-        // Check if we have any active quotes to cancel
-        if (activeQuotes.isEmpty()) {
-            if (LOGGER.isInfoEnabled()) {
-                LOGGER.info("No active quotes to cancel");
-            }
-            return true;
-        }
-
-        int totalOrderCount = 0;
-        
-        // Count the active orders that need cancellation
-        for (ActiveQuote quote : activeQuotes.values()) {
-            if (quote.getBidOrder() != null && !quote.getBidOrder().isDead()) {
-                totalOrderCount++;
-            }
-            if (quote.getAskOrder() != null && !quote.getAskOrder().isDead()) {
-                totalOrderCount++;
-            }
-        }
-        if (LOGGER.isInfoEnabled()) {
-            LOGGER.info("Found {} active orders to cancel", totalOrderCount);
-        }
-
-        if (totalOrderCount == 0) {
-            return true;
-        }
-        
-        // Begin the cancellation process
-        try {
-            // Check MKV availability first
-            boolean mkvAvailable = false;
-            try {
-                MkvPublishManager pm = Mkv.getInstance().getPublishManager();
-                mkvAvailable = (pm != null);
-            } catch (Exception e) {
-                if (LOGGER.isWarnEnabled()) {
-                    LOGGER.warn("Error checking MKV availability: {}", e.getMessage());
-                }
-                return false;
-            }
-
-            if (!mkvAvailable) {
-                if (LOGGER.isWarnEnabled()) {
-                    LOGGER.warn("MKV not available, cannot cancel orders properly");
-                }
-                return false;
-            }
-            
-            // Start tracking cancelled orders
-            final Set<String> pendingCancellations = ConcurrentHashMap.newKeySet();
-            int cancelRequestsSent = 0;
-            
-            // Send cancel requests for all active orders
-            if (LOGGER.isInfoEnabled()) {
-                LOGGER.info("Sending cancel requests for all active orders");
-            }
-            for (ActiveQuote quote : new ArrayList<>(activeQuotes.values())) {
-                MarketOrder bidOrder = quote.getBidOrder();
-                if (bidOrder != null && !bidOrder.isDead() && bidOrder.getOrderId() != null) {
-                    pendingCancellations.add(bidOrder.getOrderId());
-                    try {
-                        LOGGER.info("Cancelling bid order: {}", bidOrder.getOrderId());
-                        cancelOrder(bidOrder, quote.getId());
-                        cancelRequestsSent++;
-                    } catch (Exception e) {
-                        if (LOGGER.isErrorEnabled()) {
-                            LOGGER.error("Error cancelling bid order {}: {}", 
-                                bidOrder.getOrderId(), e.getMessage());
-                        }
-                    }
-                }
-
-                MarketOrder askOrder = quote.getAskOrder();
-                if (askOrder != null && !askOrder.isDead() && askOrder.getOrderId() != null) {
-                    pendingCancellations.add(askOrder.getOrderId());
-                    try {
-                        LOGGER.info("Cancelling ask order: {}", askOrder.getOrderId());
-                        cancelOrder(askOrder, quote.getId());
-                        cancelRequestsSent++;
-                    } catch (Exception e) {
-                        if (LOGGER.isErrorEnabled()) {
-                            LOGGER.error("Error cancelling ask order {}: {}", 
-                                askOrder.getOrderId(), e.getMessage());
-                        }
-                    }
-                }
-            }
-
-            if (LOGGER.isInfoEnabled()) {
-                LOGGER.info("Sent {} cancel requests, waiting for confirmation...", cancelRequestsSent);
-            }
-
-            // Now wait until timeout or all orders are cancelled
-            long startTime = System.currentTimeMillis();
-            long endTime = startTime + timeoutMs;
-            
-            while (!pendingCancellations.isEmpty() && System.currentTimeMillis() < endTime) {
-                // Check if any of the pending cancellations are no longer in the active quotes
-                for (Iterator<String> it = pendingCancellations.iterator(); it.hasNext();) {
-                    String orderId = it.next();
-                    boolean stillActive = false;
-                    
-                    // Check if this order is still in any active quote
-                    for (ActiveQuote quote : activeQuotes.values()) {
-                        MarketOrder bidOrder = quote.getBidOrder();
-                        MarketOrder askOrder = quote.getAskOrder();
-                        
-                        if ((bidOrder != null && orderId.equals(bidOrder.getOrderId())) ||
-                            (askOrder != null && orderId.equals(askOrder.getOrderId()))) {
-                            stillActive = true;
-                            break;
-                        }
-                    }
-                    
-                    if (!stillActive) {
-                        // Order is no longer active, remove from pending list
-                        it.remove();
-                        if (LOGGER.isInfoEnabled()) {
-                            LOGGER.info("Order cancellation confirmed: {}", orderId);
-                        }
-                    }
-                }
-
-                // Log progress every second
-                if (System.currentTimeMillis() - startTime > 1000) {
-                    startTime = System.currentTimeMillis(); // Reset for next interval
-                    if (LOGGER.isInfoEnabled()) {
-                        LOGGER.info("Waiting for {} order cancellations to complete...", 
-                            pendingCancellations.size());
-                    }
-                }
-
-                // Sleep briefly to avoid CPU spinning
-                try {
-                    Thread.sleep(50);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    if (LOGGER.isWarnEnabled()) {
-                        LOGGER.warn("Interrupted while waiting for order cancellations");
-                    }
-                    break;
-                }
-            }
-            
-            boolean success = pendingCancellations.isEmpty();
-            if (LOGGER.isInfoEnabled()) {
-                LOGGER.info("Order cancellation completed: {} of {} orders confirmed cancelled{}",
-                    cancelRequestsSent - pendingCancellations.size(),
-                    cancelRequestsSent,
-                    success ? "" : " (TIMEOUT OCCURRED)");
-            }
-
-            return success;
-            
-        } catch (Exception e) {
-            LOGGER.error("Error in cancelAllOrders: {}", e.getMessage(), e);
-            return false;
-        }
-    }
-
     /**
      * Periodically check our orders to ensure they're still valid.
      * Removes stale orders from our tracking.
@@ -1235,7 +1062,7 @@ public class MarketMaker implements IOrderManager {
             LOGGER.error("monitorOrders: Error monitoring orders", e);
         }
     }
-        
+            
     @Override
     public void orderDead(MarketOrder order) {
         if (LOGGER.isInfoEnabled()) {
@@ -1244,33 +1071,54 @@ public class MarketMaker implements IOrderManager {
         }
 
         try {
-            if (LOGGER.isInfoEnabled()) {
-                LOGGER.info(
-                "Order dead notification: reqId={}, orderId={}",
-                order.getMyReqId(), order.getOrderId());
-            }
             // Find the active quote that contains this order
-            for (ActiveQuote quote : activeQuotes.values()) {
+            for (Map.Entry<String, ActiveQuote> entry : activeQuotes.entrySet()) {
+                String id = entry.getKey();
+                ActiveQuote quote = entry.getValue();
+                
                 MarketOrder bidOrder = quote.getBidOrder();
                 MarketOrder askOrder = quote.getAskOrder();
                 
                 if (bidOrder != null && bidOrder.getMyReqId() == order.getMyReqId()) {
                     if (LOGGER.isInfoEnabled()) {
-                        LOGGER.info("Order dead was a bid for {}", quote.getId());
+                        LOGGER.info("Order dead was a bid for {}", id);
                     }
+                    // Update all relevant properties
                     quote.setBidOrder(null, null, 0);
+                    quote.setBidActive(false);
+                    quote.setGcBasedBid(false); 
+                    quote.setMarketBasedBid(false);
+                    
+                    LOGGER.info("Bid marked dead for {}, cleared all bid properties", id);
+                    
+                    break;
                 }
                 
                 if (askOrder != null && askOrder.getMyReqId() == order.getMyReqId()) {
                     if (LOGGER.isInfoEnabled()) {
-                        LOGGER.info("Order dead was an ask for {}", quote.getId());
+                        LOGGER.info("Order dead was an ask for {}", id);
                     }
+                    // Update all relevant properties
                     quote.setAskOrder(null, null, 0);
+                    quote.setAskActive(false);
+                    quote.setGcBasedAsk(false);
+                    quote.setMarketBasedAsk(false);
+                    
+                    LOGGER.info("Ask marked dead for {}, cleared all ask properties", id);
+                    
+                    break;
                 }
             }
 
-            // Remove any quotes that are now empty
-            activeQuotes.values().removeIf(quote -> quote.getBidOrder() == null && quote.getAskOrder() == null);
+            // Remove any quotes that are now empty (both bid and ask are null)
+            activeQuotes.entrySet().removeIf(entry -> {
+                ActiveQuote quote = entry.getValue();
+                boolean isEmpty = quote.getBidOrder() == null && quote.getAskOrder() == null;
+                if (isEmpty) {
+                    LOGGER.info("Removing empty quote for {}", entry.getKey());
+                }
+                return isEmpty;
+            });
 
             if (LOGGER.isInfoEnabled()) {
                 LOGGER.info("orderDead: Order dead notification processed");
@@ -1418,9 +1266,9 @@ public class MarketMaker implements IOrderManager {
         }
         
         try {
-            String id = best.getId(); // This should be the instrument ID from VMO.CM_INSTRUMENT
-            
-            if (id == null || id.isEmpty()) {
+            String Id = best.getId(); // This should be the instrument ID from VMO.CM_INSTRUMENT
+
+            if (Id == null || Id.isEmpty()) {
                 if (LOGGER.isDebugEnabled()) {
                     LOGGER.debug("processMarketUpdate: Empty best ID, skipping");
                 }
@@ -1428,23 +1276,23 @@ public class MarketMaker implements IOrderManager {
             }
             
             // Check if this bond is in our tracked instruments
-            if (!trackedInstruments.contains(id)) {
+            if (!trackedInstruments.contains(Id)) {
                 if (LOGGER.isDebugEnabled()) {
-                    LOGGER.debug("processMarketUpdate: Bond not in tracked instruments: {}", id);
+                    LOGGER.debug("processMarketUpdate: Bond not in tracked instruments: {}", Id);
                 }
                 return;
             }
             
             // Get existing quote status if any
-            ActiveQuote existingQuote = activeQuotes.get(id);
-            
+            ActiveQuote existingQuote = activeQuotes.get(Id);
+            LOGGER.debug("processMarketUpdate: Existing quote for {}: {}", Id, existingQuote);
+
             String previousBidSource = null;
             String previousAskSource = null;
             if (existingQuote != null) {
                 previousBidSource = existingQuote.getBidReferenceSource();
                 previousAskSource = existingQuote.getAskReferenceSource();
             }
-
 
             boolean bidFromTargetVenue = isTargetVenue(best.getBidSrc());
             boolean askFromTargetVenue = isTargetVenue(best.getAskSrc());
@@ -1462,12 +1310,10 @@ public class MarketMaker implements IOrderManager {
                 if ((hadMarketBasedBid && !bidFromTargetVenue) || 
                     (hadMarketBasedAsk && !askFromTargetVenue)) {
                     
-                    targetSourceDisappeared = true;
-                    LOGGER.info("Target source disappeared for {}: was bid={}, ask={}, now bid={}, ask={}", 
-                        id, previousBidSource, previousAskSource, best.getBidSrc(), best.getAskSrc());
+                        targetSourceDisappeared = true;
+                    }
                 }
-            }
-            
+
             // MODIFIED LOGIC: Only skip if we have no relevant data changes
             if (!bidFromTargetVenue && !askFromTargetVenue && !targetSourceDisappeared) {
                 if (LOGGER.isDebugEnabled()) {
@@ -1479,30 +1325,30 @@ public class MarketMaker implements IOrderManager {
 
             // Determine term code from instrument ID
             String termCode;
-            if (id.endsWith("C_Fixed")) {
+            if (Id.endsWith("C_Fixed")) {
                 termCode = "C";
-            } else if (id.endsWith("REG_Fixed")) {
+            } else if (Id.endsWith("REG_Fixed")) {
                 termCode = "REG";
             } else {
                 if (LOGGER.isWarnEnabled()) {
-                    LOGGER.warn("processMarketUpdate: Unsupported instrument type: {}", id);
+                    LOGGER.warn("processMarketUpdate: Unsupported instrument type: {}", Id);
                 }
                 return;
             }
             
             boolean hasActiveBid = false;
             boolean hasActiveAsk = false;
-            
+
             if (existingQuote != null) {
-                MarketOrder bidOrder = existingQuote.getBidOrder();
-                MarketOrder askOrder = existingQuote.getAskOrder();
-                
-                hasActiveBid = (bidOrder != null && !bidOrder.isDead());
-                hasActiveAsk = (askOrder != null && !askOrder.isDead());
+                // Use the ActiveQuote's knowledge of actual order status
+                hasActiveBid = existingQuote.isBidActive();
+                hasActiveAsk = existingQuote.isAskActive();
                 
                 if (LOGGER.isDebugEnabled()) {
-                    LOGGER.debug("Existing quote status for {}: bidActive={}, askActive={}", 
-                        id, hasActiveBid, hasActiveAsk);
+                    LOGGER.debug("Existing quote status for {}: bidActive={}, askActive={}, bidAge={}ms, askAge={}ms", 
+                        Id, hasActiveBid, hasActiveAsk,
+                        hasActiveBid ? existingQuote.getBidAge() : 0,
+                        hasActiveAsk ? existingQuote.getAskAge() : 0);
                 }
             }
             
@@ -1510,28 +1356,28 @@ public class MarketMaker implements IOrderManager {
             String nativeInstrument = null;
             if (depthListener != null) {
                 nativeInstrument = depthListener.getInstrumentFieldBySourceString(
-                    id, config.getMarketSource(), false);
+                    Id, config.getMarketSource(), false);
             }
             
             if (nativeInstrument == null) {
                 if (LOGGER.isWarnEnabled()) {
-                    LOGGER.warn("No native instrument ID found for {}", id);
+                    LOGGER.warn("No native instrument ID found for {}", Id);
                 }
                 return;
             }
             
             // Use unified pricing model to calculate prices
-            PricingDecision decision = calculateUnifiedPrices(id, termCode, best, gcBest);
+            PricingDecision decision = calculateUnifiedPrices(Id, termCode, best, gcBest);
             
             // Apply pricing decision
             if (existingQuote == null) {
                 // Create new quotes if we have valid prices
                 if (decision.hasBid || decision.hasAsk) {
-                    existingQuote = new ActiveQuote(id);
-                    activeQuotes.put(id, existingQuote);
-                    
+                    existingQuote = new ActiveQuote(Id);
+                    activeQuotes.put(Id, existingQuote);
+
                     if (LOGGER.isInfoEnabled()) {
-                        LOGGER.info("Creating new quotes for bond: {}", id);
+                        LOGGER.info("Creating new quotes for bond: {}", Id);
                     }
                 }
             }
@@ -1550,34 +1396,28 @@ public class MarketMaker implements IOrderManager {
                         long remainingMs = existingQuote.getBidBackoffUntilTime() - System.currentTimeMillis();
                         if (LOGGER.isInfoEnabled()) {
                             LOGGER.info("Skipping bid update for {} due to backoff ({}ms remaining)", 
-                                id, remainingMs);
+                                Id, remainingMs);
                         }
                         updateBid = false;
                     }
 
                     if (updateBid) {
                         MarketOrder updatedBid = updateOrder(
-                            id, nativeInstrument, "Buy", decision.bidPrice, 
+                            Id, nativeInstrument, "Buy", decision.bidPrice, 
                             decision.bidSource, hasActiveBid ? existingQuote.getBidOrder() : null);
                         
                         if (updatedBid != null) {
-                            existingQuote.setBidOrder(updatedBid, decision.bidSource, decision.bidPrice);
-                            // Transfer the source type flags
-                            existingQuote.isGcBasedBid = decision.isGcBasedBid;
-                            existingQuote.isMarketBasedBid = decision.isMarketBasedBid;
-                            
                             if (LOGGER.isInfoEnabled()) {
                                 LOGGER.info("Updated bid for {}: price={}, source={}, isGcBased={}", 
-                                    id, decision.bidPrice, decision.bidSource, decision.isGcBasedBid);
+                                    Id, decision.bidPrice, decision.bidSource, decision.isGcBasedBid);
                             }
                         }
                     }
                 } else if (hasActiveBid) {
                     // Cancel bid if we have no valid price
-                    cancelOrder(existingQuote.getBidOrder(), id);
-                    existingQuote.setBidOrder(null, null, 0);
+                    cancelOrder(existingQuote.getBidOrder(), Id);
                     if (LOGGER.isInfoEnabled()) {
-                        LOGGER.info("Cancelled bid for {} - no valid pricing reference", id);
+                        LOGGER.info("Cancelled bid for {} - no valid pricing reference", Id);
                     }
                 }
                 
@@ -1593,40 +1433,32 @@ public class MarketMaker implements IOrderManager {
                         long remainingMs = existingQuote.getAskBackoffUntilTime() - System.currentTimeMillis();
                         if (LOGGER.isInfoEnabled()) {
                             LOGGER.info("Skipping ask update for {} due to backoff ({}ms remaining)", 
-                                id, remainingMs);
+                                Id, remainingMs);
                         }
                         updateAsk = false;
                     }
                     
                     if (updateAsk) {
                         MarketOrder updatedAsk = updateOrder(
-                            id, nativeInstrument, "Sell", decision.askPrice, 
+                            Id, nativeInstrument, "Sell", decision.askPrice, 
                             decision.askSource, hasActiveAsk ? existingQuote.getAskOrder() : null);
                         
                         if (updatedAsk != null) {
-                            existingQuote.setAskOrder(updatedAsk, decision.askSource, decision.askPrice);
-                            // Transfer the source type flags
-                            existingQuote.isGcBasedAsk = decision.isGcBasedAsk;
-                            existingQuote.isMarketBasedAsk = decision.isMarketBasedAsk;
-                            
                             if (LOGGER.isInfoEnabled()) {
                                 LOGGER.info("Updated ask for {}: price={}, source={}, isGcBased={}", 
-                                    id, decision.askPrice, decision.askSource, decision.isGcBasedAsk);
+                                    Id, decision.askPrice, decision.askSource, decision.isGcBasedAsk);
                             }
                         }
                     }
                 } else if (hasActiveAsk) {
                     // Cancel ask if we have no valid price
-                    cancelOrder(existingQuote.getAskOrder(), id);
-                    existingQuote.setAskOrder(null, null, 0);
+                    cancelOrder(existingQuote.getAskOrder(), Id);
                     if (LOGGER.isInfoEnabled()) {
-                        LOGGER.info("Cancelled ask for {} - no valid pricing reference", id);
+                        LOGGER.info("Cancelled ask for {} - no valid pricing reference", Id);
                     }
                 }
             }
-            
             processedUpdateCounter.incrementAndGet();
-            
         } catch (Exception e) {
         if (LOGGER.isErrorEnabled()) {
             LOGGER.error("Error processing market update: {}", e.getMessage(), e);
@@ -1923,94 +1755,195 @@ public class MarketMaker implements IOrderManager {
      * ActiveQuote represents a two-sided quote for a specific instrument.
      * It tracks the bid and ask orders and their reference sources.
      */
-    public static class ActiveQuote {
-        private final String Id;
-        private MarketOrder bidOrder;
-        private MarketOrder askOrder;
-        private String bidReferenceSource;
-        private String askReferenceSource;
-        private double bidPrice;
-        private double askPrice;
-        private int bidUpdateFailureCount = 0;
-        private int askUpdateFailureCount = 0;
-        private long bidBackoffUntilTime = 0;
-        private long askBackoffUntilTime = 0;
+    // public static class ActiveQuote {
+    //     private final String Id;
+    //     private MarketOrder bidOrder;
+    //     private MarketOrder askOrder;
+    //     private String bidReferenceSource;
+    //     private String askReferenceSource;
+    //     private double bidPrice;
+    //     private double askPrice;
+    //     private int bidUpdateFailureCount = 0;
+    //     private int askUpdateFailureCount = 0;
+    //     private long bidBackoffUntilTime = 0;
+    //     private long askBackoffUntilTime = 0;
 
-        private boolean isGcBasedBid = false;
-        private boolean isGcBasedAsk = false;
-        private boolean isMarketBasedBid = false;
-        private boolean isMarketBasedAsk = false;
+    //     private boolean isGcBasedBid = false;
+    //     private boolean isGcBasedAsk = false;
+    //     private boolean isMarketBasedBid = false;
+    //     private boolean isMarketBasedAsk = false;
 
-        public ActiveQuote(String Id) { this.Id = Id; }
+    //     public ActiveQuote(String Id) { this.Id = Id; }
        
-        public String getId() { return Id;  }
-        public MarketOrder getBidOrder() { return bidOrder; }
-        public MarketOrder getAskOrder() { return askOrder;  }
+    //     public String getId() { return Id;  }
+    //     public MarketOrder getBidOrder() { return bidOrder; }
+    //     public MarketOrder getAskOrder() { return askOrder;  }
 
-        public void setBidOrder(MarketOrder order, String referenceSource, double price) {
-            this.bidOrder = order;
-            this.bidReferenceSource = referenceSource;
-            this.bidPrice = price;
-            this.isGcBasedBid = referenceSource != null && referenceSource.startsWith("GC_");
-            this.isMarketBasedBid = referenceSource != null && !isGcBasedBid && 
-                                !referenceSource.equals("DEFAULT");
-        }
+    //     public void setBidOrder(MarketOrder order, String referenceSource, double price) {
+    //         this.bidOrder = order;
+    //         this.bidReferenceSource = referenceSource;
+    //         this.bidPrice = price;
+    //         this.isGcBasedBid = referenceSource != null && referenceSource.startsWith("GC_");
+    //         this.isMarketBasedBid = referenceSource != null && !isGcBasedBid && 
+    //                             !referenceSource.equals("DEFAULT");
+    //     }
         
-        public void setAskOrder(MarketOrder order, String referenceSource, double price) {
-            this.askOrder = order;
-            this.askReferenceSource = referenceSource;
-            this.askPrice = price;
-            this.isGcBasedAsk = referenceSource != null && referenceSource.startsWith("GC_");
-            this.isMarketBasedAsk = referenceSource != null && !isGcBasedAsk && 
-                                !referenceSource.equals("DEFAULT");
-        }
+    //     public void setAskOrder(MarketOrder order, String referenceSource, double price) {
+    //         this.askOrder = order;
+    //         this.askReferenceSource = referenceSource;
+    //         this.askPrice = price;
+    //         this.isGcBasedAsk = referenceSource != null && referenceSource.startsWith("GC_");
+    //         this.isMarketBasedAsk = referenceSource != null && !isGcBasedAsk && 
+    //                             !referenceSource.equals("DEFAULT");
+    //     }
 
-        public String getBidReferenceSource() { return bidReferenceSource; }
-        public String getAskReferenceSource() { return askReferenceSource; }
-        public double getBidPrice() { return bidPrice; }
-        public double getAskPrice() { return askPrice; }
-        public boolean isGcBasedBid() { return isGcBasedBid; }
-        public boolean isGcBasedAsk() { return isGcBasedAsk; }
-        public boolean isMarketBasedBid() { return isMarketBasedBid; }
-        public boolean isMarketBasedAsk() { return isMarketBasedAsk; }
+    //     public String getBidReferenceSource() { return bidReferenceSource; }
+    //     public String getAskReferenceSource() { return askReferenceSource; }
+    //     public double getBidPrice() { return bidPrice; }
+    //     public double getAskPrice() { return askPrice; }
+    //     public boolean isGcBasedBid() { return isGcBasedBid; }
+    //     public boolean isGcBasedAsk() { return isGcBasedAsk; }
+    //     public boolean isMarketBasedBid() { return isMarketBasedBid; }
+    //     public boolean isMarketBasedAsk() { return isMarketBasedAsk; }
 
-        public int getBidUpdateFailureCount() { return bidUpdateFailureCount; }
-        public int getAskUpdateFailureCount() { return askUpdateFailureCount; }
-        public long getBidBackoffUntilTime() { return bidBackoffUntilTime; }
-        public long getAskBackoffUntilTime() { return askBackoffUntilTime; }
+    //     public int getBidUpdateFailureCount() { return bidUpdateFailureCount; }
+    //     public int getAskUpdateFailureCount() { return askUpdateFailureCount; }
+    //     public long getBidBackoffUntilTime() { return bidBackoffUntilTime; }
+    //     public long getAskBackoffUntilTime() { return askBackoffUntilTime; }
         
-        public void incrementBidFailure() {
-            bidUpdateFailureCount++;
-            // Calculate exponential backoff time (in milliseconds)
-            long backoffMs = Math.min(300_000, (long)(1000 * Math.pow(2, bidUpdateFailureCount)));
-            bidBackoffUntilTime = System.currentTimeMillis() + backoffMs;
-        }
+    //     public void incrementBidFailure() {
+    //         bidUpdateFailureCount++;
+    //         // Calculate exponential backoff time (in milliseconds)
+    //         long backoffMs = Math.min(300_000, (long)(1000 * Math.pow(2, bidUpdateFailureCount)));
+    //         bidBackoffUntilTime = System.currentTimeMillis() + backoffMs;
+    //     }
         
-        public void incrementAskFailure() {
-            askUpdateFailureCount++;
-            // Calculate exponential backoff time (in milliseconds)
-            long backoffMs = Math.min(300_000, (long)(1000 * Math.pow(2, askUpdateFailureCount)));
-            askBackoffUntilTime = System.currentTimeMillis() + backoffMs;
-        }
+    //     public void incrementAskFailure() {
+    //         askUpdateFailureCount++;
+    //         // Calculate exponential backoff time (in milliseconds)
+    //         long backoffMs = Math.min(300_000, (long)(1000 * Math.pow(2, askUpdateFailureCount)));
+    //         askBackoffUntilTime = System.currentTimeMillis() + backoffMs;
+    //     }
         
-        public void resetBidFailure() {
-            bidUpdateFailureCount = 0;
-            bidBackoffUntilTime = 0;
-        }
+    //     public void resetBidFailure() {
+    //         bidUpdateFailureCount = 0;
+    //         bidBackoffUntilTime = 0;
+    //     }
         
-        public void resetAskFailure() {
-            askUpdateFailureCount = 0;
-            askBackoffUntilTime = 0;
-        }
+    //     public void resetAskFailure() {
+    //         askUpdateFailureCount = 0;
+    //         askBackoffUntilTime = 0;
+    //     }
         
-        public boolean isBidInBackoff() {
-            return System.currentTimeMillis() < bidBackoffUntilTime;
-        }
+    //     public boolean isBidInBackoff() {
+    //         return System.currentTimeMillis() < bidBackoffUntilTime;
+    //     }
         
-        public boolean isAskInBackoff() {
-            return System.currentTimeMillis() < askBackoffUntilTime;
-        }
+    //     public boolean isAskInBackoff() {
+    //         return System.currentTimeMillis() < askBackoffUntilTime;
+    //     }
 
+    // }
+
+    /**
+     * Updates the status of an order in its associated ActiveQuote
+     * 
+     * @param Id The Id
+     * @param side The order side ("Buy" or "Sell")
+     * @param isActive Whether the order is active
+     */
+    public void updateOrderStatus(String Id, String side, boolean isActive) {
+        if (Id == null || side == null) {
+            if (LOGGER.isWarnEnabled()) {
+                LOGGER.warn("updateOrderStatus: Missing required parameters: orderId={}, side={}", 
+                    Id, side);
+            }
+            return;
+        }
+        
+        try {
+            if (LOGGER.isDebugEnabled()) {
+                LOGGER.debug("updateOrderStatus: Updating status for order {}/{} to {}", 
+                    Id, side, isActive ? "ACTIVE" : "INACTIVE");
+            }
+            
+            // First try direct lookup by instrumentId
+            ActiveQuote quote = activeQuotes.get(Id);
+            
+            if (quote != null) {
+                // Found quote directly by instrumentId
+                if ("Buy".equals(side)) {
+                    quote.setBidActive(isActive);
+                    if (LOGGER.isInfoEnabled()) {
+                        LOGGER.info("Updated bid status for {} to {}", 
+                            quote.getId(), isActive ? "ACTIVE" : "INACTIVE");
+                    }
+                } else if ("Sell".equals(side)) {
+                    quote.setAskActive(isActive);
+                    if (LOGGER.isInfoEnabled()) {
+                        LOGGER.info("Updated ask status for {} to {}", 
+                            quote.getId(), isActive ? "ACTIVE" : "INACTIVE");
+                    }
+                }
+                return;
+            }
+
+            // Find the ActiveQuote with this order
+            for (ActiveQuote existingQuote : activeQuotes.values()) {
+                MarketOrder bidOrder = existingQuote.getBidOrder();
+                MarketOrder askOrder = existingQuote.getAskOrder();
+
+                // Check if the bid order matches
+                if ("Buy".equals(side) && bidOrder != null && Id.equals(bidOrder.getInstrId())) {
+                    // Update the bid status
+                    existingQuote.setBidActive(isActive);
+                    
+                    if (LOGGER.isInfoEnabled()) {
+                        LOGGER.info("Updated bid status for {}: Id={}, active={}", 
+                            existingQuote.getId(), Id, isActive);
+                    }
+                    return;
+                }
+                
+                // Check if the ask order matches
+                if ("Sell".equals(side) && askOrder != null && Id.equals(askOrder.getInstrId())) {
+                    // Update the ask status
+                    existingQuote.setAskActive(isActive);
+                    
+                    if (LOGGER.isInfoEnabled()) {
+                        LOGGER.info("Updated ask status for {}: Id={}, active={}", 
+                            existingQuote.getId(), Id, isActive);
+                    }
+                    return;
+                }
+            }
+            
+            // If we get here, we didn't find the order in any ActiveQuote
+            if (LOGGER.isWarnEnabled()) {
+                LOGGER.warn("No ActiveQuote found containing order {}/{}, creating one", Id, side);
+                // Create a new quote for this instrument if we couldn't find it
+                ActiveQuote newQuote = new ActiveQuote(Id);
+                activeQuotes.put(Id, newQuote);
+                
+                // Set the appropriate side's status
+                if ("Buy".equals(side)) {
+                    newQuote.setBidActive(isActive);
+                } else if ("Sell".equals(side)) {
+                    newQuote.setAskActive(isActive);
+                }
+                LOGGER.info("Created new ActiveQuote for {}", Id);
+            }
+
+            // If we get here, we didn't find the order in any ActiveQuote
+            if (LOGGER.isWarnEnabled()) {
+                LOGGER.warn("No ActiveQuote found containing order {}/{}", Id, side);
+            }
+        } catch (Exception e) {
+            if (LOGGER.isErrorEnabled()) {
+                LOGGER.error("Error updating order status for {}/{}: {}", 
+                    Id, side, e.getMessage(), e);
+            }
+        }
     }
     /**
      * Maps an order ID to a request ID for tracking.
@@ -2366,22 +2299,22 @@ public class MarketMaker implements IOrderManager {
         /**
      * Try to create or update markets for an instrument using the unified pricing model
      */
-    private void tryCreateOrUpdateMarkets(String id) {
+    private void tryCreateOrUpdateMarkets(String Id) {
         try {
-            if (id == null) {
-                LOGGER.error("tryCreateOrUpdateMarkets: id is null, cannot create markets");
+            if (Id == null) {
+                LOGGER.error("tryCreateOrUpdateMarkets: Id is null, cannot create markets");
                 return;
             }
             
             // Get term code from instrument ID
             String termCode;
-            if (id.endsWith("C_Fixed")) {
+            if (Id.endsWith("C_Fixed")) {
                 termCode = "C";
-            } else if (id.endsWith("REG_Fixed")) {
+            } else if (Id.endsWith("REG_Fixed")) {
                 termCode = "REG";
             } else {
                 if (LOGGER.isWarnEnabled()) {
-                    LOGGER.warn("tryCreateOrUpdateMarkets: Unsupported instrument type: {}", id);
+                    LOGGER.warn("tryCreateOrUpdateMarkets: Unsupported instrument type: {}", Id);
                 }
                 return;
             }
@@ -2390,12 +2323,12 @@ public class MarketMaker implements IOrderManager {
             String nativeInstrument = null;
             if (depthListener != null) {
                 nativeInstrument = depthListener.getInstrumentFieldBySourceString(
-                    id, config.getMarketSource(), false);
+                    Id, config.getMarketSource(), false);
             }
             
             if (nativeInstrument == null) {
                 if (LOGGER.isWarnEnabled()) {
-                    LOGGER.warn("No native instrument ID found for {}", id);
+                    LOGGER.warn("No native instrument ID found for {}", Id);
                 }
                 return;
             }
@@ -2404,30 +2337,30 @@ public class MarketMaker implements IOrderManager {
             GCBest gcBest = "C".equals(termCode) ? getLatestGcBestCash() : getLatestGcBestREG();
             
             // Use unified pricing model (with no market data available)
-            PricingDecision decision = calculateUnifiedPrices(id, termCode, null, gcBest);
-            
+            PricingDecision decision = calculateUnifiedPrices(Id, termCode, null, gcBest);
+
             // Check if existing quotes need validation
-            ActiveQuote existingQuote = activeQuotes.get(id);
+            ActiveQuote existingQuote = activeQuotes.get(Id);
             if (existingQuote == null) {
                 // Create new quotes if we have valid prices
                 if (decision.hasBid || decision.hasAsk) {
-                    existingQuote = new ActiveQuote(id);
-                    activeQuotes.put(id, existingQuote);
+                    existingQuote = new ActiveQuote(Id);
+                    activeQuotes.put(Id, existingQuote);
                     
                     if (LOGGER.isInfoEnabled()) {
-                        LOGGER.info("Creating initial markets for bond: {}", id);
+                        LOGGER.info("Creating initial markets for bond: {}", Id);
                     }
                     
                     if (decision.hasBid) {
-                        placeOrder(id, nativeInstrument, "Buy", decision.bidPrice, decision.bidSource);
+                        placeOrder(Id, nativeInstrument, "Buy", decision.bidPrice, decision.bidSource);
                     }
                     
                     if (decision.hasAsk) {
-                        placeOrder(id, nativeInstrument, "Sell", decision.askPrice, decision.askSource);
+                        placeOrder(Id, nativeInstrument, "Sell", decision.askPrice, decision.askSource);
                     }
                 } else {
                     if (LOGGER.isWarnEnabled()) {
-                        LOGGER.warn("No valid pricing available for new bond: {}", id);
+                        LOGGER.warn("No valid pricing available for new bond: {}", Id);
                     }
                 }
             } else {
@@ -2440,16 +2373,16 @@ public class MarketMaker implements IOrderManager {
                 
                 // Only update sides that need attention
                 if (!bidActive && decision.hasBid) {
-                    placeOrder(id, nativeInstrument, "Buy", decision.bidPrice, decision.bidSource);
+                    placeOrder(Id, nativeInstrument, "Buy", decision.bidPrice, decision.bidSource);
                 }
                 
                 if (!askActive && decision.hasAsk) {
-                    placeOrder(id, nativeInstrument, "Sell", decision.askPrice, decision.askSource);
+                    placeOrder(Id, nativeInstrument, "Sell", decision.askPrice, decision.askSource);
                 }
             }
         } catch (Exception e) {
             if (LOGGER.isErrorEnabled()) {
-                LOGGER.error("Error creating/updating markets for bond {}: {}", id, e.getMessage(), e);
+                LOGGER.error("Error creating/updating markets for bond {}: {}", Id, e.getMessage(), e);
             }
         }
     }
@@ -3297,16 +3230,40 @@ public class MarketMaker implements IOrderManager {
                 ActiveQuote quote = activeQuotes.computeIfAbsent(cusip, ActiveQuote::new);
                 
                 if ("Buy".equals(verb)) {
+                // Update the ActiveQuote with bid information
                     quote.setBidOrder(order, referenceSource, price);
+                    
+                    // Set source flags explicitly
+                    quote.setGcBasedBid(referenceSource != null && referenceSource.startsWith("GC_"));
+                    quote.setMarketBasedBid(referenceSource != null && 
+                                        !referenceSource.startsWith("GC_") && 
+                                        !referenceSource.equals("DEFAULT"));
+                    
+                    // Explicitly set active status
+                    quote.setBidActive(true);
+                    
                     if (LOGGER.isInfoEnabled()) {
-                        LOGGER.info("MarketMaker: Bid quote updated for {}: price=%.4f, source={}, reqId={}", 
-                            cusip, price, referenceSource, order.getMyReqId());
+                        LOGGER.info("Bid quote updated for {}: price={}, source={}, reqId={}, isGcBased={}, isMarketBased={}", 
+                            cusip, price, referenceSource, order.getMyReqId(),
+                            quote.isGcBasedBid(), quote.isMarketBasedBid());
                     }
                 } else {
-                    quote.setAskOrder(order, referenceSource, price);
+                // Update the ActiveQuote with bid information
+                    quote.setBidOrder(order, referenceSource, price);
+                    
+                    // Set source flags explicitly
+                    quote.setGcBasedBid(referenceSource != null && referenceSource.startsWith("GC_"));
+                    quote.setMarketBasedBid(referenceSource != null && 
+                                        !referenceSource.startsWith("GC_") && 
+                                        !referenceSource.equals("DEFAULT"));
+                    
+                    // Explicitly set active status
+                    quote.setBidActive(true);
+                    
                     if (LOGGER.isInfoEnabled()) {
-                        LOGGER.info("MarketMaker: Ask quote updated for {}: price=%.4f, source={}, reqId={}", 
-                            cusip, price, referenceSource, order.getMyReqId());
+                        LOGGER.info("Bid quote updated for {}: price={}, source={}, reqId={}, isGcBased={}, isMarketBased={}", 
+                            cusip, price, referenceSource, order.getMyReqId(),
+                            quote.isGcBasedBid(), quote.isMarketBasedBid());
                     }
                 }
 
@@ -3440,34 +3397,52 @@ public class MarketMaker implements IOrderManager {
                         LOGGER.info("Order updated successfully: {}, size={}M", 
                             updatedOrder.getOrderId(), effectiveSize / 1_000_000);
                     }
-                    // Reset failure counter on success
-                    if (quote != null) {
-                        if ("Buy".equals(side)) {
-                            quote.resetBidFailure();
-                        } else {
-                            quote.resetAskFailure();
-                        }
+                    
+                    // Update the ActiveQuote with complete information
+                    if ("Buy".equals(side)) {
+                        quote.setBidOrder(updatedOrder, referenceSource, price);
+                        quote.setGcBasedBid(referenceSource != null && referenceSource.startsWith("GC_"));
+                        quote.setMarketBasedBid(referenceSource != null && 
+                                            !referenceSource.startsWith("GC_") && 
+                                            !referenceSource.equals("DEFAULT"));
+                        quote.setBidActive(true);
+                        quote.resetBidFailure();
+                        
+                        LOGGER.info("Updated bid for {}: price={}, source={}, isGcBased={}, isMarketBased={}", 
+                            bondId, price, referenceSource, quote.isGcBasedBid(), quote.isMarketBasedBid());
+                    } else {
+                        quote.setAskOrder(updatedOrder, referenceSource, price);
+                        quote.setGcBasedAsk(referenceSource != null && referenceSource.startsWith("GC_"));
+                        quote.setMarketBasedAsk(referenceSource != null && 
+                                            !referenceSource.startsWith("GC_") && 
+                                            !referenceSource.equals("DEFAULT"));
+                        quote.setAskActive(true);
+                        quote.resetAskFailure();
+                        
+                        LOGGER.info("Updated ask for {}: price={}, source={}, isGcBased={}, isMarketBased={}", 
+                            bondId, price, referenceSource, quote.isGcBasedAsk(), quote.isMarketBasedAsk());
                     }
+                    
                     lastOrderUpdateTime.put(bondId + ":" + side, currentTime);
                     return updatedOrder;
                 } else {
                     if (LOGGER.isErrorEnabled()) {
                         LOGGER.error("Failed to update {} order for {}", side, bondId);
                     }
-                                    // Increment failure counter and apply backoff
-                    if (quote != null) {
-                        if ("Buy".equals(side)) {
-                            quote.incrementBidFailure();
-                            long backoffMs = quote.getBidBackoffUntilTime() - System.currentTimeMillis();
-                            LOGGER.warn("Update failed for {}/{}. Backing off for {}ms (failures: {})",
-                                bondId, side, backoffMs, quote.getBidUpdateFailureCount());
-                        } else {
-                            quote.incrementAskFailure();
-                            long backoffMs = quote.getAskBackoffUntilTime() - System.currentTimeMillis();
-                            LOGGER.warn("Update failed for {}/{}. Backing off for {}ms (failures: {})",
-                                bondId, side, backoffMs, quote.getAskUpdateFailureCount());
-                        }
+                    
+                    // Increment failure counter and apply backoff
+                    if ("Buy".equals(side)) {
+                        quote.incrementBidFailure();
+                        long backoffMs = quote.getBidBackoffUntilTime() - System.currentTimeMillis();
+                        LOGGER.warn("Update failed for {}/{}. Backing off for {}ms (failures: {})",
+                            bondId, side, backoffMs, quote.getBidUpdateFailureCount());
+                    } else {
+                        quote.incrementAskFailure();
+                        long backoffMs = quote.getAskBackoffUntilTime() - System.currentTimeMillis();
+                        LOGGER.warn("Update failed for {}/{}. Backing off for {}ms (failures: {})",
+                            bondId, side, backoffMs, quote.getAskUpdateFailureCount());
                     }
+                    
                     // If update fails, attempt to cancel and place new
                     lastOrderUpdateTime.put(bondId + ":" + side, currentTime);
                     cancelOrder(existingOrder, bondId);
@@ -3496,14 +3471,32 @@ public class MarketMaker implements IOrderManager {
                     LOGGER.info("New order placed successfully: reqId={}, size={}M", 
                         newOrder.getMyReqId(), effectiveSize / 1_000_000);
                 }
-                // Reset failure counter on success
-                if (quote != null) {
-                    if ("Buy".equals(side)) {
-                        quote.resetBidFailure();
-                    } else {
-                        quote.resetAskFailure();
-                    }
+                
+                // Update ActiveQuote with full information for the new order
+                if ("Buy".equals(side)) {
+                    quote.setBidOrder(newOrder, referenceSource, price);
+                    quote.setGcBasedBid(referenceSource != null && referenceSource.startsWith("GC_"));
+                    quote.setMarketBasedBid(referenceSource != null && 
+                                        !referenceSource.startsWith("GC_") && 
+                                        !referenceSource.equals("DEFAULT"));
+                    quote.setBidActive(true);
+                    quote.resetBidFailure();
+                    
+                    LOGGER.info("New bid created for {}: price={}, source={}, isGcBased={}, isMarketBased={}", 
+                        bondId, price, referenceSource, quote.isGcBasedBid(), quote.isMarketBasedBid());
+                } else {
+                    quote.setAskOrder(newOrder, referenceSource, price);
+                    quote.setGcBasedAsk(referenceSource != null && referenceSource.startsWith("GC_"));
+                    quote.setMarketBasedAsk(referenceSource != null && 
+                                        !referenceSource.startsWith("GC_") && 
+                                        !referenceSource.equals("DEFAULT"));
+                    quote.setAskActive(true);
+                    quote.resetAskFailure();
+                    
+                    LOGGER.info("New ask created for {}: price={}, source={}, isGcBased={}, isMarketBased={}", 
+                        bondId, price, referenceSource, quote.isGcBasedAsk(), quote.isMarketBasedAsk());
                 }
+                
                 lastOrderUpdateTime.put(bondId + ":" + side, currentTime);
                 return newOrder;
             } else {
@@ -3543,94 +3536,130 @@ public class MarketMaker implements IOrderManager {
             return null;
         }
     }
+    
     /**
-     * Cancel an existing order.
+     * Cancel all active orders.
+     * Delegates to OrderManagement for the actual cancellation process.
+     * Used when disabling the market maker.
      * 
-     * @param order The order to cancel
-     * @param cusip The instrument CUSIP (for tracking)
+     * @param timeoutMs Maximum time to wait for cancellations (in milliseconds)
+     * @return true if all orders were successfully cancelled, false otherwise
      */
-    private void cancelOrder(MarketOrder order, String cusip) {
-        try {
+    public boolean cancelAllOrders(long timeoutMs) {
+        if (LOGGER.isInfoEnabled()) {
+            LOGGER.info("cancelAllOrders: Delegating cancellation of all market maker orders to OrderManagement");
+        }
 
-            if (LOGGER.isInfoEnabled()) {
-                LOGGER.info("cancelOrder: Cancelling order for CUSIP={}, orderId={}", 
-                    cusip, order.getOrderId());
-            }
-            if (order == null || order.getOrderId() == null) {
-                return;
-            }
-
-            // Check if MKV is still available in a more robust way
-            try {
-                // Check both Mkv instance and PublishManager availability
-                Mkv mkv = Mkv.getInstance();
-                if (mkv == null) {
-                    if (LOGGER.isWarnEnabled()) {
-                        LOGGER.warn("Cannot cancel order {} - MKV not available", order.getOrderId());
-                    }
-                    return;
+        // Disable market maker to prevent new orders
+        this.enabled = false;
+        
+        // Delegate to OrderManagement
+        if (orderManager != null) {
+            boolean result = orderManager.cancelMarketMakerOrders(timeoutMs);
+            
+            if (result) {
+                // Clear our tracking maps since all orders are cancelled
+                activeQuotes.clear();
+                if (LOGGER.isInfoEnabled()) {
+                    LOGGER.info("All orders successfully cancelled, cleared quote tracking");
                 }
-
-                MkvPublishManager pm;
-                try {
-                    pm = mkv.getPublishManager();
-                    if (pm == null) {
-                        if (LOGGER.isWarnEnabled()) {
-                            LOGGER.warn("Cannot cancel order {} - MKV PublishManager not available", order.getOrderId());
-                        }
-                        return;
-                    }
-                } catch (IllegalStateException e) {
-                    if (LOGGER.isWarnEnabled()) {
-                        LOGGER.warn("Cannot cancel order {} - MKV API is stopped", order.getOrderId());
-                    }
-                    return;
-                }
-            } catch (IllegalStateException e) {
-                if (LOGGER.isWarnEnabled()) {
-                    LOGGER.warn("Cannot cancel order {} - MKV API is stopped", order.getOrderId());
-                }
-                return;
             }
-
-            if (LOGGER.isInfoEnabled()) {
-                LOGGER.info("Cancelling order: orderId={}, reqId={}, cusip={}", 
-                    order.getOrderId(), order.getMyReqId(), cusip);
-            }
-
-            String traderId = orderManager.getTraderForVenue(config.getMarketSource());
-
-            try {
-                MarketOrder cancelOrder = MarketOrder.orderCancel(
-                    config.getMarketSource(), 
-                    traderId, 
-                    order.getOrderId(), 
-                    this
-                );
-                
-                if (cancelOrder != null) {
-                    if (LOGGER.isInfoEnabled()) {
-                        LOGGER.info("Cancel request sent: orderId={}", order.getOrderId());
-                    }
-                } else {
-                    if (LOGGER.isWarnEnabled()) {
-                        LOGGER.warn("Failed to cancel order: orderId={}", order.getOrderId());
-                    }
-                }
-            } catch (IllegalStateException e) {
-                if (LOGGER.isWarnEnabled()) {
-                    LOGGER.warn("Cannot cancel order {} - MKV API is stopped", order.getOrderId());
-                }
-                return;
-            }
-        } catch (Exception e) {
-            if (LOGGER.isErrorEnabled()) {
-                LOGGER.error("Error cancelling order: {}", e.getMessage(), e);
-            }
-            return;
+            
+            return result;
+        } else {
+            LOGGER.error("OrderManagement is null, cannot cancel orders");
+            return false;
         }
     }
 
+    /**
+     * Cancel an order with error handling and logging
+     * 
+     * @param order The order to cancel
+     * @param instrumentId The instrument ID for the order (for logging)
+     * @return true if cancel request was successfully sent, false otherwise
+     */
+    private void cancelOrder(MarketOrder order, String Id) {
+        if (order == null) {
+            if (LOGGER.isWarnEnabled()) {
+                LOGGER.warn("cancelOrder: Cannot cancel null order for instrument: {}", Id);
+            }
+        }
+        
+        try {
+            if (LOGGER.isInfoEnabled()) {
+                LOGGER.info("Cancelling order: Id={}, orderId={}, reqId={}", 
+                    Id, order.getOrderId(), order.getMyReqId());
+            }
+            
+            // Check if the order is already dead/cancelled
+            if (order.isDead()) {
+                if (LOGGER.isInfoEnabled()) {
+                    LOGGER.info("Order already dead/cancelled: {}", order.getOrderId());
+                }
+            
+                // Update the ActiveQuote even for already dead orders
+                ActiveQuote quote = activeQuotes.get(Id);
+                if (quote != null) {
+                    // Determine if it's a bid or ask order
+                    if (quote.getBidOrder() != null && quote.getBidOrder().getMyReqId() == order.getMyReqId()) {
+                        quote.setBidOrder(null, null, 0);
+                        quote.setBidActive(false);
+                        if (LOGGER.isInfoEnabled()) {
+                            LOGGER.info("Marked dead bid order for {}: reqId={}", Id, order.getMyReqId());
+                        }
+                    } else if (quote.getAskOrder() != null && quote.getAskOrder().getMyReqId() == order.getMyReqId()) {
+                        quote.setAskOrder(null, null, 0);
+                        quote.setAskActive(false);
+                        if (LOGGER.isInfoEnabled()) {
+                            LOGGER.info("Marked dead ask order for {}: reqId={}", Id, order.getMyReqId());
+                        }
+                    }
+                }
+                return;
+            }
+            String marketSource = order.getMarketSource();
+            String traderId = orderManager.getTraderForVenue(marketSource);
+            String orderId = order.getOrderId();
+
+            // Send the cancel request
+            MarketOrder cancelOrder = order.orderCancel(marketSource, traderId, orderId, orderManager);
+
+            if (cancelOrder != null) {
+                // Track the cancel request
+                removeOrder(order.getMyReqId());
+                // Update the ActiveQuote
+                ActiveQuote quote = activeQuotes.get(Id);
+                if (quote != null) {
+                    // Determine if it's a bid or ask order
+                    if (quote.getBidOrder() != null && quote.getBidOrder().getMyReqId() == order.getMyReqId()) {
+                        quote.setBidOrder(null, null, 0);
+                        quote.setBidActive(false);
+                        if (LOGGER.isInfoEnabled()) {
+                            LOGGER.info("Cancelled bid order for {}: reqId={}", Id, order.getMyReqId());
+                        }
+                    } else if (quote.getAskOrder() != null && quote.getAskOrder().getMyReqId() == order.getMyReqId()) {
+                        quote.setAskOrder(null, null, 0);
+                        quote.setAskActive(false);
+                        if (LOGGER.isInfoEnabled()) {
+                            LOGGER.info("Cancelled ask order for {}: reqId={}", Id, order.getMyReqId());
+                        }
+                    }
+                }
+                // Log to machine-readable format
+                ApplicationLogging.logOrderUpdate(
+                    "AUTO_CANCEL", 
+                    order.getMyReqId(),
+                    order.getOrderId(),
+                    "Order expired after " + (order.getAgeMillis() / 1000) + " seconds"
+                );
+            }
+        } catch ( Exception e ) {
+            if (LOGGER.isErrorEnabled()) {
+                LOGGER.error("Error cancelling order for {}: {}", Id, e.getMessage(), e);
+            }
+        }
+    }
     /**
      * Unified pricing model that considers all available data sources
      * and applies a consistent strategy to determine quote prices.
@@ -3680,10 +3709,12 @@ public class MarketMaker implements IOrderManager {
             
             if (gcBest != null) {
                 GCLevelResult gcLevel = gcBest.getGCLevel();
-                gcBidRate = gcLevel.getBidPrice() != null ? gcLevel.getBidPrice() : 0;
-                gcAskRate = gcLevel.getAskPrice() != null ? gcLevel.getAskPrice() : 0;
-                validGcBid = gcBidRate > 0;
-                validGcAsk = gcAskRate > 0;
+                if (gcLevel !=  null) {
+                    gcBidRate = gcLevel.getBidPrice() != null ? gcLevel.getBidPrice() : 0;
+                    gcAskRate = gcLevel.getAskPrice() != null ? gcLevel.getAskPrice() : 0;
+                    validGcBid = gcBidRate > 0;
+                    validGcAsk = gcAskRate > 0;
+                }
             }
             
             // Step 3: Look up MFA spread data for bond
@@ -3730,22 +3761,9 @@ public class MarketMaker implements IOrderManager {
                 decision.hasBid = false;
             }
             
-            // Step 5: Calculate ask price using hierarchy of sources
-            if (validAskSource && validGcAsk) {
-                // Use the higher of market data or GC as reference with adjustment
-                double higherAsk = Math.max(referenceAsk, gcAskRate);
-                decision.askPrice = higherAsk - spreadAdjustment;
-                decision.askSource = (higherAsk == referenceAsk) ? askSource : "GC_" + termCode;
-                decision.hasAsk = true;
-                decision.isMarketBasedAsk = (higherAsk == referenceAsk);
-                decision.isGcBasedAsk = (higherAsk == gcAskRate);
-                
-                if (LOGGER.isDebugEnabled()) {
-                    LOGGER.debug("Calculated ask using maximum of market/GC: max({}, {}) - {} = {}", 
-                        referenceAsk, gcAskRate, spreadAdjustment, decision.askPrice);
-                }
-            } else if (validAskSource) {
-                // Only market data available
+            // Step 5: Calculate ask price using ONLY market data - NEVER use GC for ask
+            if (validAskSource) {
+                // ONLY use market data for ask side
                 decision.askPrice = referenceAsk - spreadAdjustment;
                 decision.askSource = askSource;
                 decision.hasAsk = true;
@@ -3755,42 +3773,32 @@ public class MarketMaker implements IOrderManager {
                     LOGGER.debug("Calculated ask using market data: {} - {} = {}", 
                         referenceAsk, spreadAdjustment, decision.askPrice);
                 }
-            } else if (validGcAsk) {
-                // Only GC data available
-                decision.askPrice = gcAskRate - spreadAdjustment;
-                decision.askSource = "GC_" + termCode;
-                decision.hasAsk = true;
-                decision.isGcBasedAsk = true;
+            } else {
+                // No valid market reference for ask - DO NOT use GC
+                decision.hasAsk = false;
                 
                 if (LOGGER.isDebugEnabled()) {
-                    LOGGER.debug("Calculated ask using GC data: {} - {} = {}", 
-                        gcAskRate, spreadAdjustment, decision.askPrice);
+                    LOGGER.debug("No valid market reference for ask, skipping ask (never using GC)");
                 }
-            } else {
-                // No valid reference for ask
-                decision.hasAsk = false;
             }
             
             // CRITICAL: Ensure ask price is always higher than bid price
             if (decision.hasBid && decision.hasAsk) {
                 // If bid ≥ ask (inverted quotes), adjust ask to be higher than bid
-                if (decision.bidPrice >= decision.askPrice) {
+                if (decision.bidPrice <= decision.askPrice) {
                     // Apply minimum spread (e.g., 2bp)
                     double minSpread = 0.02;
                     double midPrice = (decision.bidPrice + decision.askPrice) / 2;
                     
                     // Adjust both sides around the mid-price
-                    decision.bidPrice = midPrice - (minSpread / 2);
-                    decision.askPrice = midPrice + (minSpread / 2);
+                    decision.bidPrice = midPrice + (minSpread / 2);
+                    decision.askPrice = midPrice - (minSpread / 2);
                     
                     if (LOGGER.isInfoEnabled()) {
                         LOGGER.info("Fixed inverted quotes for {}: bid={}, ask={}, mid={}, new bid={}, new ask={}", 
                             bondId, decision.bidPrice, decision.askPrice, midPrice, decision.bidPrice, decision.askPrice);
                     }
                 }
-            }
-                // No valid reference for ask
-                decision.hasAsk = false;
             }
         } catch (Exception e) {
             if (LOGGER.isErrorEnabled()) {
