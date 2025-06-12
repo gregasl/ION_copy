@@ -2,6 +2,7 @@ package com.iontrading.automatedMarketMaking;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import java.util.function.Function;
 
 /**
  * ActiveQuote represents a two-sided quote for a specific instrument.
@@ -10,6 +11,8 @@ import org.slf4j.LoggerFactory;
  */
 public class ActiveQuote {
     private static final Logger LOGGER = LoggerFactory.getLogger(ActiveQuote.class);
+
+    private final Object lock = new Object();
 
     private final String Id;
     private MarketOrder bidOrder;
@@ -75,23 +78,14 @@ public class ActiveQuote {
      * @param price The price of the order
      */
     public void setBidOrder(MarketOrder order, String referenceSource, double price) {
-        this.bidOrder = order;
-        this.bidReferenceSource = referenceSource;
-        this.bidPrice = price;
-        
-        // If order is null, mark as inactive
-        if (order == null) {
-            this.isBidActive = false;
-        } else {
-            // Otherwise mark as active and set creation time
-            this.isBidActive = true;
-            this.bidCreationTime = System.currentTimeMillis();
+        synchronized(lock) {
+            this.bidOrder = order;
+            this.bidReferenceSource = referenceSource;
+            this.bidPrice = price;
+            this.isGcBasedBid = referenceSource != null && referenceSource.startsWith("GC_");
+            this.isMarketBasedBid = referenceSource != null && !isGcBasedBid && 
+                                !referenceSource.equals("DEFAULT");
         }
-        
-        // Update source type flags
-        this.isGcBasedBid = referenceSource != null && referenceSource.startsWith("GC_");
-        this.isMarketBasedBid = referenceSource != null && !isGcBasedBid && 
-                            !referenceSource.equals("DEFAULT");
     }
     
     /**
@@ -102,23 +96,14 @@ public class ActiveQuote {
      * @param price The price of the order
      */
     public void setAskOrder(MarketOrder order, String referenceSource, double price) {
-        this.askOrder = order;
-        this.askReferenceSource = referenceSource;
-        this.askPrice = price;
-        
-        // If order is null, mark as inactive
-        if (order == null) {
-            this.isAskActive = false;
-        } else {
-            // Otherwise mark as active and set creation time
-            this.isAskActive = true;
-            this.askCreationTime = System.currentTimeMillis();
+        synchronized(lock) {
+            this.askOrder = order;
+            this.askReferenceSource = referenceSource;
+            this.askPrice = price;
+            this.isGcBasedAsk = referenceSource != null && referenceSource.startsWith("GC_");
+            this.isMarketBasedAsk = referenceSource != null && !isGcBasedAsk && 
+                                !referenceSource.equals("DEFAULT");
         }
-        
-        // Update source type flags
-        this.isGcBasedAsk = referenceSource != null && referenceSource.startsWith("GC_");
-        this.isMarketBasedAsk = referenceSource != null && !isGcBasedAsk && 
-                            !referenceSource.equals("DEFAULT");
     }
     
     /**
@@ -396,5 +381,12 @@ public class ActiveQuote {
         status.put("bidBackoffRemaining", Math.max(0, bidBackoffUntilTime - System.currentTimeMillis()));
         status.put("askBackoffRemaining", Math.max(0, askBackoffUntilTime - System.currentTimeMillis()));
         return status;
+    }
+
+        // Add a method that allows atomic operations on the quote
+    public <T> T atomicOperation(Function<ActiveQuote, T> operation) {
+        synchronized(lock) {
+            return operation.apply(this);
+        }
     }
 }

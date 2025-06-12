@@ -1434,7 +1434,7 @@ private void trySubscribeAndRemoveDepthListener(MkvObject mkvObject, MkvPublishM
             orderActiveStatusMap.put(activityKey, currentlyActive);
 
             // Update ActiveQuote status if this is a market maker order
-            if ("MarketMaker".equals(appName) && orderId != null) {
+            if ("automatedMarketMaking".equals(appName) && orderId != null) {
                 if (marketMaker != null) {
                     // Find the ActiveQuote that contains this order and update its status
                     if (previouslyActive != null && previouslyActive != currentlyActive) {
@@ -1466,7 +1466,7 @@ private void trySubscribeAndRemoveDepthListener(MkvObject mkvObject, MkvPublishM
             LOGGER.info("Processing full update for record: {}, active={}, appName={}, src={}, Id={}, orderId={}, origId={}, VerbStr={}, tradeStatus={}, qtyFill={}, price={}, intQtyGoal={}, qtyHit={}, qtyStatus={}, qtyStatusStr={}, qtyTot={}, time={}", 
                 mkvRecord.getName(), active, appName, src, Id, orderId, origId, VerbStr, tradeStatus, qtyFill, price, intQtyGoal, qtyHit, qtyStatus, qtyStatusStr, qtyTot, time);
 
-            if (!"MarketMaker".equals(appName) || !"FENICS_USREPO".equals(src) || active.equals("Yes")) {
+            if (!"automatedMarketMaking".equals(appName) || !"FENICS_USREPO".equals(src) || active.equals("Yes")) {
                 return; // Not a market maker order nor a FENICS_USREPO order, or already active
             }
 
