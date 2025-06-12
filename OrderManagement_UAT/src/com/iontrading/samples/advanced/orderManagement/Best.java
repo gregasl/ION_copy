@@ -24,7 +24,7 @@ public class Best {
     private static final int PRICE_CREDIT_UNKNOWN = 0x0002;
     private static final int PRICE_IMPLIED = 0x0004;
     private static final int PRICE_INDICATIVE = 0x0008;
-    private static final int PRICE_AON = 0x0010;
+    public static final int PRICE_AON = 0x0010;
     private static final int PRICE_MINE = 0x0020;  // Price belongs to the bank
     private static final int PRICE_OCO = 0x0040;
     private static final int PRICE_VOICE = 0x0080;

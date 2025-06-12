@@ -99,6 +99,11 @@ public class DepthListener implements MkvRecordListener {
     private double cachedCashGC = 0.0;
     private double cachedRegGC = 0.0;
 
+    // List of electronic venues we want to prioritize
+    private static final List<String> ELECTRONIC_VENUES = Arrays.asList(
+        "BTEC_REPO_US", "DEALERWEB_REPO", "FENICS_USREPO"
+    );
+    
     private static class QueuedUpdate {
         final MkvRecord record;
         final MkvSupply supply;
@@ -519,46 +524,126 @@ private Best createAppropriateBean(String recordName, Map<String, Object> record
     }
 }
 
-/**
- * Helper method to update an existing Best object from the stored map data
- */
-private void updateBestFromMap(Best best, Map<String, Object> recordData) {
-    // Set ID if available
-    String id = getStringValue(recordData, "Id", "");
-    if (!id.isEmpty()) {
-        best.setId(id);
+	/**
+	 * Helper method to update an existing Best object from the stored map data
+	 */
+	private void updateBestFromMap(Best best, Map<String, Object> recordData) {
+	    // Set ID if available
+	    String id = getStringValue(recordData, "Id", "");
+	    if (!id.isEmpty()) {
+	        best.setId(id);
+	    }
+	
+	        // For GCBest, we use the original logic with only level 0
+	    if (best instanceof GCBest) {
+	        // Set price fields with rounding already handled in the setter
+	        best.setAsk(getDoubleValue(recordData, "Ask0", 0.0));
+	        best.setBid(getDoubleValue(recordData, "Bid0", 0.0));
+	        
+	        // Set source fields
+	        best.setAskSrc(getStringValue(recordData, "AskSrc0", ""));
+	        best.setBidSrc(getStringValue(recordData, "BidSrc0", ""));
+	        int askStatus = getIntValue(recordData, "Ask0Status", 0);
+	        int bidStatus = getIntValue(recordData, "Bid0Status", 0);
+	        best.setAskStatus(askStatus);
+	        best.setBidStatus(bidStatus);
+	
+	        // Set AON flags using the status bitmasks
+	        best.setAskIsAON(askStatus);
+	        best.setBidIsAON(bidStatus);
+	
+	        best.setAskSrcCheck(getStringValue(recordData, "AskAttribute0", ""));
+	        best.setBidSrcCheck(getStringValue(recordData, "BidAttribute0", ""));
+	        
+	        // Set size fields
+	        best.setAskSize(getDoubleValue(recordData, "AskSize0", 0.0));
+	        best.setBidSize(getDoubleValue(recordData, "BidSize0", 0.0));
+	        best.setAskSizeMin(getDoubleValue(recordData, "AskSize0_Min", 0.0));
+	        best.setBidSizeMin(getDoubleValue(recordData, "BidSize0_Min", 0.0));
+	    } else {
+	        // Regular Best instance - set all fields
+	    
+	        int askLevel = findFirstElectronicVenueLevel(recordData, true);
+	        int bidLevel = findFirstElectronicVenueLevel(recordData, false);
+	        // Use level 0 as fallback if no electronic venue found
+	        askLevel = (askLevel == -1) ? 0 : askLevel;
+	        bidLevel = (bidLevel == -1) ? 0 : bidLevel;
+	        
+	        LOGGER.debug("Using ask level {} and bid level {} for {}", askLevel, bidLevel, best.getId());
+	    
+	        // Set price fields with rounding already handled in the setter
+	        best.setAsk(getDoubleValue(recordData, "Ask" + askLevel, 0.0));
+	        best.setBid(getDoubleValue(recordData, "Bid" + bidLevel, 0.0));
+	
+	        best.setAskSrcCheck(getStringValue(recordData, "AskAttribute" + askLevel, ""));
+	        best.setBidSrcCheck(getStringValue(recordData, "BidAttribute" + bidLevel, ""));
+	
+	        // Set source fields
+	        best.setAskSrc(getStringValue(recordData, "AskSrc" + askLevel, ""));
+	        best.setBidSrc(getStringValue(recordData, "BidSrc" + bidLevel, ""));
+	        int askStatus = getIntValue(recordData, "Ask" + askLevel + "Status", 0);
+	        int bidStatus = getIntValue(recordData, "Bid" + bidLevel + "Status", 0);
+	        best.setAskStatus(askStatus);
+	        best.setBidStatus(bidStatus);
+	
+	        // Set AON flags using the status bitmasks
+	        best.setAskIsAON(askStatus);
+	        best.setBidIsAON(bidStatus);
+	
+	        best.setAskSrcCheck(getStringValue(recordData, "AskAttribute" + askLevel, ""));
+	        best.setBidSrcCheck(getStringValue(recordData, "BidAttribute" + bidLevel, ""));
+	        
+	        // Set size fields
+	        best.setAskSize(getDoubleValue(recordData, "AskSize" + askLevel, 0.0));
+	        best.setBidSize(getDoubleValue(recordData, "BidSize" + bidLevel, 0.0));
+	        best.setAskSizeMin(getDoubleValue(recordData, "AskSize" + askLevel + "_Min", 0.0));
+	        best.setBidSizeMin(getDoubleValue(recordData, "BidSize" + bidLevel + "_Min", 0.0));
+	
+	        // Set last fields
+	        best.setLastTradePrice(getDoubleValue(recordData, "TrdValueLast", 0.0));
+	    }
+	    best.setLastTradePrice(getDoubleValue(recordData, "TrdValueLast", 0.0));
+	}
+	
+	/**
+	 * Find the first level with an electronic venue source
+	 * @param recordData The map containing all depth data
+	 * @param isAsk True to search for ask levels, false for bid levels
+	 * @return The first level (0-9) with an electronic venue, or -1 if none found
+	 */
+	private int findFirstElectronicVenueLevel(Map<String, Object> recordData, boolean isAsk) {
+	    // Check levels 0-9 for electronic venues
+	    String prefix = isAsk ? "AskSrc" : "BidSrc";
+	    
+	    for (int i = 0; i < 10; i++) {
+	        String source = getStringValue(recordData, prefix + i, "");
+	        if (isElectronicVenue(source)) {
+	            double price = getDoubleValue(recordData, (isAsk ? "Ask" : "Bid") + i, 0.0);
+	            int status = getIntValue(recordData, (isAsk ? "Ask" : "Bid") + i + "Status", 0);
+	
+	            // Skip AON levels when looking for electronic venues
+	            if (isAON(status)) { continue; }
+	            // Make sure there's a valid price at this level
+	            if (price > 0.0) {
+	                return i;
+	            }
+	        }
+	    }
+	    return -1; // No electronic venue found
+	}
+
+    private boolean isAON(int status) {
+        // Directly use the AON bit-checking logic instead of creating an object
+        return (status & Best.PRICE_AON) == Best.PRICE_AON;
     }
-    
-    // Set price fields with rounding already handled in the setter
-    best.setAsk(getDoubleValue(recordData, "Ask0", 0.0));
-    best.setBid(getDoubleValue(recordData, "Bid0", 0.0));
-    
-    best.setAskSrcCheck(getStringValue(recordData, "AskAttribute0", ""));
-    best.setBidSrcCheck(getStringValue(recordData, "BidAttribute0", ""));
-    
-    // Set source fields
-    best.setAskSrc(getStringValue(recordData, "AskSrc0", ""));
-    best.setBidSrc(getStringValue(recordData, "BidSrc0", ""));
-    int askStatus = getIntValue(recordData, "Ask0Status", 0);
-    int bidStatus = getIntValue(recordData, "Bid0Status", 0);
-    best.setAskStatus(askStatus);
-    best.setBidStatus(bidStatus);
 
-    // Set AON flags using the status bitmasks
-    best.setAskIsAON(askStatus);
-    best.setBidIsAON(bidStatus);
-
-    
-    // Set size fields
-    best.setAskSize(getDoubleValue(recordData, "AskSize0", 0.0));
-    best.setBidSize(getDoubleValue(recordData, "BidSize0", 0.0));
-    best.setAskSizeMin(getDoubleValue(recordData, "AskSize0_Min", 0.0));
-    best.setBidSizeMin(getDoubleValue(recordData, "BidSize0_Min", 0.0));
-    
-    // Set last fields
-    best.setLastTradePrice(getDoubleValue(recordData, "TrdValueLast", 0.0));
-}
-
+    /**
+     * Check if the source is an electronic venue
+     */
+    private boolean isElectronicVenue(String source) {
+        return source != null && !source.isEmpty() && ELECTRONIC_VENUES.contains(source);
+    }
+	
     /**
      * Helper method to safely get a double value from the data map
      */

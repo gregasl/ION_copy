@@ -603,44 +603,44 @@ private void updateBestFromMap(Best best, Map<String, Object> recordData) {
     best.setLastTradePrice(getDoubleValue(recordData, "TrdValueLast", 0.0));
 }
 
-/**
- * Find the first level with an electronic venue source
- * @param recordData The map containing all depth data
- * @param isAsk True to search for ask levels, false for bid levels
- * @return The first level (0-9) with an electronic venue, or -1 if none found
- */
-private int findFirstElectronicVenueLevel(Map<String, Object> recordData, boolean isAsk) {
-    // Check levels 0-9 for electronic venues
-    String prefix = isAsk ? "AskSrc" : "BidSrc";
-    
-    for (int i = 0; i < 10; i++) {
-        String source = getStringValue(recordData, prefix + i, "");
-        if (isElectronicVenue(source)) {
-            double price = getDoubleValue(recordData, (isAsk ? "Ask" : "Bid") + i, 0.0);
-            int status = getIntValue(recordData, (isAsk ? "Ask" : "Bid") + i + "Status", 0);
+    /**
+     * Find the first level with an electronic venue source
+     * @param recordData The map containing all depth data
+     * @param isAsk True to search for ask levels, false for bid levels
+     * @return The first level (0-9) with an electronic venue, or -1 if none found
+     */
+    private int findFirstElectronicVenueLevel(Map<String, Object> recordData, boolean isAsk) {
+        // Check levels 0-9 for electronic venues
+        String prefix = isAsk ? "AskSrc" : "BidSrc";
+        
+        for (int i = 0; i < 10; i++) {
+            String source = getStringValue(recordData, prefix + i, "");
+            if (isElectronicVenue(source)) {
+                double price = getDoubleValue(recordData, (isAsk ? "Ask" : "Bid") + i, 0.0);
+                int status = getIntValue(recordData, (isAsk ? "Ask" : "Bid") + i + "Status", 0);
 
-            // Skip AON levels when looking for electronic venues
-            if (isAON(status)) { continue; }
-            // Make sure there's a valid price at this level
-            if (price > 0.0) {
-                return i;
+                // Skip AON levels when looking for electronic venues
+                if (isAON(status)) { continue; }
+                // Make sure there's a valid price at this level
+                if (price > 0.0) {
+                    return i;
+                }
             }
         }
+        return -1; // No electronic venue found
     }
-    return -1; // No electronic venue found
-}
 
-private boolean isAON(int status) {
-    // Directly use the AON bit-checking logic instead of creating an object
-    return (status & Best.PRICE_AON) == Best.PRICE_AON;
-}
+    private boolean isAON(int status) {
+        // Directly use the AON bit-checking logic instead of creating an object
+        return (status & Best.PRICE_AON) == Best.PRICE_AON;
+    }
 
-/**
- * Check if the source is an electronic venue
- */
-private boolean isElectronicVenue(String source) {
-    return source != null && !source.isEmpty() && ELECTRONIC_VENUES.contains(source);
-}
+    /**
+     * Check if the source is an electronic venue
+     */
+    private boolean isElectronicVenue(String source) {
+        return source != null && !source.isEmpty() && ELECTRONIC_VENUES.contains(source);
+    }
 
     /**
      * Helper method to safely get a double value from the data map
