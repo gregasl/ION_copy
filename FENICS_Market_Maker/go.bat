@@ -11,7 +11,7 @@ goto END_LIST
 :a
 if NOT "%1"=="automatedMarketMaking" goto END_LIST
 	set SAMPLE_NAME=automatedMarketMaking
-	set BUILD_PATH=advanced
+	set BUILD_PATH=
 	set WORKINGDIR=RUN_OrderManagement
 	set MAINCLASS=com.iontrading.automatedMarketMaking.OrderManagement
 	set SRC=src\com\iontrading\automatedMarketMaking
