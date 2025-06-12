@@ -620,9 +620,7 @@ private Best createAppropriateBean(String recordName, Map<String, Object> record
 	        if (isElectronicVenue(source)) {
 	            double price = getDoubleValue(recordData, (isAsk ? "Ask" : "Bid") + i, 0.0);
 	            int status = getIntValue(recordData, (isAsk ? "Ask" : "Bid") + i + "Status", 0);
-	
-	            // Skip AON levels when looking for electronic venues
-	            if (isAON(status)) { continue; }
+
 	            // Make sure there's a valid price at this level
 	            if (price > 0.0) {
 	                return i;
