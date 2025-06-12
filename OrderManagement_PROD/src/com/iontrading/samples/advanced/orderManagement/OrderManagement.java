@@ -177,6 +177,8 @@ private final Map<String, Long> lastTradeTimeByInstrument =
 
   private final Map<String, String> venueToTraderMap = new HashMap<>();
   // Pattern identifiers from MarketDef
+  private static final String ORDER_PATTERN = MarketDef.ORDER_PATTERN;
+  private static final String[] ORDER_FIELDS = MarketDef.ORDER_FIELDS;
   private static final String DEPTH_PATTERN = MarketDef.DEPTH_PATTERN;
   private static final String[] DEPTH_FIELDS = MarketDef.DEPTH_FIELDS;
   private static final String INSTRUMENT_PATTERN = MarketDef.INSTRUMENT_PATTERN;
@@ -230,6 +232,8 @@ private final Map<String, Long> lastTradeTimeByInstrument =
   private final AtomicReference<GCBest> sharedGCBestCash = new AtomicReference<>();
   private final AtomicReference<GCBest> sharedGCBestREG = new AtomicReference<>();
 
+  private final ConcurrentHashMap<String, Integer> activeOrders = new ConcurrentHashMap<>();
+  
   private final Map<String, Best> latestBestByInstrument = new ConcurrentHashMap<String, Best>() {
     private static final int MAX_SIZE = 5000;
     @Override
@@ -755,6 +759,9 @@ private void handleResumeCommand(Map<String, Object> controlMessage) {
             // Subscribe to the depth pattern
             subscribeToPattern();
             
+            // Subscribe to order records
+            subscribeToRecord();
+            
             // Set up a monitor to check subscription status periodically
             setupPatternSubscriptionMonitor();
             
@@ -764,167 +771,265 @@ private void handleResumeCommand(Map<String, Object> controlMessage) {
         }
     }
 
-  /**
- * Subscribes to the instrument pattern to load instrument mapping data.
- * Uses an adaptive field subscription approach that handles missing fields.
- */
-private void subscribeToInstrumentPattern() {
-    try {
+  private void subscribeToRecord() {
+	    try {
+	        // Get the publish manager to access patterns
+	        MkvPublishManager pm = Mkv.getInstance().getPublishManager();
+	       
+	        // Look up the pattern object
+	        MkvObject obj = pm.getMkvObject(ORDER_PATTERN);
+	       
+	        if (obj != null && obj.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
+	            // Subscribe within a synchronized block
+	            synchronized (subscriptionLock) {
+	                // Check again inside synchronization to avoid race conditions
+	                if (!isPatternSubscribed) {
+	                    LOGGER.info("Found order pattern, subscribing: {}", ORDER_PATTERN);
 
-        LOGGER.info("Subscribing to instrument data using pattern: {}", INSTRUMENT_PATTERN);
+	                    ((MkvPattern) obj).subscribe(ORDER_FIELDS, this);
 
-        // Get the publish manager to access patterns
-        MkvPublishManager pm = Mkv.getInstance().getPublishManager();
-       
-        // Look up the pattern object
-        MkvObject obj = pm.getMkvObject(INSTRUMENT_PATTERN);
-       
-        if (obj != null && obj.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
-            LOGGER.info("Found instrument pattern, subscribing: {}", INSTRUMENT_PATTERN);
-            
-            // Initialize with the full field list from MarketDef
-            List<String> fieldsList = new ArrayList<>(Arrays.asList(INSTRUMENT_FIELDS));
-            boolean subscribed = false;
-            
-            // Keep trying with fewer fields until subscription succeeds
-            while (!subscribed && !fieldsList.isEmpty()) {
-                try {
-                    String[] fields = fieldsList.toArray(new String[0]);
-                    ((MkvPattern) obj).subscribe(fields, depthListener);
-                    subscribed = true;
+	                    // Mark that we've successfully subscribed
+	                    isPatternSubscribed = true;
 
-                    LOGGER.info("Successfully subscribed to instrument pattern with {} fields", fieldsList.size());
-                } catch (Exception e) {
-                    // If we have any fields left to remove
-                    if (fieldsList.size() > 3) {  // Keep at least 3 essential fields
-                        // Remove the last field in the list
-                        String lastField = fieldsList.remove(fieldsList.size() - 1);
-                        LOGGER.warn("Subscription failed with field: {}. Retrying with {} fields.", lastField, fieldsList.size());
-                    } else {
-                        // If we've removed too many fields, try with a minimal set
-                        LOGGER.warn("Failed with reduced field set, trying minimal fields");
+	                    LOGGER.info("Successfully subscribed to order pattern");
+	                }
+	            }
+	        } else {
+	            LOGGER.warn("Order pattern not found: {}", ORDER_PATTERN);
 
-                        // Define minimal essential fields
-                        String[] minimalFields = new String[] {
-                            "Id", "IsAON"
-                        };
-                        
-                        try {
-                            ((MkvPattern) obj).subscribe(minimalFields, depthListener);
-                            subscribed = true;
-                            LOGGER.info("Successfully subscribed with minimal fields");
-                        } catch (Exception minEx) {
-                            LOGGER.error("Failed even with minimal fields: {}", minEx.getMessage(), minEx);
-                            throw minEx;  // Propagate the exception if even minimal fields fail
-                        }
-                        break;
-                    }
-                }
-            }
-        } else {
-            LOGGER.warn("Instrument pattern not found: {}", INSTRUMENT_PATTERN);
-        }
-    } catch (Exception e) {
-        LOGGER.error("Error subscribing to instrument pattern: {}", e.getMessage(), e);
-        LOGGER.error("Error details", e);
-    }
-}
+	            // Create a single shared listener instance instead of an anonymous one
+	            final MkvPublishListener patternListener = new MkvPublishListener() {
+	                @Override
+	                public void onPublish(MkvObject mkvObject, boolean pub_unpub, boolean dwl) {
+	                    // Only proceed if we're not already subscribed
+	                    if (isPatternSubscribed) {
+	                        return;
+	                    }
+	                    
+	                    // Check if this is our pattern being published
+	                    if (pub_unpub && mkvObject.getName().equals(ORDER_PATTERN) &&
+	                        mkvObject.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
+	                        trySubscribeAndRemoveOrderListener(mkvObject, pm, this);
+	                    }
+	                }
+	               
+	                @Override
+	                public void onPublishIdle(String component, boolean start) {
+	                    // Only proceed if we're not already subscribed
+	                    if (isPatternSubscribed) {
+	                        return;
+	                    }
+	                    
+	                    // Try looking for the pattern again at idle time
+	                    MkvObject obj = pm.getMkvObject(ORDER_PATTERN);
 
-private void subscribeToPattern() {
-    try {
-        // Get the publish manager to access patterns
-        MkvPublishManager pm = Mkv.getInstance().getPublishManager();
-       
-        // Look up the pattern object
-        MkvObject obj = pm.getMkvObject(DEPTH_PATTERN);
-       
-        if (obj != null && obj.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
-            // Subscribe within a synchronized block
-            synchronized (subscriptionLock) {
-                // Check again inside synchronization to avoid race conditions
-                if (!isPatternSubscribed) {
-                    LOGGER.info("Found consolidated depth pattern, subscribing: {}", DEPTH_PATTERN);
+	                    if (obj != null && obj.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
+	                        trySubscribeAndRemoveOrderListener(obj, pm, this);
+	                    }
+	                }
+	               
+	                @Override
+	                public void onSubscribe(MkvObject mkvObject) {
+	                    // Not needed
+	                }
+	            };
+	            
+	            // Add the shared listener
+	            pm.addPublishListener(patternListener);
+	        }
+	    } catch (Exception e) {
+	        LOGGER.error("Error subscribing to pattern: {}", e.getMessage(), e);
+	    }
+	}
 
-                    ((MkvPattern) obj).subscribe(DEPTH_FIELDS, depthListener);
+	
+	//Helper method to handle subscription and listener removal safely
+	private void trySubscribeAndRemoveOrderListener(MkvObject mkvObject, MkvPublishManager pm, MkvPublishListener listener) {
+	   synchronized (subscriptionLock) {
+	       // Check again inside synchronization to avoid race conditions
+	       if (isPatternSubscribed) {
+	           return;
+	       }
+	       
+	       try {
+	           LOGGER.info("Pattern found, subscribing: {}", ORDER_PATTERN);
+	
+	           ((MkvPattern) mkvObject).subscribe(ORDER_FIELDS, this);
+	           isPatternSubscribed = true;
+	
+	           LOGGER.info("Successfully subscribed to pattern");
+	
+	           // Remove the listener now that we've subscribed - safely outside the callback
+	           // but still inside synchronization
+	           pm.removePublishListener(listener);
+	       } catch (Exception e) {
+	           LOGGER.error("Error subscribing to pattern: {}", e.getMessage(), e);
+	       }
+	   }
+	 }
+	
+	 /**
+	* Subscribes to the instrument pattern to load instrument mapping data.
+	* Uses an adaptive field subscription approach that handles missing fields.
+	*/
+	private void subscribeToInstrumentPattern() {
+	   try {
+	
+	       LOGGER.info("Subscribing to instrument data using pattern: {}", INSTRUMENT_PATTERN);
+	
+	       // Get the publish manager to access patterns
+	       MkvPublishManager pm = Mkv.getInstance().getPublishManager();
+	      
+	       // Look up the pattern object
+	       MkvObject obj = pm.getMkvObject(INSTRUMENT_PATTERN);
+	      
+	       if (obj != null && obj.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
+	           LOGGER.info("Found instrument pattern, subscribing: {}", INSTRUMENT_PATTERN);
+	           
+	           // Initialize with the full field list from MarketDef
+	           List<String> fieldsList = new ArrayList<>(Arrays.asList(INSTRUMENT_FIELDS));
+	           boolean subscribed = false;
+	           
+	           // Keep trying with fewer fields until subscription succeeds
+	           while (!subscribed && !fieldsList.isEmpty()) {
+	               try {
+	                   String[] fields = fieldsList.toArray(new String[0]);
+	                   ((MkvPattern) obj).subscribe(fields, depthListener);
+	                   subscribed = true;
+	
+	                   LOGGER.info("Successfully subscribed to instrument pattern with {} fields", fieldsList.size());
+	               } catch (Exception e) {
+	                   // If we have any fields left to remove
+	                   if (fieldsList.size() > 3) {  // Keep at least 3 essential fields
+	                       // Remove the last field in the list
+	                       String lastField = fieldsList.remove(fieldsList.size() - 1);
+	                       LOGGER.warn("Subscription failed with field: {}. Retrying with {} fields.", lastField, fieldsList.size());
+	                   } else {
+	                       // If we've removed too many fields, try with a minimal set
+	                       LOGGER.warn("Failed with reduced field set, trying minimal fields");
+	
+	                       // Define minimal essential fields
+	                       String[] minimalFields = new String[] {
+	                           "Id", "IsAON"
+	                       };
+	                       
+	                       try {
+	                           ((MkvPattern) obj).subscribe(minimalFields, depthListener);
+	                           subscribed = true;
+	                           LOGGER.info("Successfully subscribed with minimal fields");
+	                       } catch (Exception minEx) {
+	                           LOGGER.error("Failed even with minimal fields: {}", minEx.getMessage(), minEx);
+	                           throw minEx;  // Propagate the exception if even minimal fields fail
+	                       }
+	                       break;
+	                   }
+	               }
+	           }
+	       } else {
+	           LOGGER.warn("Instrument pattern not found: {}", INSTRUMENT_PATTERN);
+	       }
+	   } catch (Exception e) {
+	       LOGGER.error("Error subscribing to instrument pattern: {}", e.getMessage(), e);
+	       LOGGER.error("Error details", e);
+	   }
+	}
+	
+	private void subscribeToPattern() {
+	   try {
+	       // Get the publish manager to access patterns
+	       MkvPublishManager pm = Mkv.getInstance().getPublishManager();
+	      
+	       // Look up the pattern object
+	       MkvObject obj = pm.getMkvObject(DEPTH_PATTERN);
+	      
+	       if (obj != null && obj.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
+	           // Subscribe within a synchronized block
+	           synchronized (subscriptionLock) {
+	               // Check again inside synchronization to avoid race conditions
+	               if (!isPatternSubscribed) {
+	                   LOGGER.info("Found consolidated depth pattern, subscribing: {}", DEPTH_PATTERN);
+	
+	                   ((MkvPattern) obj).subscribe(DEPTH_FIELDS, depthListener);
+	
+	                   // Mark that we've successfully subscribed
+	                   isPatternSubscribed = true;
+	
+	                   LOGGER.info("Successfully subscribed to consolidated depth pattern");
+	               }
+	           }
+	       } else {
+	           LOGGER.warn("Consolidated depth pattern not found: {}", DEPTH_PATTERN);
+	
+	           // Create a single shared listener instance instead of an anonymous one
+	           final MkvPublishListener patternListener = new MkvPublishListener() {
+	               @Override
+	               public void onPublish(MkvObject mkvObject, boolean pub_unpub, boolean dwl) {
+	                   // Only proceed if we're not already subscribed
+	                   if (isPatternSubscribed) {
+	                       return;
+	                   }
+	                   
+	                   // Check if this is our pattern being published
+	                   if (pub_unpub && mkvObject.getName().equals(DEPTH_PATTERN) &&
+	                       mkvObject.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
+	                       trySubscribeAndRemoveDepthListener(mkvObject, pm, this);
+	                   }
+	               }
+	              
+	               @Override
+	               public void onPublishIdle(String component, boolean start) {
+	                   // Only proceed if we're not already subscribed
+	                   if (isPatternSubscribed) {
+	                       return;
+	                   }
+	                   
+	                   // Try looking for the pattern again at idle time
+	                   MkvObject obj = pm.getMkvObject(DEPTH_PATTERN);
+	                   
+	                   if (obj != null && obj.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
+	                       trySubscribeAndRemoveDepthListener(obj, pm, this);
+	                   }
+	               }
+	              
+	               @Override
+	               public void onSubscribe(MkvObject mkvObject) {
+	                   // Not needed
+	               }
+	           };
+	           
+	           // Add the shared listener
+	           pm.addPublishListener(patternListener);
+	       }
+	   } catch (Exception e) {
+	       LOGGER.error("Error subscribing to pattern: {}", e.getMessage(), e);
+	   }
+	}
+	
+	//Helper method to handle subscription and listener removal safely
+	private void trySubscribeAndRemoveDepthListener(MkvObject mkvObject, MkvPublishManager pm, MkvPublishListener listener) {
+	   synchronized (subscriptionLock) {
+	       // Check again inside synchronization to avoid race conditions
+	       if (isPatternSubscribed) {
+	           return;
+	       }
+	       
+	       try {
+	           LOGGER.info("Pattern found, subscribing: {}", DEPTH_PATTERN);
+	
+	           ((MkvPattern) mkvObject).subscribe(DEPTH_FIELDS, depthListener);
+	           isPatternSubscribed = true;
+	
+	           LOGGER.info("Successfully subscribed to pattern");
+	
+	           // Remove the listener now that we've subscribed - safely outside the callback
+	           // but still inside synchronization
+	           pm.removePublishListener(listener);
+	       } catch (Exception e) {
+	           LOGGER.error("Error subscribing to pattern: {}", e.getMessage(), e);
+	       }
+	   }
+	 }
 
-                    // Mark that we've successfully subscribed
-                    isPatternSubscribed = true;
-
-                    LOGGER.info("Successfully subscribed to consolidated depth pattern");
-                }
-            }
-        } else {
-            LOGGER.warn("Consolidated depth pattern not found: {}", DEPTH_PATTERN);
-
-            // Create a single shared listener instance instead of an anonymous one
-            final MkvPublishListener patternListener = new MkvPublishListener() {
-                @Override
-                public void onPublish(MkvObject mkvObject, boolean pub_unpub, boolean dwl) {
-                    // Only proceed if we're not already subscribed
-                    if (isPatternSubscribed) {
-                        return;
-                    }
-                    
-                    // Check if this is our pattern being published
-                    if (pub_unpub && mkvObject.getName().equals(DEPTH_PATTERN) &&
-                        mkvObject.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
-                        trySubscribeAndRemoveListener(mkvObject, pm, this);
-                    }
-                }
-               
-                @Override
-                public void onPublishIdle(String component, boolean start) {
-                    // Only proceed if we're not already subscribed
-                    if (isPatternSubscribed) {
-                        return;
-                    }
-                    
-                    // Try looking for the pattern again at idle time
-                    MkvObject obj = pm.getMkvObject(DEPTH_PATTERN);
-                    
-                    if (obj != null && obj.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
-                        trySubscribeAndRemoveListener(obj, pm, this);
-                    }
-                }
-               
-                @Override
-                public void onSubscribe(MkvObject mkvObject) {
-                    // Not needed
-                }
-            };
-            
-            // Add the shared listener
-            pm.addPublishListener(patternListener);
-        }
-    } catch (Exception e) {
-        LOGGER.error("Error subscribing to pattern: {}", e.getMessage(), e);
-    }
-}
-
-// Helper method to handle subscription and listener removal safely
-private void trySubscribeAndRemoveListener(MkvObject mkvObject, MkvPublishManager pm, MkvPublishListener listener) {
-    synchronized (subscriptionLock) {
-        // Check again inside synchronization to avoid race conditions
-        if (isPatternSubscribed) {
-            return;
-        }
-        
-        try {
-            LOGGER.info("Pattern found, subscribing: {}", DEPTH_PATTERN);
-
-            ((MkvPattern) mkvObject).subscribe(DEPTH_FIELDS, depthListener);
-            isPatternSubscribed = true;
-
-            LOGGER.info("Successfully subscribed to pattern");
-
-            // Remove the listener now that we've subscribed - safely outside the callback
-            // but still inside synchronization
-            pm.removePublishListener(listener);
-        } catch (Exception e) {
-            LOGGER.error("Error subscribing to pattern: {}", e.getMessage(), e);
-        }
-    }
-  }
 
   /**
    * Caches a MarketOrder record using the request ID as key.
@@ -1022,49 +1127,49 @@ private void trySubscribeAndRemoveListener(MkvObject mkvObject, MkvPublishManage
    */
   public void onFullUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply,
       boolean isSnap) {
-    try {
-      // Get the UserData (contains our request ID) and FreeText (contains our application ID)
-      String CompNameOrigin = mkvRecord.getValue("CompNameOrigin").getString();
-      String orderId = mkvRecord.getValue("OrigID").getString();
-      
-      // If this order wasn't placed by us, ignore it
-      if ("".equals(orderId) || !"orderManagement".equals(CompNameOrigin)) {
-        if (LOGGER.isDebugEnabled()) {
-          LOGGER.debug("Ignoring order update for non-matching order: {}",
-              mkvRecord.getName());
-        }
-        return;
-      } else {
-        // This is an order we placed - forward the update to the MarketOrder
-        try {
-          // Parse the request ID from the UserData
-          if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("Processing order update: orderId={}", orderId);
-          }
-          // Get the corresponding MarketOrder from the cache
-          MarketOrder order = getOrderByOrderId(orderId);
-          
-          if (order != null) {
-            // Forward the update to the order
-            if (LOGGER.isDebugEnabled()) {
-              LOGGER.debug("Forwarding update to order: orderId={}", orderId);
-            }
-            order.onFullUpdate(mkvRecord, mkvSupply, isSnap);
-            int orderStatus = mkvRecord.getValue("TradingStatus").getInt();
-            if (!(orderStatus == 2) || !(orderStatus == 1)) {
-                removeOrder(order.getMyReqId());
-            }
-          } else {
-            LOGGER.debug("Order not found in cache: orderId={}", orderId);
-          }
-        } catch (Exception e) {
-          LOGGER.error("Error processing order update: {}", e.getMessage(), e);
-        }
-      }
-    } catch (Exception e) {
-      LOGGER.error("Error accessing order fields: {}", e.getMessage(), e);
-    }
-  }
+	    try {
+	        // Get the UserData (contains our request ID) and FreeText (contains our application ID)
+	        String CompNameOrigin = mkvRecord.getValue("CompNameOrigin").getString();
+	        String orderId = mkvRecord.getValue("OrigId").getString();
+	        String activeStr = mkvRecord.getValue("ActiveStr").getString();
+
+	        // If this order wasn't placed by us, or is dead, ignore it
+	        if (!"orderManagement".equals(CompNameOrigin) || (orderId == null || orderId.isEmpty()) || "No".equalsIgnoreCase(activeStr)) {
+	            if (LOGGER.isDebugEnabled()) {
+	            LOGGER.debug("Ignoring order update for non-matching order: {}",
+	                mkvRecord.getName());
+	            }
+	            return;
+	        } else {
+	            // This is an order we placed - forward the update to the MarketOrder
+	            try {
+	                String origSrc = mkvRecord.getValue("OrigSrc").getString();
+	                int timeStamp = mkvRecord.getValue("TimeStamp").getInt();
+
+	                // Create a composite key using orderId and origSrc
+	                String compositeKey = orderId + ":" + origSrc;
+
+	                // Process the order based on its active status
+	                if ("Yes".equalsIgnoreCase(activeStr)) {
+	                    // Order is active, add or update it in the map
+	                    activeOrders.put(compositeKey, timeStamp);
+	                    LOGGER.debug("Order is active: orderId={}, source={}, created={}", 
+	                        orderId, origSrc, timeStamp);
+	                } else {
+	                    // Order is no longer active, remove from the map
+	                    activeOrders.remove(compositeKey);
+	                    LOGGER.info("Order removed from active list: orderId={}, source={}", 
+	                        orderId, origSrc);
+	                }
+	            } catch (Exception e) {
+	                LOGGER.error("Error accessing OrigID field: {}", e.getMessage(), e);
+	            }
+	        }
+	    } catch (Exception e) {
+	    LOGGER.error("Error accessing order fields: {}", e.getMessage(), e);
+	    }
+	  }
+
 
   /**
    * Notification that an order is no longer able to trade.
@@ -1999,78 +2104,167 @@ private void setupPatternSubscriptionMonitor() {
     }, 15, 30, TimeUnit.SECONDS);  // Check sooner initially (15 sec), then every 30 sec
   }
 
-  /**
-   * Checks for and cancels any orders that have been in the market for too long.
-   */
-  private void checkForExpiredOrders() {
-    // Skip if we're already shutting down
-    if (isShuttingDown) {
-        return;
-    }
-    
-    try {
-        // Create a copy of the orders map to avoid concurrent modification
-        Map<Integer, MarketOrder> ordersCopy = new HashMap<>(orders);
-        int expiredCount = 0;
-        LOGGER.info("Checking for expired orders - currently tracking {} orders", ordersCopy.size());
-
-        for (MarketOrder order : ordersCopy.values()) {
-            // Skip cancel requests
-            if ("Cancel".equals(order.getVerb())) {
-                continue;
-            }
-            
-            // Check if the order is expired
-            if (order.isExpired()) {
-                // Get necessary info for the cancel request
-                String orderId = order.getOrderId();
-                String marketSource = order.getMarketSource();
-
-                // Check if the order is in a valid state for cancellation
-                if (orderId == null || orderId.isEmpty()) {
-                    LOGGER.warn("Order ID is null or empty for reqId: {}", order.getMyReqId());
-                    continue;
-                }
-
-                // Only try to cancel if we have an order ID
-                if (orderId != null && !orderId.isEmpty()) {
-                    String traderId = getTraderForVenue(marketSource);
-
-                    LOGGER.info("Auto-cancelling expired order: reqId={}, orderId={}, age={} seconds",
-                        order.getMyReqId(), orderId, (order.getAgeMillis() / 1000));
-
-                    // Issue the cancel request
-                    MarketOrder cancelOrder = MarketOrder.orderCancel(
-                        marketSource,
-                        traderId,
-                        orderId,
-                        this
-                    );
-                    
-                    if (cancelOrder != null) {
-                        // Track the cancel request
-                        removeOrder(order.getMyReqId());
-                        expiredCount++;
-                        
-                        // Log to machine-readable format
-                        ApplicationLogging.logOrderUpdate(
-                            "AUTO_CANCEL", 
-                            order.getMyReqId(),
-                            order.getOrderId(),
-                            "Order expired after " + (order.getAgeMillis() / 1000) + " seconds"
-                        );
-                    }
-                }
-            }
-        }
-        
-        if (expiredCount > 0) {
-            LOGGER.info("Auto-cancelled {} expired orders", expiredCount);
-        }
-    } catch (Exception e) {
-        LOGGER.error("Error checking for expired orders: {}", e.getMessage(), e);
-    }
-}
+	/**
+	 * Checks for and cancels any orders that have been in the market for too long.
+	 */
+	private void checkForExpiredOrders() {
+	  // Skip if we're already shutting down
+	  if (isShuttingDown) {
+	      return;
+	  }
+	  
+	  try {
+	      // Create a copy of the orders map to avoid concurrent modification
+	      Map<Integer, MarketOrder> ordersCopy = new HashMap<>(orders);
+	      int expiredCount = 0;
+	      LOGGER.info("Checking for expired orders - currently tracking {} orders", ordersCopy.size());
+	
+	      for (MarketOrder order : ordersCopy.values()) {
+	          // Skip cancel requests
+	          if ("Cancel".equals(order.getVerb())) {
+	              continue;
+	          }
+	          
+	          // Check if the order is expired
+	          if (order.isExpired()) {
+	              // Get necessary info for the cancel request
+	              String orderId = order.getOrderId();
+	              String marketSource = order.getMarketSource();
+	
+	              // Check if the order is in a valid state for cancellation
+	              if (orderId == null || orderId.isEmpty()) {
+	                  LOGGER.warn("Order ID is null or empty for reqId: {}", order.getMyReqId());
+	                  continue;
+	              }
+	              
+	              // Only try to cancel if we have an order ID
+	              if (orderId != null && !orderId.isEmpty()) {
+	                  String traderId = getTraderForVenue(marketSource);
+	
+	                  LOGGER.info("Auto-cancelling expired order: reqId={}, orderId={}, age={} seconds",
+	                      order.getMyReqId(), orderId, (order.getAgeMillis() / 1000));
+	
+	                  // Issue the cancel request
+	                  MarketOrder cancelOrder = MarketOrder.orderCancel(
+	                      marketSource,
+	                      traderId,
+	                      orderId,
+	                      this
+	                  );
+	                  
+	                  if (cancelOrder != null) {
+	                      // Track the cancel request
+	                      removeOrder(order.getMyReqId());
+	                      expiredCount++;
+	                      
+	                      // Log to machine-readable format
+	                      ApplicationLogging.logOrderUpdate(
+	                          "AUTO_CANCEL", 
+	                          order.getMyReqId(),
+	                          order.getOrderId(),
+	                          "Order expired after " + (order.getAgeMillis() / 1000) + " seconds"
+	                      );
+	                  }
+	              }
+	          } 
+	      }
+	      
+	      // secondary cleanup of orders map
+	      if (activeOrders != null) {
+	          // Iterate through active orders and cancel those older than 60 seconds
+	          int cancelledActiveCount = 0;
+	          long currentTime = System.currentTimeMillis();
+	          long cutoffTime = currentTime - 60000; // 60 seconds ago
+	
+	          for (Map.Entry<String, Integer> entry : activeOrders.entrySet()) {
+	              try {
+	                  String compositeKey = entry.getKey();
+	                  int timeStamp = entry.getValue();
+	
+	                  // Parse the composite key
+	                  String[] parts = compositeKey.split(":");
+	                  if (parts.length < 2) {
+	                      continue; // Skip invalid entries
+	                  }
+	                  
+	                  String orderId = parts[0];
+	                  String marketSource = parts[1];
+	                  
+	                  // Skip entries with invalid timestamps
+	                  if (timeStamp <= 0) {
+	                      activeOrders.remove(compositeKey);
+	                      continue;
+	                  }
+	
+	                  // Convert the timestamp to milliseconds since epoch
+	                  // First create a calendar for today
+	                  java.util.Calendar cal = java.util.Calendar.getInstance();
+	                  
+	                  // Extract time components from the timestamp
+	                  // Format: HHMMSSMMM (70004566 = 7:00:00.456)
+	                  int hours = timeStamp / 10000000;
+	                  int minutes = (timeStamp % 10000000) / 100000;
+	                  int seconds = (timeStamp % 100000) / 1000;
+	                  int milliseconds = timeStamp % 1000;
+	                  
+	                  // Set the time components for today
+	                  cal.set(java.util.Calendar.HOUR_OF_DAY, hours);
+	                  cal.set(java.util.Calendar.MINUTE, minutes);
+	                  cal.set(java.util.Calendar.SECOND, seconds);
+	                  cal.set(java.util.Calendar.MILLISECOND, milliseconds);
+	                  
+	                  // Get the time in milliseconds
+	                  long entryTime = cal.getTimeInMillis();
+	                  
+	                  LOGGER.debug("Processing order: {} with timestamp: {} ({})",
+	                      orderId, timeStamp, new java.util.Date(entryTime));
+	                  
+	                  if (entryTime < cutoffTime) {
+	                      // Order is older than 60 seconds, cancel it
+	                      String traderId = getTraderForVenue(marketSource);
+	                      
+	                      LOGGER.info("Cancelling stale active order: orderId={}, source={}, age={} seconds",
+	                          orderId, marketSource, (currentTime - entryTime) / 1000);
+	                          
+	                      // Issue the cancel request
+	                      MarketOrder cancelOrder = MarketOrder.orderCancel(
+	                          marketSource,
+	                          traderId,
+	                          orderId,
+	                          this
+	                      );
+	                      
+	                      if (cancelOrder != null) {
+	                          // Remove from active orders map
+	                          activeOrders.remove(compositeKey);
+	                          cancelledActiveCount++;
+	                          
+	                          // Log to machine-readable format
+	                          ApplicationLogging.logOrderUpdate(
+	                              "STALE_CANCEL", 
+	                              cancelOrder.getMyReqId(),
+	                              orderId,
+	                              "Stale order cancelled after > 60 seconds"
+	                          );
+	                      }
+	                  }
+	              } catch (Exception e) {
+	                  LOGGER.warn("Error processing active order entry: {}", e.getMessage());
+	              }
+	          }
+	
+	          if (cancelledActiveCount > 0) {
+	              LOGGER.info("Cancelled {} stale active orders", cancelledActiveCount);
+	          }
+	      }
+	
+	      if (expiredCount > 0) {
+	          LOGGER.info("Auto-cancelled {} expired orders", expiredCount);
+	      }
+	  } catch (Exception e) {
+	      LOGGER.error("Error checking for expired orders: {}", e.getMessage(), e);
+	  }
+	}
 
 /**
  * Initiates shutdown process for the application.
