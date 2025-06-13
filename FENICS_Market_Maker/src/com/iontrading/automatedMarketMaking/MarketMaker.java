@@ -2092,6 +2092,7 @@ public class MarketMaker implements IOrderManager {
             
             // Process all eligible bonds
             for (String Id : eligibleBonds) {
+                LOGGER.debug("makeMarketsForEligibleBonds: Processing Id={}", Id);
                 if (!Id.endsWith(suffix)){
                     return;
                 }
@@ -2104,92 +2105,94 @@ public class MarketMaker implements IOrderManager {
                 }
                 if (!trackedInstruments.contains(Id)) {
                     // New eligible bond, not yet tracking
+                    LOGGER.debug("makeMarketsForEligibleBonds: New eligible bond detected, Id={}", Id);
                     trackedInstruments.add(Id);
-                    tryCreateOrUpdateMarkets(Id);
-                    marketsCreated++;
-                } else {
-                    // Already tracking this bond - only update if necessary
-                    ActiveQuote existingQuote = activeQuotes.get(Id);
-                    if (existingQuote == null) {
-                        // We're tracking the instrument but don't have quotes - create them
-                        // Log the CUSIP we're about to create markets for
-                        if (LOGGER.isInfoEnabled()) {
-                            LOGGER.info("Creating initial markets for Id: {}", Id);
-                        }
-                        tryCreateInitialMarkets(Id);
-                        marketsUpdated++;
-                    } else {
-                        // Check if orders are still active
-                        MarketOrder bidOrder = existingQuote.getBidOrder();
-                        MarketOrder askOrder = existingQuote.getAskOrder();
-                        
-                        boolean bidActive = (bidOrder != null && !bidOrder.isDead());
-                        boolean askActive = (askOrder != null && !askOrder.isDead());
-                        
-                        if (!bidActive && !askActive) {
-                            // Both sides need refresh, use the full validator
-                            if (!existingQuote.isBidInBackoff() && !existingQuote.isAskInBackoff()) {
-                                validateExistingQuotes(Id, existingQuote);
-                                marketsUpdated++;
-                                if (LOGGER.isInfoEnabled()) {
-                                    LOGGER.info("Refreshed both sides for {}", Id);
-                                }
-                            } else {
-                                // Handle sides individually to respect backoff
-                                if (!existingQuote.isBidInBackoff()) {
-                                    validateSingleSideQuote(Id, existingQuote, "Buy");
-                                    marketsUpdated++;
-                                    if (LOGGER.isInfoEnabled()) {
-                                        LOGGER.info("Refreshed bid only for {} (ask in backoff)", Id);
-                                    }
-                                }
-                                if (!existingQuote.isAskInBackoff()) {
-                                    validateSingleSideQuote(Id, existingQuote, "Sell");
-                                    marketsUpdated++;
-                                    if (LOGGER.isInfoEnabled()) {
-                                        LOGGER.info("Refreshed ask only for {} (bid in backoff)", Id);
-                                    }
-                                }
-                            }
-                        } else if (!bidActive) {
-                            // Only refresh bid if not in backoff
-                            if (!existingQuote.isBidInBackoff()) {
-                                validateSingleSideQuote(Id, existingQuote, "Buy");
-                                marketsUpdated++;
-                                if (LOGGER.isInfoEnabled()) {
-                                    LOGGER.info("Refreshed bid only for {}", Id);
-                                }
-                            } else {
-                                marketsSkipped++;
-                                if (LOGGER.isInfoEnabled()) {
-                                    LOGGER.info("Skipped bid refresh for {} due to backoff", Id);
-                                }
-                            }
-                        } else if (!askActive) {
-                            // Only refresh ask if not in backoff
-                            if (!existingQuote.isAskInBackoff()) {
-                                validateSingleSideQuote(Id, existingQuote, "Sell");
-                                marketsUpdated++;
-                                if (LOGGER.isInfoEnabled()) {
-                                    LOGGER.info("Refreshed ask only for {}", Id);
-                                }
-                            } else {
-                                marketsSkipped++;
-                                if (LOGGER.isInfoEnabled()) {
-                                    LOGGER.info("Skipped ask refresh for {} due to backoff", Id);
-                                }
-                            }
-                        } else {
-                            // Both sides are active, skip
-                            marketsSkipped++;
-                            if (LOGGER.isDebugEnabled()) {
-                                LOGGER.debug("Skipping market refresh for {}: both sides active", Id);
-                            }
-                        } 
-                    }
+                    int i = tryCreateOrUpdateMarkets(Id);
+                    marketsCreated+=i;
                 }
+            //     } else {
+            //         // Already tracking this bond - only update if necessary
+            //         ActiveQuote existingQuote = activeQuotes.get(Id);
+            //         if (existingQuote == null) {
+            //             // We're tracking the instrument but don't have quotes - create them
+            //             // Log the CUSIP we're about to create markets for
+            //             if (LOGGER.isInfoEnabled()) {
+            //                 LOGGER.info("Creating initial markets for Id: {}", Id);
+            //             }
+            //             tryCreateInitialMarkets(Id);
+            //             marketsUpdated++;
+            //         } else {
+            //             // Check if orders are still active
+            //             MarketOrder bidOrder = existingQuote.getBidOrder();
+            //             MarketOrder askOrder = existingQuote.getAskOrder();
+                        
+            //             boolean bidActive = (bidOrder != null && !bidOrder.isDead());
+            //             boolean askActive = (askOrder != null && !askOrder.isDead());
+                        
+            //             if (!bidActive && !askActive) {
+            //                 // Both sides need refresh, use the full validator
+            //                 if (!existingQuote.isBidInBackoff() && !existingQuote.isAskInBackoff()) {
+            //                     validateExistingQuotes(Id, existingQuote);
+            //                     marketsUpdated++;
+            //                     if (LOGGER.isInfoEnabled()) {
+            //                         LOGGER.info("Refreshed both sides for {}", Id);
+            //                     }
+            //                 } else {
+            //                     // Handle sides individually to respect backoff
+            //                     if (!existingQuote.isBidInBackoff()) {
+            //                         validateSingleSideQuote(Id, existingQuote, "Buy");
+            //                         marketsUpdated++;
+            //                         if (LOGGER.isInfoEnabled()) {
+            //                             LOGGER.info("Refreshed bid only for {} (ask in backoff)", Id);
+            //                         }
+            //                     }
+            //                     if (!existingQuote.isAskInBackoff()) {
+            //                         validateSingleSideQuote(Id, existingQuote, "Sell");
+            //                         marketsUpdated++;
+            //                         if (LOGGER.isInfoEnabled()) {
+            //                             LOGGER.info("Refreshed ask only for {} (bid in backoff)", Id);
+            //                         }
+            //                     }
+            //                 }
+            //             } else if (!bidActive) {
+            //                 // Only refresh bid if not in backoff
+            //                 if (!existingQuote.isBidInBackoff()) {
+            //                     validateSingleSideQuote(Id, existingQuote, "Buy");
+            //                     marketsUpdated++;
+            //                     if (LOGGER.isInfoEnabled()) {
+            //                         LOGGER.info("Refreshed bid only for {}", Id);
+            //                     }
+            //                 } else {
+            //                     marketsSkipped++;
+            //                     if (LOGGER.isInfoEnabled()) {
+            //                         LOGGER.info("Skipped bid refresh for {} due to backoff", Id);
+            //                     }
+            //                 }
+            //             } else if (!askActive) {
+            //                 // Only refresh ask if not in backoff
+            //                 if (!existingQuote.isAskInBackoff()) {
+            //                     validateSingleSideQuote(Id, existingQuote, "Sell");
+            //                     marketsUpdated++;
+            //                     if (LOGGER.isInfoEnabled()) {
+            //                         LOGGER.info("Refreshed ask only for {}", Id);
+            //                     }
+            //                 } else {
+            //                     marketsSkipped++;
+            //                     if (LOGGER.isInfoEnabled()) {
+            //                         LOGGER.info("Skipped ask refresh for {} due to backoff", Id);
+            //                     }
+            //                 }
+            //             } else {
+            //                 // Both sides are active, skip
+            //                 marketsSkipped++;
+            //                 if (LOGGER.isDebugEnabled()) {
+            //                     LOGGER.debug("Skipping market refresh for {}: both sides active", Id);
+            //                 }
+            //             } 
+            //         }
+            //     }
+            // }
             }
-
             // Clean up any instruments that are no longer eligible
             Set<String> instrumentsToRemove = new HashSet<>();
             for (String Id : trackedInstruments) {
@@ -2299,38 +2302,47 @@ public class MarketMaker implements IOrderManager {
         /**
      * Try to create or update markets for an instrument using the unified pricing model
      */
-    private void tryCreateOrUpdateMarkets(String Id) {
+    private int tryCreateOrUpdateMarkets(String Id) {
         try {
             if (Id == null) {
                 LOGGER.error("tryCreateOrUpdateMarkets: Id is null, cannot create markets");
-                return;
+                return -1;
             }
             
+            if (LOGGER.isDebugEnabled()) {
+                LOGGER.debug("tryCreateOrUpdateMarkets: Attempting to create/update markets for Id={}", Id);
+            }
+
             // Get term code from instrument ID
             String termCode;
             if (Id.endsWith("C_Fixed")) {
                 termCode = "C";
+                LOGGER.debug("tryCreateOrUpdateMarkets: Detected term code C for Id={}", Id);
             } else if (Id.endsWith("REG_Fixed")) {
                 termCode = "REG";
+                LOGGER.debug("tryCreateOrUpdateMarkets: Detected term code REG for Id={}", Id);
             } else {
                 if (LOGGER.isWarnEnabled()) {
                     LOGGER.warn("tryCreateOrUpdateMarkets: Unsupported instrument type: {}", Id);
                 }
-                return;
+                return -1;
             }
             
+
             // Get the native instrument ID
             String nativeInstrument = null;
             if (depthListener != null) {
                 nativeInstrument = depthListener.getInstrumentFieldBySourceString(
                     Id, config.getMarketSource(), false);
+                LOGGER.debug("tryCreateOrUpdateMarkets: Native instrument for Id={} is {}", Id, nativeInstrument);
             }
             
             if (nativeInstrument == null) {
                 if (LOGGER.isWarnEnabled()) {
                     LOGGER.warn("No native instrument ID found for {}", Id);
                 }
-                return;
+                trackedInstruments.remove(Id);
+                return -1;
             }
             
             // Get the appropriate GC reference data
@@ -2355,9 +2367,9 @@ public class MarketMaker implements IOrderManager {
                         placeOrder(Id, nativeInstrument, "Buy", decision.bidPrice, decision.bidSource);
                     }
                     
-                    if (decision.hasAsk) {
-                        placeOrder(Id, nativeInstrument, "Sell", decision.askPrice, decision.askSource);
-                    }
+                    // if (decision.hasAsk) {
+                    //     placeOrder(Id, nativeInstrument, "Sell", decision.askPrice, decision.askSource);
+                    // }
                 } else {
                     if (LOGGER.isWarnEnabled()) {
                         LOGGER.warn("No valid pricing available for new bond: {}", Id);
@@ -2380,10 +2392,12 @@ public class MarketMaker implements IOrderManager {
                     placeOrder(Id, nativeInstrument, "Sell", decision.askPrice, decision.askSource);
                 }
             }
+            return 1;
         } catch (Exception e) {
             if (LOGGER.isErrorEnabled()) {
                 LOGGER.error("Error creating/updating markets for bond {}: {}", Id, e.getMessage(), e);
             }
+            return -1;
         }
     }
 
