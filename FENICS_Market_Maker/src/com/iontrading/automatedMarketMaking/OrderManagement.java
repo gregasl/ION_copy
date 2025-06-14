@@ -243,12 +243,6 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
   
   private final Map<String, Integer> orderIdToReqIdMap = new HashMap<>();
 
-  private final Object gcDataLock = new Object();
-  private final AtomicReference<Double> latestCashGC = new AtomicReference<>(0.0);
-  private final AtomicReference<Double> latestRegGC = new AtomicReference<>(0.0);
-  private final AtomicReference<GCBest> sharedGCBestCash = new AtomicReference<>();
-  private final AtomicReference<GCBest> sharedGCBestREG = new AtomicReference<>();
-
   private static final double MAX_PRICE_DEVIATION = 0.05; // 5 bps max price deviation for hedging orders
 
   // Add this field to the OrderManagement class
@@ -1447,7 +1441,7 @@ private void trySubscribeAndRemoveDepthListener(MkvObject mkvObject, MkvPublishM
             }
 
             // Process only if transitioning from active to inactive
-            if (previouslyActive != null && previouslyActive && !currentlyActive) {
+            if ((previouslyActive == null || previouslyActive) && !currentlyActive) {
                 LOGGER.info("Order status change detected for origId={}: ActiveStr changed from Yes to No", origId);
             } else {
                 // Not a transition from active to inactive, skip processing
@@ -1723,27 +1717,21 @@ private void trySubscribeAndRemoveDepthListener(MkvObject mkvObject, MkvPublishM
                 best.getBid(), best.getBidSrc(),
                 cash_gc, reg_gc);
 
-
-            // Store the latest best for this instrument
-            latestCashGC.set(cash_gc);
-            latestRegGC.set(reg_gc);
-            if (gcBestCash != null) sharedGCBestCash.set(gcBestCash);
-            if (gcBestREG != null) sharedGCBestREG.set(gcBestREG);
             latestBestByInstrument.put(best.getId(), best);
 
             // Call marketMaker.best() if it's available and initialized
             if (marketMaker != null) {
                 try {
-                    // Get the latest GC rates safely
-                    double currentCashGC = latestCashGC.get();
-                    double currentRegGC = latestRegGC.get();
-                    GCBest gcBestCashCopy = sharedGCBestCash.get();
-                    GCBest gcBestREGCopy = sharedGCBestREG.get();
 
                     LOGGER.info("Forwarding best price to market maker: instrument={}, instrumentId={}, ask=({}), bid=({})",
                         best.getId(), best.getInstrumentId(), best.getAsk(), best.getBid());
                     // Pass the best information to the market maker
-                    marketMaker.best(best, currentCashGC, currentRegGC, gcBestCashCopy, gcBestREGCopy);
+                    // marketMaker.best(best, currentCashGC, currentRegGC, gcBestCashCopy, gcBestREGCopy);
+                    marketMaker.best(best, 
+                                    GCBestManager.getInstance().getCashGCRate(), 
+                                    GCBestManager.getInstance().getRegGCRate(),
+                                    GCBestManager.getInstance().getCashGCBest(),
+                                    GCBestManager.getInstance().getRegGCBest());
                 } catch (Exception e) {
                     LOGGER.error("Error forwarding best price to market maker: {}", e.getMessage(), e);
                 }
@@ -1764,49 +1752,8 @@ private void trySubscribeAndRemoveDepthListener(MkvObject mkvObject, MkvPublishM
    */
   public void onSupply(MkvChain chain, String record, int pos,
       MkvChainAction action) {
-    //     if (LOGGER.isDebugEnabled()) {
-    //       LOGGER.debug("Order chain update: chain={}, record={}, pos={}, action={}",
-    //           chain.getName(), record, pos, action);
-    //     }
-    // switch (action.intValue()) {
-    // case MkvChainAction.INSERT_code:
-    // case MkvChainAction.APPEND_code:
-    //   // For new records, subscribe to receive updates
-    //   LOGGER.info("New record in chain, subscribing: {}", record);
-    //   subscribeToRecord(record);
-    //   break;
-    // case MkvChainAction.SET_code:
-    //   // For a SET action (chain is being completely redefined),
-    //   // subscribe to all records in the chain
-    //   LOGGER.info("Chain SET action, subscribing to all records");
-    //   for (Iterator iter = chain.iterator(); iter.hasNext();) {
-    //     String recName = (String) iter.next();
-    //     LOGGER.info("Subscribing to chain record: {}", recName);
-    //     subscribeToRecord(recName);
-    //   }
-    //   break;
-    // case MkvChainAction.DELETE_code:
-    // LOGGER.debug("Ignoring DELETE action for record: {}", record);
-    //   break;
-    //}
+
   }
-
-//    * @param record The name of the record to subscribe to
-//    */
-//   private void subscribeToRecord(String record) {
-//     try {
-//       LOGGER.info("Subscribing to record: {}", record);
-
-//       // Get the record object
-//       MkvRecord rec = Mkv.getInstance().getPublishManager().getMkvRecord(record);
-      
-//       // Subscribe to receive updates for the configured fields
-//       rec.subscribe(MarketDef.ORDER_FIELDS, this);
-//       LOGGER.info("Successfully subscribed to record: {}", record);
-//     } catch (Exception e) {
-//       LOGGER.error("Error subscribing to record: {}, error: {}", record, e.getMessage(), e);
-//     }
-//   }
 
 private void initializeHeartbeat() {
     heartbeatScheduler.scheduleAtFixedRate(() -> {
