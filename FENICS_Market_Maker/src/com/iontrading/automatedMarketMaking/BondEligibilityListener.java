@@ -610,29 +610,28 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
                 
                 String IdC = cusip + "_C_Fixed";
                 String IdREG = cusip + "_REG_Fixed";
-
+                
                 boolean currentlyEligibleC = isIdEligible(IdC);
                 boolean currentlyEligibleREG = isIdEligible(IdREG);
 
-                // Handle C term changes
-            if (shouldBeEligible.eligibleForTermC && !currentlyEligibleC) {
-                // Bond became eligible
+                    // Handle C term changes
+                if (shouldBeEligible.eligibleForTermC && !currentlyEligibleC) {
+                    // Bond became eligible
                     addEligibleBond(IdC, bondData.getConsolidatedView());
                     eligibleCCount++;
                     if (LOGGER.isInfoEnabled()) {
                         LOGGER.info("Bond added to eligible list (instrument: {})", IdC);
                     }
-                    else if (!shouldBeEligible.eligibleForTermC && currentlyEligibleC) {
-                        // Bond became ineligible
-                        removeEligibleBond(IdC);
-                        ineligibleCCount++;
-                        if (LOGGER.isInfoEnabled()) {
-                            LOGGER.info("Bond removed from eligible list (termCode: {})", "C");
-                        }
+                } else if (!shouldBeEligible.eligibleForTermC && currentlyEligibleC) {
+                    // Bond became ineligible
+                    removeEligibleBond(IdC);
+                    ineligibleCCount++;
+                    if (LOGGER.isInfoEnabled()) {
+                        LOGGER.info("Bond removed from eligible list (termCode: {})", "C");
                     }
                 }
 
-            if (shouldBeEligible.eligibleForTermREG && !currentlyEligibleREG) {
+                if (shouldBeEligible.eligibleForTermREG && !currentlyEligibleREG) {
                     addEligibleBond(IdREG, bondData.getConsolidatedView());
                     eligibleREGCount++;
                     if (LOGGER.isInfoEnabled()) {
@@ -646,15 +645,14 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
                         LOGGER.info("Bond removed from eligible list (termCode: {})", "REG");
                     }
                 }
-            }
-            
-            if (eligibleCCount > 0 || ineligibleCCount > 0 || eligibleREGCount > 0 || ineligibleREGCount > 0) {
-                if (LOGGER.isInfoEnabled()) {
-                    LOGGER.info("Eligibility check complete: {} added, {} removed, {} total eligible",
-                        eligibleCCount, ineligibleCCount, eligibleBonds.size());
+                
+                if (eligibleCCount > 0 || ineligibleCCount > 0 || eligibleREGCount > 0 || ineligibleREGCount > 0) {
+                    if (LOGGER.isInfoEnabled()) {
+                        LOGGER.info("Eligibility check complete: {} added, {} removed, {} total eligible",
+                            eligibleCCount, ineligibleCCount, eligibleBonds.size());
+                    }
                 }
             }
-
         } catch (Exception e) {
             if (LOGGER.isErrorEnabled()) {
                 LOGGER.error("Error in periodic eligibility check: {}", e.getMessage(), e);
@@ -985,6 +983,12 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
             EligibilityResult shouldBeEligible = shouldBondBeEligible(cusip, bondData);
             String IdC = IdfromCUSIP(cusip, "C");
             String IdREG = IdfromCUSIP(cusip, "REG");
+            if (IdC == null || IdREG == null) {
+                if (LOGGER.isWarnEnabled()) {
+                    LOGGER.warn("Invalid ID format for CUSIP {}: CUSIP={}, IdC={}, IdREG={}", cusip, cusip, IdC, IdREG);
+                }
+                return;
+            }
             boolean currentlyEligibleC = isIdEligible(IdC);
             boolean currentlyEligibleREG = isIdEligible(IdREG);
 

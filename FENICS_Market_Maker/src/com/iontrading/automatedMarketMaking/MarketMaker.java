@@ -57,12 +57,6 @@ public class MarketMaker implements IOrderManager {
 
     // Reference to the main OrderManagement component
     private final OrderManagement orderManager;
-    
-    private volatile GCBest latestGcBestCash;
-    private volatile GCBest latestGcBestREG;
-    private volatile double latestCashGcRate;
-    private volatile double latestRegGcRate;
-    private final Object gcBestLock = new Object();
 
     private final Map<String, Boolean> termCodeActiveStatus = new ConcurrentHashMap<>();
 
@@ -473,9 +467,10 @@ public class MarketMaker implements IOrderManager {
      */
     private void updateTermCodeActiveStatus() {
         // Use the pre-computed market status from config for better performance
+        config.marketHours();
         boolean cashActive = config.isDuringCashHours();
         boolean regActive = config.isDuringRegHours();
-        
+
         boolean cashWasActive = termCodeActiveStatus.getOrDefault("C", false);
         boolean regWasActive = termCodeActiveStatus.getOrDefault("REG", false);
         
@@ -1174,63 +1169,63 @@ public class MarketMaker implements IOrderManager {
         boolean significantCashGcChange = false;
         boolean significantRegGcChange = false;
 
-        synchronized(gcBestLock) {
-            // Check for Cash GC changes
-            if (gcBestCash != null) {
-                if (latestGcBestCash == null) {
-                    significantCashGcChange = true;
-                } else {
+        // synchronized(gcBestLock) {
+        //     // Check for Cash GC changes
+        //     if (gcBestCash != null) {
+        //         if (latestGcBestCash == null) {
+        //             significantCashGcChange = true;
+        //         } else {
                     
-                    GCLevelResult latestGcBestCash = gcBestCash.getGCLevel();
-                    GCLevelResult thisLatestGcBestCash = this.latestGcBestCash.getGCLevel();
-                    if (latestGcBestCash == null || thisLatestGcBestCash == null) {
-                        significantCashGcChange = true; // If we can't compare, treat as significant change
-                    } else {
-                        // Compare bid and ask prices for significant changes
-                    // Detect significant changes (e.g., > 1 bp)
-                    significantCashGcChange = 
-                        (latestGcBestCash.getBidPrice() != null && 
-                         thisLatestGcBestCash.getBidPrice() != null && 
-                         Math.abs(latestGcBestCash.getBidPrice() - thisLatestGcBestCash.getBidPrice()) >= 0.02) || 
-                        (latestGcBestCash.getAskPrice() != null && 
-                         thisLatestGcBestCash.getAskPrice() != null && 
-                         Math.abs(latestGcBestCash.getAskPrice() - thisLatestGcBestCash.getAskPrice()) >= 0.02);
-                    }
-                this.latestGcBestCash = gcBestCash;
-                this.latestCashGcRate = cash_gc;
-                }
-            }
+        //             GCLevelResult latestGcBestCash = gcBestCash.getGCLevel();
+        //             GCLevelResult thisLatestGcBestCash = this.latestGcBestCash.getGCLevel();
+        //             if (latestGcBestCash == null || thisLatestGcBestCash == null) {
+        //                 significantCashGcChange = true; // If we can't compare, treat as significant change
+        //             } else {
+        //                 // Compare bid and ask prices for significant changes
+        //             // Detect significant changes (e.g., > 1 bp)
+        //             significantCashGcChange = 
+        //                 (latestGcBestCash.getBidPrice() != null && 
+        //                  thisLatestGcBestCash.getBidPrice() != null && 
+        //                  Math.abs(latestGcBestCash.getBidPrice() - thisLatestGcBestCash.getBidPrice()) >= 0.02) || 
+        //                 (latestGcBestCash.getAskPrice() != null && 
+        //                  thisLatestGcBestCash.getAskPrice() != null && 
+        //                  Math.abs(latestGcBestCash.getAskPrice() - thisLatestGcBestCash.getAskPrice()) >= 0.02);
+        //             }
+        //         this.latestGcBestCash = gcBestCash;
+        //         this.latestCashGcRate = cash_gc;
+        //         }
+        //     }
             
             // Check for REG GC changes
-            if (gcBestREG != null) {
-                if (latestGcBestREG == null) {
-                    significantRegGcChange = true;
-                } else {
-                    // Detect significant changes (e.g., > 0.5 bp)
-                    GCLevelResult latestGcBestREG = gcBestREG.getGCLevel();
-                    GCLevelResult thisLatestGcBestREG = this.latestGcBestREG.getGCLevel();
-                    if (latestGcBestREG == null || thisLatestGcBestREG == null) {
-                        significantRegGcChange = true; // If we can't compare, treat as significant change
-                    } else {
-                        // Compare bid and ask prices for significant changes
-                        // Detect significant changes (e.g., > 1 bp)
-                    significantRegGcChange = 
-                        (latestGcBestREG.getBidPrice() != null && 
-                         thisLatestGcBestREG.getBidPrice() != null && 
-                         Math.abs(latestGcBestREG.getBidPrice() - thisLatestGcBestREG.getBidPrice()) >= 0.02) || 
-                        (latestGcBestREG.getAskPrice() != null && 
-                         thisLatestGcBestREG.getAskPrice() != null && 
-                         Math.abs(latestGcBestREG.getAskPrice() - thisLatestGcBestREG.getAskPrice()) >= 0.02);
-                }
-                this.latestGcBestREG = gcBestREG;
-                this.latestRegGcRate = reg_gc;
-                }
-            }
-        }
+        //     if (gcBestREG != null) {
+        //         if (latestGcBestREG == null) {
+        //             significantRegGcChange = true;
+        //         } else {
+        //             // Detect significant changes (e.g., > 0.5 bp)
+        //             GCLevelResult latestGcBestREG = gcBestREG.getGCLevel();
+        //             GCLevelResult thisLatestGcBestREG = this.latestGcBestREG.getGCLevel();
+        //             if (latestGcBestREG == null || thisLatestGcBestREG == null) {
+        //                 significantRegGcChange = true; // If we can't compare, treat as significant change
+        //             } else {
+        //                 // Compare bid and ask prices for significant changes
+        //                 // Detect significant changes (e.g., > 1 bp)
+        //             significantRegGcChange = 
+        //                 (latestGcBestREG.getBidPrice() != null && 
+        //                  thisLatestGcBestREG.getBidPrice() != null && 
+        //                  Math.abs(latestGcBestREG.getBidPrice() - thisLatestGcBestREG.getBidPrice()) >= 0.02) || 
+        //                 (latestGcBestREG.getAskPrice() != null && 
+        //                  thisLatestGcBestREG.getAskPrice() != null && 
+        //                  Math.abs(latestGcBestREG.getAskPrice() - thisLatestGcBestREG.getAskPrice()) >= 0.02);
+        //         }
+        //         this.latestGcBestREG = gcBestREG;
+        //         this.latestRegGcRate = reg_gc;
+        //         }
+        //     }
+        // }
 
         // Process based on term code - avoid string operations
         boolean isCash = id.endsWith("C_Fixed");
-        processMarketUpdate(best, isCash ? gcBestCash : gcBestREG);
+        processMarketUpdate(best, isCash ? GCBestManager.getInstance().getCashGCBest() : GCBestManager.getInstance().getRegGCBest());
 
         processedUpdateCounter.incrementAndGet();
         
@@ -1925,8 +1920,8 @@ public class MarketMaker implements IOrderManager {
             }
             
             // Get the appropriate GC reference data
-            GCBest gcBest = "C".equals(termCode) ? getLatestGcBestCash() : getLatestGcBestREG();
-            
+            GCBest gcBest = "C".equals(termCode) ? GCBestManager.getInstance().getCashGCBest() : GCBestManager.getInstance().getRegGCBest();
+
             // Use unified pricing model (with no market data available)
             PricingDecision decision = calculateUnifiedPrices(Id, termCode, null, gcBest);
 
@@ -3304,46 +3299,6 @@ public class MarketMaker implements IOrderManager {
         
     //     return 0;
     // }
-
-    /**
-     * Gets the latest GCBest for Cash
-     * @return The latest GCBest for Cash, may be null if not yet received
-     */
-    public GCBest getLatestGcBestCash() {
-        synchronized(gcBestLock) {
-            return latestGcBestCash;
-        }
-    }
-
-    /**
-     * Gets the latest GCBest for REG
-     * @return The latest GCBest for REG, may be null if not yet received
-     */
-    public GCBest getLatestGcBestREG() {
-        synchronized(gcBestLock) {
-            return latestGcBestREG;
-        }
-    }
-
-    /**
-     * Gets the latest Cash GC rate
-     * @return The latest Cash GC rate, 0 if not yet received
-     */
-    public double getLatestCashGcRate() {
-        synchronized(gcBestLock) {
-            return latestCashGcRate;
-        }
-    }
-
-    /**
-     * Gets the latest REG GC rate
-     * @return The latest REG GC rate, 0 if not yet received
-     */
-    public double getLatestRegGcRate() {
-        synchronized(gcBestLock) {
-            return latestRegGcRate;
-        }
-    }
 
     private double getCachedVenueMinimum(String instrumentId, String venue) {
         String cacheKey = instrumentId + ":" + venue;

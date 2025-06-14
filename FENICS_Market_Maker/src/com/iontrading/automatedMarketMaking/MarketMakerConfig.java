@@ -118,14 +118,13 @@ public final class MarketMakerConfig {
     // Optimized venue access - no object creation
     public Set<String> getTargetVenuesSet() { return targetVenuesSet; }
     public String[] getTargetVenues() { return targetVenuesArray.clone(); } // Defensive copy
-    
-    // Market hours access
-    public boolean isDuringRegHours() {
+
+    public void marketHours() {
         long now = System.currentTimeMillis();
         if (now - lastMarketHoursCheck > MARKET_HOURS_CACHE_MS) {
             synchronized(this) {
                 if (now - lastMarketHoursCheck > MARKET_HOURS_CACHE_MS) {
-                    // Recalculate market hours
+                    // Recalculate both in one place
                     int currentMinutes = LocalTime.now().getHour() * 60 + LocalTime.now().getMinute();
                     this.isDuringRegHoursCache = !enforceMarketHours || 
                         (currentMinutes >= regMarketOpenMinutes && currentMinutes <= regMarketCloseMinutes);
@@ -135,24 +134,13 @@ public final class MarketMakerConfig {
                 }
             }
         }
+    }
+
+    public boolean isDuringRegHours() {
         return isDuringRegHoursCache;
     }
 
     public boolean isDuringCashHours() {
-        // CRITICAL FIX: Don't call isDuringRegHours() - use proper synchronization
-        long now = System.currentTimeMillis();
-        if (now - lastMarketHoursCheck > MARKET_HOURS_CACHE_MS) {
-            synchronized(this) {
-                if (now - lastMarketHoursCheck > MARKET_HOURS_CACHE_MS) {
-                    int currentMinutes = LocalTime.now().getHour() * 60 + LocalTime.now().getMinute();
-                    this.isDuringRegHoursCache = !enforceMarketHours || 
-                        (currentMinutes >= regMarketOpenMinutes && currentMinutes <= regMarketCloseMinutes);
-                    this.isDuringCashHoursCache = !enforceMarketHours || 
-                        (currentMinutes >= cashMarketOpenMinutes && currentMinutes <= cashMarketCloseMinutes);
-                    lastMarketHoursCheck = now;
-                }
-            }
-        }
         return isDuringCashHoursCache;
     }
 

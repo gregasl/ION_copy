@@ -91,11 +91,6 @@ public class DepthListener implements MkvRecordListener {
     private final long startTime = System.currentTimeMillis();
     private static final String GC_TU10_C = MarketDef.GC_TU10_CASH;
     private static final String GC_TU10_REG = MarketDef.GC_TU10_REG;
-    
-    private GCBest cachedGCBestCash = null;
-    private GCBest cachedGCBestREG = null;
-    private double cachedCashGC = 0.0;
-    private double cachedRegGC = 0.0;
 
     // List of electronic venues we want to prioritize
     private static final List<String> ELECTRONIC_VENUES = Arrays.asList(
@@ -278,27 +273,34 @@ public class DepthListener implements MkvRecordListener {
             }
             
             // If this is a GC record, update the cached GC data
-            if (recordName.equals(GC_TU10_C)) {
-                Map<String, Object> gcData = recordDataMap.get(GC_TU10_C);
-                if (gcData != null) {
-                    cachedGCBestCash = (GCBest) createAppropriateBean(GC_TU10_C, gcData);
-                    cachedCashGC = getDoubleValue(gcData, "TrdValueLast", 0.0);
-                }
-            } else if (recordName.equals(GC_TU10_REG)) {
-                Map<String, Object> gcData = recordDataMap.get(GC_TU10_REG);
-                if (gcData != null) {
-                    cachedGCBestREG = (GCBest) createAppropriateBean(GC_TU10_REG, gcData);
-                    cachedRegGC = getDoubleValue(gcData, "TrdValueLast", 0.0);
+            if (recordName.equals(GC_TU10_C) || recordName.equals(GC_TU10_REG)) {
+                GCBest gcBest = (GCBest) createAppropriateBean(recordName, recordData);
+                if (recordName.equals(GC_TU10_C)) {
+                    Map<String, Object> gcData = recordDataMap.get(GC_TU10_C);
+                    if (gcData != null) {
+                        double cashGC = getDoubleValue(gcData, "TrdValueLast", 0.0);
+                        GCBestManager.getInstance().updateCashGCBest(gcBest, cashGC);
+                    }
+                } else if (recordName.equals(GC_TU10_REG)) {
+                    Map<String, Object> gcData = recordDataMap.get(GC_TU10_REG);
+                    if (gcData != null) {
+                        double regGC = getDoubleValue(gcData, "TrdValueLast", 0.0);
+                        GCBestManager.getInstance().updateRegGCBest(gcBest, regGC);
+                    }
                 }
             }
-            
+
             // Only proceed if data changed
             if (changed) {
                 Best best = createAppropriateBean(recordName, recordData);
                 LOGGER.info(depthInstrumentId + " - Processing depth update for " + recordName +
                     ": " + best.toString() + " (isSnapshot=" + isSnapshot + ")");
                 // Always use cached GC data
-                orderManager.best(best, cachedCashGC, cachedRegGC, cachedGCBestCash, cachedGCBestREG);
+                orderManager.best(best, 
+                    GCBestManager.getInstance().getCashGCRate(), 
+                    GCBestManager.getInstance().getRegGCRate(), 
+                    GCBestManager.getInstance().getCashGCBest(), 
+                    GCBestManager.getInstance().getRegGCBest());
                 updateCounter.incrementAndGet();
             }
             
@@ -445,12 +447,13 @@ private String extractInstrumentIdFromDepth(String recordName) {
 }
 
 private void processQueuedUpdatesForInstrument(String instrumentId) {
-    List<QueuedUpdate> updates = pendingDepthUpdates.get(instrumentId);
-    if (updates == null || updates.isEmpty()) {
-        return;
-    }
     
     synchronized (queueLock) {
+        List<QueuedUpdate> updates = pendingDepthUpdates.get(instrumentId);
+        if (updates == null || updates.isEmpty()) {
+            return;
+        }
+
         // Process all queued updates for this instrument
         List<QueuedUpdate> updatesCopy = new ArrayList<>(updates);
         updates.clear();
@@ -534,30 +537,33 @@ private void updateBestFromMap(Best best, Map<String, Object> recordData) {
 
         // For GCBest, we use the original logic with only level 0
     if (best instanceof GCBest) {
+        GCBest gcBest = (GCBest) best;
+
         // Set price fields with rounding already handled in the setter
-        best.setAsk(getDoubleValue(recordData, "Ask0", 0.0));
-        best.setBid(getDoubleValue(recordData, "Bid0", 0.0));
-        
+        gcBest.setAsk(getDoubleValue(recordData, "Ask0", 0.0));
+        gcBest.setBid(getDoubleValue(recordData, "Bid0", 0.0));
+
         // Set source fields
-        best.setAskSrc(getStringValue(recordData, "AskSrc0", ""));
-        best.setBidSrc(getStringValue(recordData, "BidSrc0", ""));
+        gcBest.setAskSrc(getStringValue(recordData, "AskSrc0", ""));
+        gcBest.setBidSrc(getStringValue(recordData, "BidSrc0", ""));
         int askStatus = getIntValue(recordData, "Ask0Status", 0);
         int bidStatus = getIntValue(recordData, "Bid0Status", 0);
-        best.setAskStatus(askStatus);
-        best.setBidStatus(bidStatus);
+        gcBest.setAskStatus(askStatus);
+        gcBest.setBidStatus(bidStatus);
 
         // Set AON flags using the status bitmasks
-        best.setAskIsAON(askStatus);
-        best.setBidIsAON(bidStatus);
+        gcBest.setAskIsAON(askStatus);
+        gcBest.setBidIsAON(bidStatus);
 
-        best.setAskSrcCheck(getStringValue(recordData, "AskAttribute0", ""));
-        best.setBidSrcCheck(getStringValue(recordData, "BidAttribute0", ""));
-        
+        gcBest.setAskSrcCheck(getStringValue(recordData, "AskAttribute0", ""));
+        gcBest.setBidSrcCheck(getStringValue(recordData, "BidAttribute0", ""));
+
         // Set size fields
-        best.setAskSize(getDoubleValue(recordData, "AskSize0", 0.0));
-        best.setBidSize(getDoubleValue(recordData, "BidSize0", 0.0));
-        best.setAskSizeMin(getDoubleValue(recordData, "AskSize0_Min", 0.0));
-        best.setBidSizeMin(getDoubleValue(recordData, "BidSize0_Min", 0.0));
+        gcBest.setAskSize(getDoubleValue(recordData, "AskSize0", 0.0));
+        gcBest.setBidSize(getDoubleValue(recordData, "BidSize0", 0.0));
+        gcBest.setAskSizeMin(getDoubleValue(recordData, "AskSize0_Min", 0.0));
+        gcBest.setBidSizeMin(getDoubleValue(recordData, "BidSize0_Min", 0.0));
+
     } else {
         // Regular Best instance - set all fields
     
