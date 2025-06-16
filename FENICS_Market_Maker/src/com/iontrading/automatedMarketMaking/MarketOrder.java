@@ -183,7 +183,7 @@ public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener {
     marketSource = MarketSource;
     
     // Get the order add function from the ION gateway
-    MkvFunction fn = pm.getMkvFunction(MarketSource + "VCMIOrderRwt181");
+    MkvFunction fn = pm.getMkvFunction(MarketSource + "_VCMIOrderRwt181");
     
     if (fn == null) {
       if (LOGGER.isInfoEnabled()) {
