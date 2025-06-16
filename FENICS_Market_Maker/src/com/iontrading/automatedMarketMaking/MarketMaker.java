@@ -1909,6 +1909,7 @@ public class MarketMaker implements IOrderManager {
                 nativeInstrument = depthListener.getInstrumentFieldBySourceString(
                     Id, config.getMarketSource(), false);
                 LOGGER.debug("tryCreateOrUpdateMarkets: Native instrument for Id={} is {}", Id, nativeInstrument);
+                return -1;
             }
             
             if (nativeInstrument == null) {
