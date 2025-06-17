@@ -216,7 +216,7 @@ public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener {
       });
         
       if (LOGGER.isInfoEnabled()) {
-        LOGGER.info("UUpdating order with args: {}", args);
+        LOGGER.info("Updating order with args: {}", args);
       }
       // Call the function with this MarketOrder as the listener for the response
       fn.call(args, order);

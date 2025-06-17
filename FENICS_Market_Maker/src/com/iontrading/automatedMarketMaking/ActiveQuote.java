@@ -85,6 +85,7 @@ public class ActiveQuote {
             this.isGcBasedBid = referenceSource != null && referenceSource.startsWith("GC_");
             this.isMarketBasedBid = referenceSource != null && !isGcBasedBid && 
                                 !referenceSource.equals("DEFAULT");
+            this.bidCreationTime = System.currentTimeMillis();
         }
     }
     
@@ -103,6 +104,7 @@ public class ActiveQuote {
             this.isGcBasedAsk = referenceSource != null && referenceSource.startsWith("GC_");
             this.isMarketBasedAsk = referenceSource != null && !isGcBasedAsk && 
                                 !referenceSource.equals("DEFAULT");
+            this.askCreationTime = System.currentTimeMillis();
         }
     }
     

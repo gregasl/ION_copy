@@ -171,6 +171,8 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
   // Instance of DepthListener to load and access instrument data
   private static DepthListener depthListener;
 
+  private final BondEligibilityListener bondEligibilityListener;
+
   // Market maker instance for automated market making
   private MarketMaker marketMaker;
   
@@ -352,6 +354,9 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
     	  LOGGER.error("Failed to start: {}", e.getMessage(), e);
       }
 
+    System.out.println("### DIRECT: Creating BondEligibilityListener instance");
+    BondEligibilityListener bondEligibilityListener = new BondEligibilityListener();
+
     System.out.println("### DIRECT: Creating OrderManagement instance");
     // Create the order management instance
     OrderManagement om = new OrderManagement();
@@ -446,12 +451,22 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
    */
   private final String applicationId;
 
+/**
+ * Creates a new instance of OrderManagement with a new BondEligibilityListener.
+ * This constructor maintains backward compatibility.
+ */
+public OrderManagement() {
+    this(new BondEligibilityListener());
+}
+
   /**
    * Creates a new instance of OrderManagement.
    * Generates a unique application ID based on the current time.
    */
-  public OrderManagement() {
+  public OrderManagement(BondEligibilityListener bondEligibilityListener) {
     configureLogging(false, null);
+
+    this.bondEligibilityListener = bondEligibilityListener;
 
     applicationId = "Java_Order_Manager"; 
     LOGGER.info("Application ID: {}", applicationId);
@@ -524,7 +539,7 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
                 .build();
             LOGGER.info("Default market maker configuration created: {}", marketMakerConfig);
             // Create the market maker instance
-            marketMaker = new MarketMaker(this, marketMakerConfig);
+            marketMaker = new MarketMaker(this, marketMakerConfig, bondEligibilityListener);
             LOGGER.info("Market maker initialized with default configuration: {}", marketMakerConfig);
 
             // Add a shutdown hook for the market maker
@@ -1418,113 +1433,210 @@ public void onFullUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolean isSna
         String qtyStatusStr = mkvRecord.getValue("QtyStatusStr").getString();
         double qtyTot = mkvRecord.getValue("QtyTot").getReal();
         int time = mkvRecord.getValue("Time").getInt();
-
         String activityKey = origId; // Using origId as the unique identifier
-        
+
         // Safely retrieve previous active status with type checking
         Object prevActiveObj = orderActiveStatusMap.get(activityKey + ":" + Id);
         boolean previouslyActive = prevActiveObj instanceof Boolean ? (Boolean)prevActiveObj : false;
         boolean currentlyActive = "Yes".equals(active);
 
-        // Check for duplicate MarketMaker orders with the same verb and ID
-        if ("automatedMarketMaking".equals(appName)) {
-            String mapKey = VerbStr + ":" + Id;
-            String currentOrderKey = origId + ":" + time;
-            
-            if (currentlyActive) {
-                // Safe retrieval of existing order info with type checking
-                Object existingValueObj = orderActiveStatusMap.get(mapKey);
-                
-                if (existingValueObj instanceof String) {
-                    String existingOrderKey = (String)existingValueObj;
+        boolean thisApp = appName.equals("automatedMarketMaking");
+
+        boolean isEligible = bondEligibilityListener.isIdEligible(Id);
+        
+        if (!thisApp) {
+            // If this is not our app, we don't process it
+            LOGGER.debug("Ignoring order from another app: {}", appName);
+            return;
+        }
+
+        if (currentlyActive && !isEligible) {
+            String traderId = getTraderForVenue(src);
+            MarketOrder cancelOrder = MarketOrder.orderCancel(
+                        src, traderId, origId, this);
+            updateActiveQuoteStatus(Id, VerbStr, !currentlyActive);
+        }
+
+        // if (currentlyActive) {
+        //     // Forward order status update to MarketMaker's ActiveQuote system
+        //     LOGGER.info("Updating ActiveQuote for order: {}, VerbStr: {}, Id: {}, QtyStatusStr: {}, QtyStatus: {}",
+        //         origId, VerbStr, Id, qtyStatusStr, qtyStatus);
+        //     if (marketMaker != null) {
+        //         // Get existing ActiveQuote or create one if needed
+        //         ActiveQuote existingQuote = marketMaker.getActiveQuotes().get(Id);
+        //         LOGGER.info("ActiveQuote for {}: {}", Id, existingQuote);
+        //         if (existingQuote == null) {
+        //             // Create a new ActiveQuote if one doesn't exist
+        //             LOGGER.info("Creating new ActiveQuote for {}", Id);
+        //             existingQuote = new ActiveQuote(Id);
+        //             marketMaker.activeQuotes.put(Id, existingQuote);
+        //         }
+
+        //         // Use atomic operation to safely check for duplicates and update
+        //         existingQuote.atomicOperation(quote -> {
+        //             MarketOrder existingOrder = "Buy".equals(VerbStr) ? 
+        //                 quote.getBidOrder() : quote.getAskOrder();
                     
-                    if (!existingOrderKey.equals(currentOrderKey)) {
-                        try {
-                            // Extract the orderId and time from the existing order key
-                            String[] parts = existingOrderKey.split(":");
-                            if (parts.length >= 2) {
-                                String existingOrigId = parts[0];
-                                int existingTime = Integer.parseInt(parts[1]);
+        //             if (existingOrder != null && !origId.equals(existingOrder.getOrderId())) {
+        //                 // We have a duplicate - check timestamps
+        //                 long existingOrderAge = "Buy".equals(VerbStr) ? 
+        //                     quote.getBidAge() : quote.getAskAge();
+
+        //                 if (currentOrderAge < existingOrderAge) {
+        //                     // Current order is newer, cancel the older one
+        //                     LOGGER.info("Found duplicate {} order for {}: Cancelling older order ID={}, time={}",
+        //                         VerbStr, Id, existingOrder.getOrderId(), existingOrderAge);
+
+        //                     String traderId = getTraderForVenue(src);
+        //                     if (traderId != null) {
+        //                         MarketOrder cancelOrder = MarketOrder.orderCancel(
+        //                             src, traderId, existingOrder.getOrderId(), OrderManagement.this);
                                 
-                                // Compare creation times to determine which is older
-                                if (time > existingTime) {
-                                    // Current order is newer, cancel the older one
-                                    LOGGER.info("Found duplicate MarketMaker order for {}/{}: Cancelling older order ID={}, time={}",
-                                        Id, VerbStr, existingOrigId, existingTime);
+        //                         if (cancelOrder != null) {
+        //                             LOGGER.info("Successfully issued cancel for duplicate order: {}", 
+        //                                 existingOrder.getOrderId());
                                     
-                                    // Cancel the older order
-                                    String traderId = getTraderForVenue(src);
-                                    if (traderId != null) {
-                                        MarketOrder cancelOrder = MarketOrder.orderCancel(
-                                            src, traderId, existingOrigId, this);
-                                        
-                                        if (cancelOrder != null) {
-                                            LOGGER.info("Successfully issued cancel for duplicate order: {}", existingOrigId);
-                                            // Update the map with the newer order
-                                            orderActiveStatusMap.put(mapKey, currentOrderKey);
-                                        } else {
-                                            LOGGER.warn("Failed to issue cancel for duplicate order: {}", existingOrigId);
-                                        }
-                                    }
-                                } else {
-                                    // Current order is older, cancel it
-                                    LOGGER.info("Found duplicate MarketMaker order for {}/{}: Cancelling current ID={}, origId={}, time={}",
-                                        Id, VerbStr, orderId, origId, time);
-                                        
-                                    // Cancel the current order
-                                    String traderId = getTraderForVenue(src);
-                                    if (traderId != null) {
-                                        MarketOrder cancelOrder = MarketOrder.orderCancel(
-                                            src, traderId, origId, this);
-                                            
-                                        if (cancelOrder != null) {
-                                            LOGGER.info("Successfully issued cancel for duplicate order Id, OrigId: {} {}", Id, origId);
-                                        } else {
-                                            LOGGER.warn("Failed to issue cancel for duplicate order: {}", Id, origId);
-                                        }
-                                    }
+        //                             // Update ActiveQuote with new order
+        //                             if ("Buy".equals(VerbStr)) {
+        //                                 quote.setBidOrder(getOrderByOrderId(origId), src, price);
+        //                                 quote.setBidActive(true);
+        //                             } else {
+        //                                 quote.setAskOrder(getOrderByOrderId(origId), src, price);
+        //                                 quote.setAskActive(true);
+        //                             }
+        //                         }
+        //                     }
+        //                 } else {
+        //                     // Current order is older, cancel it
+        //                     LOGGER.info("Found duplicate {} order for {}: Cancelling current order ID={}, time={}",
+        //                         VerbStr, Id, origId, time);
+                                
+        //                     String traderId = getTraderForVenue(src);
+        //                     if (traderId != null) {
+        //                         MarketOrder cancelOrder = MarketOrder.orderCancel(
+        //                             src, traderId, origId, OrderManagement.this);
                                     
-                                    // Don't update the map, keep the existing newer order
+        //                         if (cancelOrder != null) {
+        //                             LOGGER.info("Successfully issued cancel for duplicate order: {}", origId);
+        //                         }
+        //                     }
+        //                     // Keep existing order in the ActiveQuote
+        //                 }
+        //             } else {
+        //                 // No duplicate, just update the ActiveQuote
+        //                 MarketOrder currentOrder = getOrderByOrderId(origId);
+        //                 if (currentOrder != null) {
+        //                     if ("Buy".equals(VerbStr)) {
+        //                         quote.setBidOrder(currentOrder, src, price);
+        //                         quote.setBidActive(true);
+        //                     } else {
+        //                         quote.setAskOrder(currentOrder, src, price);
+        //                         quote.setAskActive(true);  
+        //                     }
+        //                 }
+        //             }
+        //             return null; // Return value not used
+        //         });               
+        //         } else {
+        //             LOGGER.warn("MarketMaker is not initialized, cannot update ActiveQuote for {}", Id);
+        //         }
+        // }
+        // Check for duplicate MarketMaker orders with the same verb and ID
+        String mapKey = VerbStr + ":" + Id;
+        String currentOrderKey = origId + ":" + time;
+        
+        if (currentlyActive) {
+            // Safe retrieval of existing order info with type checking
+            Object existingValueObj = orderActiveStatusMap.get(mapKey);
+            
+            if (existingValueObj instanceof String) {
+                String existingOrderKey = (String)existingValueObj;
+                
+                if (!existingOrderKey.equals(currentOrderKey)) {
+                    try {
+                        // Extract the orderId and time from the existing order key
+                        String[] parts = existingOrderKey.split(":");
+                        if (parts.length >= 2) {
+                            String existingOrigId = parts[0];
+                            int existingTime = Integer.parseInt(parts[1]);
+                            
+                            // Compare creation times to determine which is older
+                            if (time > existingTime) {
+                                // Current order is newer, cancel the older one
+                                LOGGER.info("Found duplicate MarketMaker order for {}/{}: Cancelling older order ID={}, time={}",
+                                    Id, VerbStr, existingOrigId, existingTime);
+                                
+                                // Cancel the older order
+                                String traderId = getTraderForVenue(src);
+                                if (traderId != null) {
+                                    MarketOrder cancelOrder = MarketOrder.orderCancel(
+                                        src, traderId, existingOrigId, this);
+                                    
+                                    if (cancelOrder != null) {
+                                        LOGGER.info("Successfully issued cancel for duplicate order: {}", existingOrigId);
+                                        // Update the map with the newer order
+                                        orderActiveStatusMap.put(mapKey, currentOrderKey);
+                                    } else {
+                                        LOGGER.warn("Failed to issue cancel for duplicate order: {}", existingOrigId);
+                                    }
                                 }
                             } else {
-                                LOGGER.warn("Invalid existing order key format: {}", existingOrderKey);
-                                // Store the current order key
-                                orderActiveStatusMap.put(mapKey, currentOrderKey);
+                                // Current order is older, cancel it
+                                LOGGER.info("Found duplicate MarketMaker order for {}/{}: Cancelling current ID={}, origId={}, time={}",
+                                    Id, VerbStr, orderId, origId, time);
+                                    
+                                // Cancel the current order
+                                String traderId = getTraderForVenue(src);
+                                if (traderId != null) {
+                                    MarketOrder cancelOrder = MarketOrder.orderCancel(
+                                        src, traderId, origId, this);
+                                        
+                                    if (cancelOrder != null) {
+                                        LOGGER.info("Successfully issued cancel for duplicate order Id, OrigId: {} {}", Id, origId);
+                                    } else {
+                                        LOGGER.warn("Failed to issue cancel for duplicate order: {}", Id, origId);
+                                    }
+                                }
+                                
+                                // Don't update the map, keep the existing newer order
                             }
-                        } catch (NumberFormatException e) {
-                            LOGGER.error("Error parsing time from existing order key: {}", e.getMessage());
-                            // Store the current order key to recover from this error state
+                        } else {
+                            LOGGER.warn("Invalid existing order key format: {}", existingOrderKey);
+                            // Store the current order key
                             orderActiveStatusMap.put(mapKey, currentOrderKey);
                         }
+                    } catch (NumberFormatException e) {
+                        LOGGER.error("Error parsing time from existing order key: {}", e.getMessage());
+                        // Store the current order key to recover from this error state
+                        orderActiveStatusMap.put(mapKey, currentOrderKey);
                     }
-                } else {
-                    // First time seeing this order combination, store it
-                    orderActiveStatusMap.put(mapKey, currentOrderKey);
-                    LOGGER.debug("Storing new MarketMaker order: {}/{} -> {}", VerbStr, Id, currentOrderKey);
                 }
             } else {
-                // Order is not active - if it's the one we're tracking, remove from tracking
-                Object existingValueObj = orderActiveStatusMap.get(mapKey);
-                if (existingValueObj instanceof String) {
-                    String existingOrderKey = (String)existingValueObj;
-                    if (existingOrderKey.startsWith(orderId + ":")) {
-                        LOGGER.debug("Removing inactive order from tracking: {}/{}", VerbStr, Id);
-                        orderActiveStatusMap.remove(mapKey);
-                    }
+                // First time seeing this order combination, store it
+                orderActiveStatusMap.put(mapKey, currentOrderKey);
+                LOGGER.debug("Storing new MarketMaker order: {}/{} -> {}", VerbStr, Id, currentOrderKey);
+            }
+        } else {
+            // Order is not active - if it's the one we're tracking, remove from tracking
+            Object existingValueObj = orderActiveStatusMap.get(mapKey);
+            if (existingValueObj instanceof String) {
+                String existingOrderKey = (String)existingValueObj;
+                if (existingOrderKey.startsWith(orderId + ":")) {
+                    LOGGER.debug("Removing inactive order from tracking: {}/{}", VerbStr, Id);
+                    orderActiveStatusMap.remove(mapKey);
                 }
             }
         }
-
+        
         // Store current activity status for future reference
         orderActiveStatusMap.put(activityKey + ":" + Id, currentlyActive);
 
         // Update ActiveQuote status if this is a market maker order
-        if ("automatedMarketMaking".equals(appName) && orderId != null) {
+        if (orderId != null) {
             if (marketMaker != null) {
                 // Find the ActiveQuote that contains this order and update its status
                 if (previouslyActive != currentlyActive) {
                     updateActiveQuoteStatus(Id, VerbStr, currentlyActive);
-                    
                     LOGGER.info("Order status changed for {}/{}: active={} -> {}", 
                         Id, VerbStr, previouslyActive, currentlyActive);
                 }
@@ -1551,8 +1663,8 @@ public void onFullUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolean isSna
         LOGGER.info("Processing full update for record: {}, active={}, appName={}, src={}, Id={}, orderId={}, origId={}, VerbStr={}, tradeStatus={}, qtyFill={}, price={}, intQtyGoal={}, qtyHit={}, qtyStatus={}, qtyStatusStr={}, qtyTot={}, time={}", 
             mkvRecord.getName(), active, appName, src, Id, orderId, origId, VerbStr, tradeStatus, qtyFill, price, intQtyGoal, qtyHit, qtyStatus, qtyStatusStr, qtyTot, time);
 
-        if (!"automatedMarketMaking".equals(appName) || !"FENICS_USREPO".equals(src) || active.equals("Yes")) {
-            return; // Not a market maker order nor a FENICS_USREPO order, or already active
+        if (!"FENICS_USREPO".equals(src) || active.equals("Yes")) {
+            return; // Exit without hedging order if not hedging FENICS USREPO orders or if order is active
         }
 
         LOGGER.debug("Processing order update: origId={}, orderId={}, status={}, fill={}", 
@@ -1597,9 +1709,9 @@ public void onFullUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolean isSna
         }
 
         // Check if execution price is approximately near the best price
-        if (Math.abs(orderPrice - price) > MAX_PRICE_DEVIATION) {
+        if ((price - orderPrice) < -MAX_PRICE_DEVIATION) {
             LOGGER.warn("Order price deviation too high: orderPrice={}, execPrice={}, maxDeviation={}",
-                orderPrice, price, MAX_PRICE_DEVIATION);
+                orderPrice, price, -MAX_PRICE_DEVIATION);
             return; // Reject hedge if price is too far off
         }
 
@@ -1649,6 +1761,34 @@ public void onFullUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolean isSna
         } catch (Exception e) {
             LOGGER.error("Error updating ActiveQuote status for order {}/{}: {}", 
                 Id, side, e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Converts a local timestamp in HHMMSSmmm format to milliseconds since epoch
+     * for comparison with System.currentTimeMillis()
+     * 
+     * @param localTimestamp Timestamp in HHMMSSmmm format (e.g., 142456145 for 14:24:56.145)
+     * @return The equivalent milliseconds since epoch for today's date
+     */
+    public static long convertLocalTimeToMillis(int localTimestamp) {
+        try {
+            // Extract time components
+            int hours = localTimestamp / 10000000;
+            int minutes = (localTimestamp / 100000) % 100;
+            int seconds = (localTimestamp / 1000) % 100;
+            int millis = localTimestamp % 1000;
+            
+            // Create a LocalTime object
+            LocalTime localTime = LocalTime.of(hours, minutes, seconds, millis * 1000000);
+            
+            // Combine with today's date and convert to milliseconds
+            return localTime.atDate(java.time.LocalDate.now())
+                        .atZone(java.time.ZoneId.systemDefault())
+                        .toInstant()
+                        .toEpochMilli();
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Invalid timestamp format: " + localTimestamp, e);
         }
     }
 
