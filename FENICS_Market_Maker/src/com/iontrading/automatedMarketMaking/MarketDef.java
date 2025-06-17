@@ -33,7 +33,7 @@ public class MarketDef {
 	 * These fields provide essential information about order state and execution.
 	 */
 	public static String[] ORDER_FIELDS = { "Active", "ActiveStr", "CompNameOrigin", "Id", "InstrumentId", "IntQtyGoal", "OrderNo", "OrigId", "OrigInstrId",
-                        "OrigSrc", "Price", "QtyFill", "QtyHit", "QtyStatus",  "QtyStatusStr", "QtyTot", "Time", "TimeCreation",
+                        "OrigSrc", "Price", "QtyFill", "QtyHit", "QtyStatus",  "QtyStatusStr", "QtyTot", "Time", "TimeCreation","TimeStamp",
 			"TradingStatus", "TradingStatusStr", "Verb", "VerbStr" };
 
 	/**
