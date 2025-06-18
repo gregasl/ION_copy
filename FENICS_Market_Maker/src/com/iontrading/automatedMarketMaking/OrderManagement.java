@@ -221,8 +221,8 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
     ThreadLocal.withInitial(() -> new StringBuilder(512));
 
   // Redis connection constants
-  private static final String HEARTBEAT_CHANNEL = "HEARTBEAT:ION:MARKETMAKER";
-  private static final String ADMIN_CHANNEL = "ADMIN:ION:MARKETMAKER";
+  private static final String HEARTBEAT_CHANNEL = "HEARTBEAT:ION:MARKETMAKERUAT";
+  private static final String ADMIN_CHANNEL = "ADMIN:ION:MARKETMAKERUAT";
   private static final String REDIS_HOST = "cacheuat";
   private static final int REDIS_PORT = 6379;
   
@@ -248,6 +248,8 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
   private static final double MAX_PRICE_DEVIATION = 0.05; // 5 bps max price deviation for hedging orders
 
   private final Map<String, Object> orderActiveStatusMap = new ConcurrentHashMap<>();
+  private static final String STATUS_KEY_PREFIX = "status:";
+  private static final String TRACKING_KEY_PREFIX = "track:";
 
   private final Map<String, Best> latestBestByInstrument = new ConcurrentHashMap<String, Best>() {
     private static final int MAX_SIZE = 5000;
@@ -1434,11 +1436,13 @@ public void onFullUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolean isSna
         double qtyTot = mkvRecord.getValue("QtyTot").getReal();
         int time = mkvRecord.getValue("Time").getInt();
         String activityKey = origId; // Using origId as the unique identifier
+        String statusKey = STATUS_KEY_PREFIX + activityKey + ":" + Id;
 
         // Safely retrieve previous active status with type checking
-        Object prevActiveObj = orderActiveStatusMap.get(activityKey + ":" + Id);
+        Object prevActiveObj = orderActiveStatusMap.get(statusKey);
         boolean previouslyActive = prevActiveObj instanceof Boolean ? (Boolean)prevActiveObj : false;
         boolean currentlyActive = "Yes".equals(active);
+        orderActiveStatusMap.put(statusKey, currentlyActive);
 
         boolean thisApp = appName.equals("automatedMarketMaking");
 
@@ -1455,99 +1459,18 @@ public void onFullUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolean isSna
             MarketOrder cancelOrder = MarketOrder.orderCancel(
                         src, traderId, origId, this);
             updateActiveQuoteStatus(Id, VerbStr, !currentlyActive);
+            if (VerbStr != null && Id != null) {
+                orderActiveStatusMap.remove(VerbStr + ":" + Id);
+            }
         }
 
-        // if (currentlyActive) {
-        //     // Forward order status update to MarketMaker's ActiveQuote system
-        //     LOGGER.info("Updating ActiveQuote for order: {}, VerbStr: {}, Id: {}, QtyStatusStr: {}, QtyStatus: {}",
-        //         origId, VerbStr, Id, qtyStatusStr, qtyStatus);
-        //     if (marketMaker != null) {
-        //         // Get existing ActiveQuote or create one if needed
-        //         ActiveQuote existingQuote = marketMaker.getActiveQuotes().get(Id);
-        //         LOGGER.info("ActiveQuote for {}: {}", Id, existingQuote);
-        //         if (existingQuote == null) {
-        //             // Create a new ActiveQuote if one doesn't exist
-        //             LOGGER.info("Creating new ActiveQuote for {}", Id);
-        //             existingQuote = new ActiveQuote(Id);
-        //             marketMaker.activeQuotes.put(Id, existingQuote);
-        //         }
-
-        //         // Use atomic operation to safely check for duplicates and update
-        //         existingQuote.atomicOperation(quote -> {
-        //             MarketOrder existingOrder = "Buy".equals(VerbStr) ? 
-        //                 quote.getBidOrder() : quote.getAskOrder();
-                    
-        //             if (existingOrder != null && !origId.equals(existingOrder.getOrderId())) {
-        //                 // We have a duplicate - check timestamps
-        //                 long existingOrderAge = "Buy".equals(VerbStr) ? 
-        //                     quote.getBidAge() : quote.getAskAge();
-
-        //                 if (currentOrderAge < existingOrderAge) {
-        //                     // Current order is newer, cancel the older one
-        //                     LOGGER.info("Found duplicate {} order for {}: Cancelling older order ID={}, time={}",
-        //                         VerbStr, Id, existingOrder.getOrderId(), existingOrderAge);
-
-        //                     String traderId = getTraderForVenue(src);
-        //                     if (traderId != null) {
-        //                         MarketOrder cancelOrder = MarketOrder.orderCancel(
-        //                             src, traderId, existingOrder.getOrderId(), OrderManagement.this);
-                                
-        //                         if (cancelOrder != null) {
-        //                             LOGGER.info("Successfully issued cancel for duplicate order: {}", 
-        //                                 existingOrder.getOrderId());
-                                    
-        //                             // Update ActiveQuote with new order
-        //                             if ("Buy".equals(VerbStr)) {
-        //                                 quote.setBidOrder(getOrderByOrderId(origId), src, price);
-        //                                 quote.setBidActive(true);
-        //                             } else {
-        //                                 quote.setAskOrder(getOrderByOrderId(origId), src, price);
-        //                                 quote.setAskActive(true);
-        //                             }
-        //                         }
-        //                     }
-        //                 } else {
-        //                     // Current order is older, cancel it
-        //                     LOGGER.info("Found duplicate {} order for {}: Cancelling current order ID={}, time={}",
-        //                         VerbStr, Id, origId, time);
-                                
-        //                     String traderId = getTraderForVenue(src);
-        //                     if (traderId != null) {
-        //                         MarketOrder cancelOrder = MarketOrder.orderCancel(
-        //                             src, traderId, origId, OrderManagement.this);
-                                    
-        //                         if (cancelOrder != null) {
-        //                             LOGGER.info("Successfully issued cancel for duplicate order: {}", origId);
-        //                         }
-        //                     }
-        //                     // Keep existing order in the ActiveQuote
-        //                 }
-        //             } else {
-        //                 // No duplicate, just update the ActiveQuote
-        //                 MarketOrder currentOrder = getOrderByOrderId(origId);
-        //                 if (currentOrder != null) {
-        //                     if ("Buy".equals(VerbStr)) {
-        //                         quote.setBidOrder(currentOrder, src, price);
-        //                         quote.setBidActive(true);
-        //                     } else {
-        //                         quote.setAskOrder(currentOrder, src, price);
-        //                         quote.setAskActive(true);  
-        //                     }
-        //                 }
-        //             }
-        //             return null; // Return value not used
-        //         });               
-        //         } else {
-        //             LOGGER.warn("MarketMaker is not initialized, cannot update ActiveQuote for {}", Id);
-        //         }
-        // }
         // Check for duplicate MarketMaker orders with the same verb and ID
-        String mapKey = VerbStr + ":" + Id;
         String currentOrderKey = origId + ":" + time;
-        
+        String trackKey = TRACKING_KEY_PREFIX + VerbStr + ":" + Id;
+
         if (currentlyActive) {
             // Safe retrieval of existing order info with type checking
-            Object existingValueObj = orderActiveStatusMap.get(mapKey);
+            Object existingValueObj = orderActiveStatusMap.get(trackKey);
             
             if (existingValueObj instanceof String) {
                 String existingOrderKey = (String)existingValueObj;
@@ -1575,7 +1498,7 @@ public void onFullUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolean isSna
                                     if (cancelOrder != null) {
                                         LOGGER.info("Successfully issued cancel for duplicate order: {}", existingOrigId);
                                         // Update the map with the newer order
-                                        orderActiveStatusMap.put(mapKey, currentOrderKey);
+                                        orderActiveStatusMap.put(trackKey, currentOrderKey);
                                     } else {
                                         LOGGER.warn("Failed to issue cancel for duplicate order: {}", existingOrigId);
                                     }
@@ -1597,39 +1520,38 @@ public void onFullUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolean isSna
                                         LOGGER.warn("Failed to issue cancel for duplicate order: {}", Id, origId);
                                     }
                                 }
-                                
                                 // Don't update the map, keep the existing newer order
                             }
                         } else {
                             LOGGER.warn("Invalid existing order key format: {}", existingOrderKey);
                             // Store the current order key
-                            orderActiveStatusMap.put(mapKey, currentOrderKey);
+                            orderActiveStatusMap.put(trackKey, currentOrderKey);
                         }
                     } catch (NumberFormatException e) {
                         LOGGER.error("Error parsing time from existing order key: {}", e.getMessage());
                         // Store the current order key to recover from this error state
-                        orderActiveStatusMap.put(mapKey, currentOrderKey);
+                        orderActiveStatusMap.put(trackKey, currentOrderKey);
                     }
                 }
             } else {
                 // First time seeing this order combination, store it
-                orderActiveStatusMap.put(mapKey, currentOrderKey);
+                orderActiveStatusMap.put(trackKey, currentOrderKey);
                 LOGGER.debug("Storing new MarketMaker order: {}/{} -> {}", VerbStr, Id, currentOrderKey);
             }
         } else {
             // Order is not active - if it's the one we're tracking, remove from tracking
-            Object existingValueObj = orderActiveStatusMap.get(mapKey);
+            Object existingValueObj = orderActiveStatusMap.get(trackKey);
             if (existingValueObj instanceof String) {
                 String existingOrderKey = (String)existingValueObj;
                 if (existingOrderKey.startsWith(orderId + ":")) {
                     LOGGER.debug("Removing inactive order from tracking: {}/{}", VerbStr, Id);
-                    orderActiveStatusMap.remove(mapKey);
+                    orderActiveStatusMap.remove(trackKey);
                 }
             }
         }
         
         // Store current activity status for future reference
-        orderActiveStatusMap.put(activityKey + ":" + Id, currentlyActive);
+        orderActiveStatusMap.put(statusKey, currentlyActive);
 
         // Update ActiveQuote status if this is a market maker order
         if (orderId != null) {
@@ -1733,7 +1655,6 @@ public void onFullUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolean isSna
                 }
                 LOGGER.info("Hedging bid hit with sell order: nativeId={}, qtyHit={}", nativeId, qtyHit);
             }
-            
             addOrder(market, trader, nativeId, hedgeDirection, qtyHit, orderPrice, "Limit", "FAS");
         } else {
             LOGGER.warn("Cannot process hedge: trader={}, orderPrice={}, qtyHit={}", trader, orderPrice, qtyHit);
@@ -1764,33 +1685,33 @@ public void onFullUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolean isSna
         }
     }
 
-    /**
-     * Converts a local timestamp in HHMMSSmmm format to milliseconds since epoch
-     * for comparison with System.currentTimeMillis()
-     * 
-     * @param localTimestamp Timestamp in HHMMSSmmm format (e.g., 142456145 for 14:24:56.145)
-     * @return The equivalent milliseconds since epoch for today's date
-     */
-    public static long convertLocalTimeToMillis(int localTimestamp) {
-        try {
-            // Extract time components
-            int hours = localTimestamp / 10000000;
-            int minutes = (localTimestamp / 100000) % 100;
-            int seconds = (localTimestamp / 1000) % 100;
-            int millis = localTimestamp % 1000;
+    // /**
+    //  * Converts a local timestamp in HHMMSSmmm format to milliseconds since epoch
+    //  * for comparison with System.currentTimeMillis()
+    //  * 
+    //  * @param localTimestamp Timestamp in HHMMSSmmm format (e.g., 142456145 for 14:24:56.145)
+    //  * @return The equivalent milliseconds since epoch for today's date
+    //  */
+    // public static long convertLocalTimeToMillis(int localTimestamp) {
+    //     try {
+    //         // Extract time components
+    //         int hours = localTimestamp / 10000000;
+    //         int minutes = (localTimestamp / 100000) % 100;
+    //         int seconds = (localTimestamp / 1000) % 100;
+    //         int millis = localTimestamp % 1000;
             
-            // Create a LocalTime object
-            LocalTime localTime = LocalTime.of(hours, minutes, seconds, millis * 1000000);
+    //         // Create a LocalTime object
+    //         LocalTime localTime = LocalTime.of(hours, minutes, seconds, millis * 1000000);
             
-            // Combine with today's date and convert to milliseconds
-            return localTime.atDate(java.time.LocalDate.now())
-                        .atZone(java.time.ZoneId.systemDefault())
-                        .toInstant()
-                        .toEpochMilli();
-        } catch (Exception e) {
-            throw new IllegalArgumentException("Invalid timestamp format: " + localTimestamp, e);
-        }
-    }
+    //         // Combine with today's date and convert to milliseconds
+    //         return localTime.atDate(java.time.LocalDate.now())
+    //                     .atZone(java.time.ZoneId.systemDefault())
+    //                     .toInstant()
+    //                     .toEpochMilli();
+    //     } catch (Exception e) {
+    //         throw new IllegalArgumentException("Invalid timestamp format: " + localTimestamp, e);
+    //     }
+    // }
 
   /**
    * Notification that an order is no longer able to trade.

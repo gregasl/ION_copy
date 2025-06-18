@@ -1340,7 +1340,6 @@ public class MarketMaker implements IOrderManager {
                 // Detect if a target venue that was previously providing prices disappeared
                 if ((hadMarketBasedBid && !bidFromTargetVenue) || 
                     (hadMarketBasedAsk && !askFromTargetVenue)) {
-                    
                         targetSourceDisappeared = true;
                     }
                 }
