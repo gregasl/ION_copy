@@ -110,7 +110,7 @@ public class MarketMaker implements IOrderManager {
 
     public String getApplicationId() {
         // Return a unique identifier for this market maker instance
-        return "MarketMaker";
+        return "automatedMarketMaking";
     }
     /**
      * Creates a new MarketMaker instance with default configuration.
