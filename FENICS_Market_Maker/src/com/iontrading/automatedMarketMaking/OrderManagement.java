@@ -11,6 +11,7 @@
 package com.iontrading.automatedMarketMaking;
 
 import java.util.Set;
+import java.util.Collection;
 import java.util.Date;
 import java.util.HashSet;
 import java.util.ArrayList;
@@ -179,14 +180,6 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
   // Market maker configuration
   private MarketMakerConfig marketMakerConfig;
 
-  //Map to track which instrument pairs we've already traded
-  private final Map<String, Long> lastTradeTimeByInstrument = 
-    Collections.synchronizedMap(new LinkedHashMap<String, Long>(16, 0.75f, true) {
-        @Override
-        protected boolean removeEldestEntry(Map.Entry<String, Long> eldest) {
-            return size() > 10000;
-        }
-    });
   //Minimum time between trades for the same instrument (milliseconds)
   private static final long MIN_TRADE_INTERVAL_MS = 200; // 200 milliseconds
   //Flag to enable or disable continuous trading
@@ -243,28 +236,10 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
   private redis.clients.jedis.JedisPool jedisPool;
   private boolean isRedisConnected = false;
   
-  private final Map<String, Integer> orderIdToReqIdMap = new HashMap<>();
-
   private static final double MAX_PRICE_DEVIATION = 0.05; // 5 bps max price deviation for hedging orders
 
-  private final Map<String, Object> orderActiveStatusMap = new ConcurrentHashMap<>();
+  private final OrderRepository orderRepository = OrderRepository.getInstance();
 
-  private final Map<String, Best> latestBestByInstrument = new ConcurrentHashMap<String, Best>() {
-    private static final int MAX_SIZE = 5000;
-    
-    @Override
-    public Best put(String key, Best value) {
-        if (size() >= MAX_SIZE) {
-            // Remove oldest entries (simple FIFO)
-            Iterator<String> iterator = keySet().iterator();
-            while (iterator.hasNext() && size() >= MAX_SIZE * 0.9) {
-                iterator.next();
-                iterator.remove();
-            }
-        }
-        return super.put(key, value);
-    }
-};
   // Initialize Redis connection pool
   private void initializeRedisConnection() {
       if (!isRedisConnected) {
@@ -443,7 +418,7 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
    * Map to cache market orders by their request ID.
    * This allows tracking orders throughout their lifecycle.
    */
-  private final Map<Integer, MarketOrder> orders = new HashMap<>();
+//   private final Map<Integer, MarketOrder> orders = new HashMap<>();
 
   /**
    * Unique identifier for this instance of the application.
@@ -1291,107 +1266,100 @@ private void subscribeToPattern() {
     }
 }
 
-// Helper method to handle subscription and listener removal safely
-private void trySubscribeAndRemoveDepthListener(MkvObject mkvObject, MkvPublishManager pm, MkvPublishListener listener) {
-    synchronized (subscriptionLock) {
-        // Check again inside synchronization to avoid race conditions
-        if (isPatternSubscribed) {
-            return;
+    // Helper method to handle subscription and listener removal safely
+    private void trySubscribeAndRemoveDepthListener(MkvObject mkvObject, MkvPublishManager pm, MkvPublishListener listener) {
+        synchronized (subscriptionLock) {
+            // Check again inside synchronization to avoid race conditions
+            if (isPatternSubscribed) {
+                return;
+            }
+            
+            try {
+                LOGGER.info("Pattern found, subscribing: {}", DEPTH_PATTERN);
+
+                ((MkvPattern) mkvObject).subscribe(DEPTH_FIELDS, depthListener);
+                isPatternSubscribed = true;
+
+                LOGGER.info("Successfully subscribed to pattern");
+
+                // Remove the listener now that we've subscribed - safely outside the callback
+                // but still inside synchronization
+                pm.removePublishListener(listener);
+            } catch (Exception e) {
+                LOGGER.error("Error subscribing to pattern: {}", e.getMessage(), e);
+            }
         }
-        
-        try {
-            LOGGER.info("Pattern found, subscribing: {}", DEPTH_PATTERN);
+    }
 
-            ((MkvPattern) mkvObject).subscribe(DEPTH_FIELDS, depthListener);
-            isPatternSubscribed = true;
+    /**
+     * Caches a MarketOrder record using the request ID as key.
+     * This allows us to track the order throughout its lifecycle.
+     * 
+     * @param order The MarketOrder to cache
+     */
+    private void addOrder(MarketOrder order) {
+        if (LOGGER.isDebugEnabled()) {
+        LOGGER.debug("Adding order to cache: reqId={}", order.getMyReqId());
+        }
+        orderRepository.storeOrder(order);
+    }
 
-            LOGGER.info("Successfully subscribed to pattern");
+    /**
+     * Removes a MarketOrder object from the cache by request ID.
+     * Called when an order is considered "dead".
+     * 
+     * @param reqId The request ID of the order to remove
+     */
+    public void removeOrder(int reqId) {
+        if (LOGGER.isDebugEnabled()) {
+        LOGGER.debug("Removing order from cache: reqId={}", reqId);
+        }
+        orderRepository.removeOrder(reqId);
+    }
 
-            // Remove the listener now that we've subscribed - safely outside the callback
-            // but still inside synchronization
-            pm.removePublishListener(listener);
-        } catch (Exception e) {
-            LOGGER.error("Error subscribing to pattern: {}", e.getMessage(), e);
+    /**
+     * Retrieves a MarketOrder object from the cache by request ID.
+     * 
+     * @param reqId The request ID of the order to retrieve
+     * @return The MarketOrder object or null if not found
+     */
+    public MarketOrder getOrder(int reqId) {
+        MarketOrder order = orderRepository.getOrderByReqId(reqId);
+        if (LOGGER.isDebugEnabled()) {
+        LOGGER.debug("Retrieving order from cache: reqId={}, found={}", reqId, (order != null));
+        }
+        return order;
+    }
+
+    @Override
+    public void mapOrderIdToReqId(String orderId, int reqId) {
+        if (orderId != null && !orderId.isEmpty()) {
+            orderRepository.mapOrderIdToReqId(orderId, reqId);
         }
     }
-  }
 
-  /**
-   * Caches a MarketOrder record using the request ID as key.
-   * This allows us to track the order throughout its lifecycle.
-   * 
-   * @param order The MarketOrder to cache
-   */
-  private void addOrder(MarketOrder order) {
-    if (LOGGER.isDebugEnabled()) {
-      LOGGER.debug("Adding order to cache: reqId={}", order.getMyReqId());
-    }
-    orders.put(Integer.valueOf(order.getMyReqId()), order);
-  }
-
-  /**
-   * Removes a MarketOrder object from the cache by request ID.
-   * Called when an order is considered "dead".
-   * 
-   * @param reqId The request ID of the order to remove
-   */
-  public void removeOrder(int reqId) {
-    if (LOGGER.isDebugEnabled()) {
-      LOGGER.debug("Removing order from cache: reqId={}", reqId);
-    }
-    orders.remove(Integer.valueOf(reqId));
-  }
-
-  /**
-   * Retrieves a MarketOrder object from the cache by request ID.
-   * 
-   * @param reqId The request ID of the order to retrieve
-   * @return The MarketOrder object or null if not found
-   */
-  public MarketOrder getOrder(int reqId) {
-    MarketOrder order = orders.get(Integer.valueOf(reqId));
-    if (LOGGER.isDebugEnabled()) {
-      LOGGER.debug("Retrieving order from cache: reqId={}, found={}", reqId, (order != null));
-    }
-    return order;
-  }
-
-  /**
-   * Maps an order ID to a request ID for tracking purposes.
-   * 
-   * @param orderId The order ID to map
-   * @param reqId The request ID to associate with the order ID
-   */
-  public void mapOrderIdToReqId(String orderId, int reqId) {
-      if (orderId != null && !orderId.isEmpty()) {
-          orderIdToReqIdMap.put(orderId, reqId);
-      }
-  }
-
-    // Then your lookup becomes much more efficient
     public MarketOrder getOrderByOrderId(String orderId) {
         if (orderId == null || orderId.isEmpty()) {
             LOGGER.warn("Cannot find order with null or empty orderId");
             return null;
         }
-        
-        Integer reqId = orderIdToReqIdMap.get(orderId);
-        if (reqId != null) {
+        MarketOrder order = orderRepository.getOrderByOrderId(orderId);
+        int reqId = (order != null) ? order.getMyReqId() : -1;
+        if (reqId != -1) {
             return getOrder(reqId);
         }
         
         // Fall back to full search if not found in map
         // This handles edge cases where the index wasn't updated
-        for (MarketOrder order : orders.values()) {
+        for (MarketOrder foundOrder : orderRepository.getAllOrders()) {
             if (orderId.equals(order.getOrderId())) {
                 // Update the map for future lookups
-                orderIdToReqIdMap.put(orderId, order.getMyReqId());
-                return order;
+                orderRepository.mapOrderIdToReqId(orderId, foundOrder.getMyReqId());
+                return foundOrder;
             }
         }
         return null;
     }
-
 
   /**
    * The component doesn't need to listen to partial updates for records.
@@ -1433,11 +1401,7 @@ public void onFullUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolean isSna
         String qtyStatusStr = mkvRecord.getValue("QtyStatusStr").getString();
         double qtyTot = mkvRecord.getValue("QtyTot").getReal();
         int time = mkvRecord.getValue("Time").getInt();
-        String activityKey = origId; // Using origId as the unique identifier
 
-        // Safely retrieve previous active status with type checking
-        Object prevActiveObj = orderActiveStatusMap.get(activityKey + ":" + Id);
-        boolean previouslyActive = prevActiveObj instanceof Boolean ? (Boolean)prevActiveObj : false;
         boolean currentlyActive = "Yes".equals(active);
 
         boolean thisApp = appName.equals("automatedMarketMaking");
@@ -1454,473 +1418,224 @@ public void onFullUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolean isSna
             String traderId = getTraderForVenue(src);
             MarketOrder cancelOrder = MarketOrder.orderCancel(
                         src, traderId, origId, this);
-            updateActiveQuoteStatus(Id, VerbStr, !currentlyActive);
+            orderRepository.updateOrderStatus(Id, VerbStr, !currentlyActive);
         }
 
-        // if (currentlyActive) {
-        //     // Forward order status update to MarketMaker's ActiveQuote system
-        //     LOGGER.info("Updating ActiveQuote for order: {}, VerbStr: {}, Id: {}, QtyStatusStr: {}, QtyStatus: {}",
-        //         origId, VerbStr, Id, qtyStatusStr, qtyStatus);
-        //     if (marketMaker != null) {
-        //         // Get existing ActiveQuote or create one if needed
-        //         ActiveQuote existingQuote = marketMaker.getActiveQuotes().get(Id);
-        //         LOGGER.info("ActiveQuote for {}: {}", Id, existingQuote);
-        //         if (existingQuote == null) {
-        //             // Create a new ActiveQuote if one doesn't exist
-        //             LOGGER.info("Creating new ActiveQuote for {}", Id);
-        //             existingQuote = new ActiveQuote(Id);
-        //             marketMaker.activeQuotes.put(Id, existingQuote);
-        //         }
-
-        //         // Use atomic operation to safely check for duplicates and update
-        //         existingQuote.atomicOperation(quote -> {
-        //             MarketOrder existingOrder = "Buy".equals(VerbStr) ? 
-        //                 quote.getBidOrder() : quote.getAskOrder();
-                    
-        //             if (existingOrder != null && !origId.equals(existingOrder.getOrderId())) {
-        //                 // We have a duplicate - check timestamps
-        //                 long existingOrderAge = "Buy".equals(VerbStr) ? 
-        //                     quote.getBidAge() : quote.getAskAge();
-
-        //                 if (currentOrderAge < existingOrderAge) {
-        //                     // Current order is newer, cancel the older one
-        //                     LOGGER.info("Found duplicate {} order for {}: Cancelling older order ID={}, time={}",
-        //                         VerbStr, Id, existingOrder.getOrderId(), existingOrderAge);
-
-        //                     String traderId = getTraderForVenue(src);
-        //                     if (traderId != null) {
-        //                         MarketOrder cancelOrder = MarketOrder.orderCancel(
-        //                             src, traderId, existingOrder.getOrderId(), OrderManagement.this);
-                                
-        //                         if (cancelOrder != null) {
-        //                             LOGGER.info("Successfully issued cancel for duplicate order: {}", 
-        //                                 existingOrder.getOrderId());
-                                    
-        //                             // Update ActiveQuote with new order
-        //                             if ("Buy".equals(VerbStr)) {
-        //                                 quote.setBidOrder(getOrderByOrderId(origId), src, price);
-        //                                 quote.setBidActive(true);
-        //                             } else {
-        //                                 quote.setAskOrder(getOrderByOrderId(origId), src, price);
-        //                                 quote.setAskActive(true);
-        //                             }
-        //                         }
-        //                     }
-        //                 } else {
-        //                     // Current order is older, cancel it
-        //                     LOGGER.info("Found duplicate {} order for {}: Cancelling current order ID={}, time={}",
-        //                         VerbStr, Id, origId, time);
-                                
-        //                     String traderId = getTraderForVenue(src);
-        //                     if (traderId != null) {
-        //                         MarketOrder cancelOrder = MarketOrder.orderCancel(
-        //                             src, traderId, origId, OrderManagement.this);
-                                    
-        //                         if (cancelOrder != null) {
-        //                             LOGGER.info("Successfully issued cancel for duplicate order: {}", origId);
-        //                         }
-        //                     }
-        //                     // Keep existing order in the ActiveQuote
-        //                 }
-        //             } else {
-        //                 // No duplicate, just update the ActiveQuote
-        //                 MarketOrder currentOrder = getOrderByOrderId(origId);
-        //                 if (currentOrder != null) {
-        //                     if ("Buy".equals(VerbStr)) {
-        //                         quote.setBidOrder(currentOrder, src, price);
-        //                         quote.setBidActive(true);
-        //                     } else {
-        //                         quote.setAskOrder(currentOrder, src, price);
-        //                         quote.setAskActive(true);  
-        //                     }
-        //                 }
-        //             }
-        //             return null; // Return value not used
-        //         });               
-        //         } else {
-        //             LOGGER.warn("MarketMaker is not initialized, cannot update ActiveQuote for {}", Id);
-        //         }
-        // }
-        // Check for duplicate MarketMaker orders with the same verb and ID
-        String mapKey = VerbStr + ":" + Id;
-        String currentOrderKey = origId + ":" + time;
-        
         if (currentlyActive) {
-            // Safe retrieval of existing order info with type checking
-            Object existingValueObj = orderActiveStatusMap.get(mapKey);
-            
-            if (existingValueObj instanceof String) {
-                String existingOrderKey = (String)existingValueObj;
+            // Check for duplicates
+            String[] duplicateInfo = orderRepository.checkForDuplicate(Id, VerbStr, orderId, time);
+            if (duplicateInfo != null) {
+                // We have a duplicate - cancel the older order
+                String duplicateOrderId = duplicateInfo[0];
+                String traderId = duplicateInfo[1];
+                String venue = duplicateInfo[2];
                 
-                if (!existingOrderKey.equals(currentOrderKey)) {
-                    try {
-                        // Extract the orderId and time from the existing order key
-                        String[] parts = existingOrderKey.split(":");
-                        if (parts.length >= 2) {
-                            String existingOrigId = parts[0];
-                            int existingTime = Integer.parseInt(parts[1]);
-                            
-                            // Compare creation times to determine which is older
-                            if (time > existingTime) {
-                                // Current order is newer, cancel the older one
-                                LOGGER.info("Found duplicate MarketMaker order for {}/{}: Cancelling older order ID={}, time={}",
-                                    Id, VerbStr, existingOrigId, existingTime);
-                                
-                                // Cancel the older order
-                                String traderId = getTraderForVenue(src);
-                                if (traderId != null) {
-                                    MarketOrder cancelOrder = MarketOrder.orderCancel(
-                                        src, traderId, existingOrigId, this);
-                                    
-                                    if (cancelOrder != null) {
-                                        LOGGER.info("Successfully issued cancel for duplicate order: {}", existingOrigId);
-                                        // Update the map with the newer order
-                                        orderActiveStatusMap.put(mapKey, currentOrderKey);
-                                    } else {
-                                        LOGGER.warn("Failed to issue cancel for duplicate order: {}", existingOrigId);
-                                    }
-                                }
-                            } else {
-                                // Current order is older, cancel it
-                                LOGGER.info("Found duplicate MarketMaker order for {}/{}: Cancelling current ID={}, origId={}, time={}",
-                                    Id, VerbStr, orderId, origId, time);
-                                    
-                                // Cancel the current order
-                                String traderId = getTraderForVenue(src);
-                                if (traderId != null) {
-                                    MarketOrder cancelOrder = MarketOrder.orderCancel(
-                                        src, traderId, origId, this);
-                                        
-                                    if (cancelOrder != null) {
-                                        LOGGER.info("Successfully issued cancel for duplicate order Id, OrigId: {} {}", Id, origId);
-                                    } else {
-                                        LOGGER.warn("Failed to issue cancel for duplicate order: {}", Id, origId);
-                                    }
-                                }
-                                
-                                // Don't update the map, keep the existing newer order
-                            }
-                        } else {
-                            LOGGER.warn("Invalid existing order key format: {}", existingOrderKey);
-                            // Store the current order key
-                            orderActiveStatusMap.put(mapKey, currentOrderKey);
-                        }
-                    } catch (NumberFormatException e) {
-                        LOGGER.error("Error parsing time from existing order key: {}", e.getMessage());
-                        // Store the current order key to recover from this error state
-                        orderActiveStatusMap.put(mapKey, currentOrderKey);
+                LOGGER.info("Found duplicate order for {}/{}: cancelling order ID={}", 
+                    Id, VerbStr, duplicateOrderId);
+                    
+                if (traderId != null && venue != null) {
+                    MarketOrder cancelOrder = MarketOrder.orderCancel(
+                        venue, traderId, duplicateOrderId, this);
+                        
+                    if (cancelOrder != null) {
+                        LOGGER.info("Successfully issued cancel for duplicate order: {}", 
+                            duplicateOrderId);
+                    } else {
+                        LOGGER.warn("Failed to issue cancel for duplicate order: {}", 
+                            duplicateOrderId);
                     }
                 }
-            } else {
-                // First time seeing this order combination, store it
-                orderActiveStatusMap.put(mapKey, currentOrderKey);
-                LOGGER.debug("Storing new MarketMaker order: {}/{} -> {}", VerbStr, Id, currentOrderKey);
             }
-        } else {
-            // Order is not active - if it's the one we're tracking, remove from tracking
-            Object existingValueObj = orderActiveStatusMap.get(mapKey);
-            if (existingValueObj instanceof String) {
-                String existingOrderKey = (String)existingValueObj;
-                if (existingOrderKey.startsWith(orderId + ":")) {
-                    LOGGER.debug("Removing inactive order from tracking: {}/{}", VerbStr, Id);
-                    orderActiveStatusMap.remove(mapKey);
-                }
+        }
+
+        ActiveQuote quote = orderRepository.getQuote(Id);
+
+        // Update order status in ActiveQuote
+        if (quote != null) {
+            if ("Buy".equals(VerbStr)) {
+                quote.setBidActive(currentlyActive);
+            } else if ("Sell".equals(VerbStr)) {
+                quote.setAskActive(currentlyActive);
             }
         }
         
-        // Store current activity status for future reference
-        orderActiveStatusMap.put(activityKey + ":" + Id, currentlyActive);
-
-        // Update ActiveQuote status if this is a market maker order
-        if (orderId != null) {
-            if (marketMaker != null) {
-                // Find the ActiveQuote that contains this order and update its status
-                if (previouslyActive != currentlyActive) {
-                    updateActiveQuoteStatus(Id, VerbStr, currentlyActive);
-                    LOGGER.info("Order status changed for {}/{}: active={} -> {}", 
-                        Id, VerbStr, previouslyActive, currentlyActive);
-                }
-            }
-        }
-
-        // Process only if transitioning from active to inactive
-        if (previouslyActive && !currentlyActive) {
-            LOGGER.info("Order status change detected for origId={}: ActiveStr changed from Yes to No", origId);
-        } else {
-            // Not a transition from active to inactive, skip processing
-            if (!previouslyActive) {
-                LOGGER.debug("First time seeing order origId={}, active status={}", origId, active);
-            } else if (!previouslyActive && !currentlyActive) {
-                LOGGER.debug("Order origId={} remains inactive, skipping", origId);
-            } else if (previouslyActive && currentlyActive) {
-                LOGGER.debug("Order origId={} remains active, skipping", origId);
-            } else if (!previouslyActive && currentlyActive) {
-                LOGGER.debug("Order origId={} transitioned from inactive to active, skipping", origId);
-            }
-            return;
-        }
-
-        LOGGER.info("Processing full update for record: {}, active={}, appName={}, src={}, Id={}, orderId={}, origId={}, VerbStr={}, tradeStatus={}, qtyFill={}, price={}, intQtyGoal={}, qtyHit={}, qtyStatus={}, qtyStatusStr={}, qtyTot={}, time={}", 
-            mkvRecord.getName(), active, appName, src, Id, orderId, origId, VerbStr, tradeStatus, qtyFill, price, intQtyGoal, qtyHit, qtyStatus, qtyStatusStr, qtyTot, time);
-
-        if (!"FENICS_USREPO".equals(src) || active.equals("Yes")) {
-            return; // Exit without hedging order if not hedging FENICS USREPO orders or if order is active
-        }
-
-        LOGGER.debug("Processing order update: origId={}, orderId={}, status={}, fill={}", 
-            origId, orderId, tradeStatus, qtyFill);
-
-        double orderPrice = 0.0;
-        String market = null;
-        boolean validVenue = false;
-        // Get the best price information for this instrument
-        Best bestMarket = latestBestByInstrument.get(Id);
-        if (bestMarket == null) {
-            LOGGER.warn("No best market found for instrument: {}", Id);
-            return; // Cannot process without best market
-        } else {
-            if (VerbStr.equals("Buy")) {
-                orderPrice = bestMarket.getBid();
-                market = bestMarket.getBidSrc();
-            } else if (VerbStr.equals("Sell")) {
-                orderPrice = bestMarket.getAsk();
-                market = bestMarket.getAskSrc();
-            } else {
-                LOGGER.warn("Unknown verb for order: {}", VerbStr);
-                return; // Cannot process unknown verb
+        // Update order object if we have it
+        MarketOrder order = orderRepository.getOrderByOrderId(orderId);
+        if (order != null) {
+            order.setActive(currentlyActive);
+            
+            // If filled, update the quote
+            if (qtyFill > 0) {
+                quote.recordFill(orderId, qtyFill);
             }
         }
         
-        validVenue = marketMaker.isTargetVenue(market);
-        if (!validVenue) {
-            LOGGER.warn("Invalid market venue for hedging: {}", market);
-            return; // Cannot hedge on invalid venue
-        }
-        // Now we use the market variable to get the trader
-        String trader = getTraderForVenue(market);
-        String hedgeDirection = null;
-        if (VerbStr.equals("Buy")) {
-            hedgeDirection = "Sell"; // Hedge buy with sell
-        } else if (VerbStr.equals("Sell")) {
-            hedgeDirection = "Buy"; // Hedge sell with buy
-        } else {
-            LOGGER.warn("Invalid verb for hedging: {}", VerbStr);
-            return; // Cannot hedge unknown verb
+        // If the order is now inactive, update OrderRepository
+        if (!currentlyActive) {
+            orderRepository.updateOrderStatus(Id, VerbStr, false);
         }
 
-        // Check if execution price is approximately near the best price
-        if ((price - orderPrice) < -MAX_PRICE_DEVIATION) {
-            LOGGER.warn("Order price deviation too high: orderPrice={}, execPrice={}, maxDeviation={}",
-                orderPrice, price, -MAX_PRICE_DEVIATION);
-            return; // Reject hedge if price is too far off
-        }
+            // Process transition from active to inactive (order filled/cancelled)
+        if (currentlyActive == false) {
+            LOGGER.info("Order status change detected for origId={}: ActiveStr changed to No", origId);
+                
+            // Continue with existing hedging logic
+            LOGGER.info("Processing order update: origId={}, orderId={}, status={}, fill={}", 
+                origId, orderId, tradeStatus, qtyFill);
 
-        String nativeId = getNativeInstrumentId(Id, market, false);
+            LOGGER.info("Processing full update for record: {}, active={}, appName={}, src={}, Id={}, orderId={}, origId={}, VerbStr={}, tradeStatus={}, qtyFill={}, price={}, intQtyGoal={}, qtyHit={}, qtyStatus={}, qtyStatusStr={}, qtyTot={}, time={}", 
+                mkvRecord.getName(), active, appName, src, Id, orderId, origId, VerbStr, tradeStatus, qtyFill, price, intQtyGoal, qtyHit, qtyStatus, qtyStatusStr, qtyTot, time);
 
-        if (trader != null && orderPrice > 0.0 && qtyHit > 0.0) {
-            LOGGER.info("Preparing hedging order before self match: market={}, trader={}, Id={}, nativeId={}, verb={}, qtyFilled={}, price={}",
-                market, trader, Id, nativeId, hedgeDirection, qtyHit, orderPrice);
-            if (hedgeDirection.equals("Buy")) {
-                if (bestMarket.isMinePrice(bestMarket.getAskStatus())) {
-                    LOGGER.info("Self match prevention on the ask side: nativeId={}, qtyHit={}", nativeId, qtyHit);
-                    return;
-                }
-                LOGGER.info("Hedging offer lifted with buy order: nativeId={}, qtyHit={}", nativeId, qtyHit);                    
+            if (!"FENICS_USREPO".equals(src) || active.equals("Yes")) {
+                return; // Exit without hedging order if not hedging FENICS USREPO orders or if order is active
+            }
+
+            LOGGER.debug("Processing order update: origId={}, orderId={}, status={}, fill={}", 
+                origId, orderId, tradeStatus, qtyFill);
+
+            double orderPrice = 0.0;
+            String market = null;
+            boolean validVenue = false;
+            // Get the best price information for this instrument
+            Best bestMarket = orderRepository.getLatestBest(Id);
+            if (bestMarket == null) {
+                LOGGER.warn("No best market found for instrument: {}", Id);
+                return; // Cannot process without best market
             } else {
-                if (bestMarket.isMinePrice(bestMarket.getBidStatus())) {
-                    LOGGER.info("Self match prevention on the bid side: nativeId={}, qtyHit={}", nativeId, qtyHit);
-                    return;
+                if (VerbStr.equals("Buy")) {
+                    orderPrice = bestMarket.getBid();
+                    market = bestMarket.getBidSrc();
+                } else if (VerbStr.equals("Sell")) {
+                    orderPrice = bestMarket.getAsk();
+                    market = bestMarket.getAskSrc();
+                } else {
+                    LOGGER.warn("Unknown verb for order: {}", VerbStr);
+                    return; // Cannot process unknown verb
                 }
-                LOGGER.info("Hedging bid hit with sell order: nativeId={}, qtyHit={}", nativeId, qtyHit);
             }
             
-            addOrder(market, trader, nativeId, hedgeDirection, qtyHit, orderPrice, "Limit", "FAS");
-        } else {
-            LOGGER.warn("Cannot process hedge: trader={}, orderPrice={}, qtyHit={}", trader, orderPrice, qtyHit);
+            validVenue = marketMaker.isTargetVenue(market);
+            if (!validVenue) {
+                LOGGER.warn("Invalid market venue for hedging: {}", market);
+                return; // Cannot hedge on invalid venue
+            }
+            // Now we use the market variable to get the trader
+            String trader = getTraderForVenue(market);
+            String hedgeDirection = null;
+            if (VerbStr.equals("Buy")) {
+                hedgeDirection = "Sell"; // Hedge buy with sell
+            } else if (VerbStr.equals("Sell")) {
+                hedgeDirection = "Buy"; // Hedge sell with buy
+            } else {
+                LOGGER.warn("Invalid verb for hedging: {}", VerbStr);
+                return; // Cannot hedge unknown verb
+            }
+
+            // Check if execution price is approximately near the best price
+            if ((price - orderPrice) < -MAX_PRICE_DEVIATION) {
+                LOGGER.warn("Order price deviation too high: orderPrice={}, execPrice={}, maxDeviation={}",
+                    orderPrice, price, -MAX_PRICE_DEVIATION);
+                return; // Reject hedge if price is too far off
+            }
+
+            String nativeId = getNativeInstrumentId(Id, market, false);
+
+            if (trader != null && orderPrice > 0.0 && qtyHit > 0.0) {
+                LOGGER.info("Preparing hedging order before self match: market={}, trader={}, Id={}, nativeId={}, verb={}, qtyFilled={}, price={}",
+                    market, trader, Id, nativeId, hedgeDirection, qtyHit, orderPrice);
+                if (hedgeDirection.equals("Buy")) {
+                    if (bestMarket.isMinePrice(bestMarket.getAskStatus())) {
+                        LOGGER.info("Self match prevention on the ask side: nativeId={}, qtyHit={}", nativeId, qtyHit);
+                        return;
+                    }
+                    LOGGER.info("Hedging offer lifted with buy order: nativeId={}, qtyHit={}", nativeId, qtyHit);                    
+                } else {
+                    if (bestMarket.isMinePrice(bestMarket.getBidStatus())) {
+                        LOGGER.info("Self match prevention on the bid side: nativeId={}, qtyHit={}", nativeId, qtyHit);
+                        return;
+                    }
+                    LOGGER.info("Hedging bid hit with sell order: nativeId={}, qtyHit={}", nativeId, qtyHit);
+                }
+                
+                addOrder(market, trader, nativeId, hedgeDirection, qtyHit, orderPrice, "Limit", "FAS");
+            } else {
+                LOGGER.warn("Cannot process hedge: trader={}, orderPrice={}, qtyHit={}", trader, orderPrice, qtyHit);
+            }
         }
     } catch (Exception e) {
         LOGGER.error("Error processing order update: {}", e.getMessage(), e);
     }
 }
 
-    /**
-     * Updates the ActiveQuote status for a specific order
-     * 
-     * @param orderId The order ID
-     * @param side The order side (Buy or Sell)
-     * @param isActive Whether the order is active
-     */
-    private void updateActiveQuoteStatus(String Id, String side, boolean isActive) {
-        if (marketMaker == null) {
-            return;
-        }
-        
-        try {
-            // Ask the market maker to update the appropriate ActiveQuote
-            marketMaker.updateOrderStatus(Id, side, isActive);
-        } catch (Exception e) {
-            LOGGER.error("Error updating ActiveQuote status for order {}/{}: {}", 
-                Id, side, e.getMessage(), e);
-        }
-    }
-
-    /**
-     * Converts a local timestamp in HHMMSSmmm format to milliseconds since epoch
-     * for comparison with System.currentTimeMillis()
-     * 
-     * @param localTimestamp Timestamp in HHMMSSmmm format (e.g., 142456145 for 14:24:56.145)
-     * @return The equivalent milliseconds since epoch for today's date
-     */
-    public static long convertLocalTimeToMillis(int localTimestamp) {
-        try {
-            // Extract time components
-            int hours = localTimestamp / 10000000;
-            int minutes = (localTimestamp / 100000) % 100;
-            int seconds = (localTimestamp / 1000) % 100;
-            int millis = localTimestamp % 1000;
-            
-            // Create a LocalTime object
-            LocalTime localTime = LocalTime.of(hours, minutes, seconds, millis * 1000000);
-            
-            // Combine with today's date and convert to milliseconds
-            return localTime.atDate(java.time.LocalDate.now())
-                        .atZone(java.time.ZoneId.systemDefault())
-                        .toInstant()
-                        .toEpochMilli();
-        } catch (Exception e) {
-            throw new IllegalArgumentException("Invalid timestamp format: " + localTimestamp, e);
-        }
-    }
-
-  /**
-   * Notification that an order is no longer able to trade.
-   * Removes the order from the cache.
-   * 
-   * Implementation of IOrderManager.orderDead()
-   */
-  public void orderDead(MarketOrder order) {
+@Override
+public void orderDead(MarketOrder order) {
     if (LOGGER.isInfoEnabled()) {
-      LOGGER.info("Order is dead: orderId={}, reqId={}", order.getOrderId(), order.getMyReqId());
+        LOGGER.info("Order is now dead: reqId={}, orderId={}", 
+            order.getMyReqId(), order.getOrderId());
     }
-    // Remove the order from the cache
-    removeOrder(order.getMyReqId());
-  }
-  
-  /**
-   * Adds an order for the given instrument, quantity, and other parameters.
-   * If the order creation succeeds, stores the order in the internal cache.
-   * 
-   * Implementation of IOrderManager.addOrder()
-   */
-  public MarketOrder addOrder(String MarketSource, String TraderId, String instrId, String verb, double qty,
-      double price, String type, String tif) {
-    
-    // Check if the system is in stopped state
-    if (isSystemStopped) {
-        LOGGER.error("Order rejected - system is in STOPPED state: source={}, trader={}, instrId={}",
-            MarketSource, TraderId, instrId);
+    // Update the repository
+    orderRepository.markOrderDead(order);
+}
 
-        // Log the rejection
-        ApplicationLogging.logOrderEvent(
-            "REJECTED_STOPPED", 
-            MarketSource, 
-            TraderId, 
-            instrId, 
-            verb, 
-            qty, 
-            price, 
-            type, 
-            tif, 
-            -1,  // No request ID assigned
-            null // No order ID assigned
-        );
-        
+@Override
+public MarketOrder addOrder(String marketSource, String traderId, String instrId, 
+                    String verb, double qty, double price, String type, String tif) {
+    // Check if system is stopped
+    if (isSystemStopped) {
+        LOGGER.warn("System is stopped - not processing order: {}", instrId);
         return null;
     }
-
-	LOGGER.info("Attempting to create order: source={}, trader={}, instrId={}, verb={}, qty={}, price={}, type={}, tif={}",
-	             MarketSource, TraderId, instrId, verb, qty, price, type, tif);
-
-    // Log to machine-readable format BEFORE sending the order
+    
+    LOGGER.info("Attempting to create order: source={}, trader={}, instrId={}, verb={}, qty={}, price={}, type={}, tif={}",
+                marketSource, traderId, instrId, verb, qty, price, type, tif);
+    
+    // Log to machine-readable format
     ApplicationLogging.logOrderEvent(
         "SEND", 
-        MarketSource, 
-        TraderId, 
-        instrId, 
-        verb, 
-        qty, 
-        price, 
-        type, 
-        tif, 
-        -1,  // Request ID not assigned yet
-        null // Order ID not assigned yet
+        marketSource,
+        traderId,
+        instrId,
+        verb,
+        qty,
+        price,
+        type,
+        tif,
+        -1,
+        null
     );
-	
-	// Create the order using the static factory method
-    MarketOrder order = MarketOrder.orderCreate(MarketSource, TraderId, instrId, verb, qty, price,
+    
+    // Create the order using static factory method
+    MarketOrder order = MarketOrder.orderCreate(marketSource, traderId, instrId, verb, qty, price,
         type, tif, this);
     
     if (order != null) {
-      // If creation succeeded, add the order to the cache
-      addOrder(order);
-      
-      // Update machine-readable log with the assigned request ID
-      ApplicationLogging.logOrderEvent(
-          "SENT", 
-          MarketSource, 
-          TraderId, 
-          instrId, 
-          verb, 
-          qty, 
-          price, 
-          type, 
-          tif, 
-          order.getMyReqId(),
-          order.getOrderId()
-      );
-      
-      // Check if there was an error code returned that indicates rejection
-      if (order.getErrCode() != 0) {
-        LOGGER.warn("Order rejected by market: reqId={}, instrId={}, errCode={}, errStr={}, source={}, trader={}",
-            order.getMyReqId(), instrId, order.getErrCode(), order.getErrStr(), MarketSource, TraderId);
-        // Log rejection to machine-readable format
-        ApplicationLogging.logOrderUpdate(
-            "REJECTED",
-            order.getMyReqId(),
-            order.getOrderId(),
-            "Error: " + order.getErrCode() + " - " + order.getErrStr()
-        );
+        // Store order in the repository
+        orderRepository.storeOrder(order);
         
-        // Remove the rejected order from the cache since it won't be processed
-        removeOrder(order.getMyReqId());
-        return null; // Return null for rejected orders to indicate failure
-      }
-
-      if (LOGGER.isInfoEnabled()) {
-        LOGGER.info("Order created successfully: reqId={}, instrId={}", order.getMyReqId(), instrId);
-      }
-    } else {
-        // Log a more detailed error when order creation fails completely
-        LOGGER.error("Order creation failed: instrId={}, source={}, trader={}, verb={}, qty={}, price={}, type={}, tif={}",
-            instrId, MarketSource, TraderId, verb, qty, price, type, tif);
-
-        // Log failure to machine-readable format
-        ApplicationLogging.logOrderEvent(
-            "FAILED", 
-            MarketSource, 
-            TraderId, 
-            instrId, 
-            verb, 
-            qty, 
-            price, 
-            type, 
-            tif, 
-            -1,  // No request ID assigned
-            null // No order ID assigned
-        );
+        // Get or create a quote for this instrument
+        ActiveQuote quote = orderRepository.getQuote(instrId);
+        
+        // Update the quote with order information
+        if (quote != null) {
+            if ("Buy".equals(verb)) {
+                quote.setBidVenue(marketSource, traderId, instrId);
+                quote.setBidOrder(order, "DEFAULT", price);
+                quote.setBidActive(true);
+            } else {
+                quote.setAskVenue(marketSource, traderId, instrId);
+                quote.setAskOrder(order, "DEFAULT", price);
+                quote.setAskActive(true);
+            }
         }
+        
+        LOGGER.info("Order created successfully: {}", order.getMyReqId());
+    } else {
+        LOGGER.error("Failed to create order");
+    }
+    
     return order;
-  }
+}
+
 
   /**
    * Handles notification of a best price update.
@@ -1941,7 +1656,7 @@ public void onFullUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolean isSna
                 best.getBid(), best.getBidSrc(),
                 cash_gc, reg_gc);
 
-            latestBestByInstrument.put(best.getId(), best);
+            orderRepository.storeBestPrice(best.getId(), best);
 
             // Call marketMaker.best() if it's available and initialized
             if (marketMaker != null) {
@@ -1968,8 +1683,17 @@ public void onFullUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolean isSna
     }
     
     public Map<String, Best> getLatestBestByInstrument() {
-        return latestBestByInstrument;
+        // Create view from repository data
+        Map<String, Best> result = new HashMap<>();
+        for (String id : orderRepository.getTrackedInstruments()) {
+            Best best = orderRepository.getLatestBest(id);
+            if (best != null) {
+                result.put(id, best);
+            }
+        }
+        return Collections.unmodifiableMap(result);
     }
+
   /**
    * Handles changes to the order chain.
    * For new records, sets up subscriptions to receive updates.
@@ -1988,7 +1712,7 @@ private void initializeHeartbeat() {
             status.put("application", "OrderManagementUAT");
             status.put("state", isSystemStopped ? "STOPPED" : "RUNNING");
             status.put("continuousTrading", continuousTradingEnabled);
-            status.put("activeOrders", orders.size());
+            status.put("activeOrders", orderRepository.getStatistics().get("totalOrders"));
 
             // Add market maker status
             if (marketMaker != null) {
@@ -2000,8 +1724,8 @@ private void initializeHeartbeat() {
             int instrumentCount = depthListener != null ? 
                 depthListener.getInstrumentCount() : 0;
             status.put("instruments", instrumentCount);
-            status.put("cached orders", orders.size());
-            status.put("latest best prices", latestBestByInstrument.size());
+            status.put("cached orders", orderRepository.getStatistics().get("totalOrders"));
+            status.put("latest best prices", orderRepository.getLatestBestCount());
             
             publishToRedis(HEARTBEAT_CHANNEL, status);
             
@@ -2141,8 +1865,11 @@ private void setupPatternSubscriptionMonitor() {
     
     try {
         // Create a copy of the orders map to avoid concurrent modification
-        Map<Integer, MarketOrder> ordersCopy = new HashMap<>(orders);
-        int expiredCount = 0;
+        Collection<MarketOrder> orderCollection = orderRepository.getAllOrders();
+        Map<Integer, MarketOrder> ordersCopy = new HashMap<>();
+        for (MarketOrder order : orderCollection) {
+            ordersCopy.put(order.getMyReqId(), order);
+        }        int expiredCount = 0;
         LOGGER.info("Checking for expired orders - currently tracking {} orders", ordersCopy.size());
 
         for (MarketOrder order : ordersCopy.values()) {
@@ -2457,7 +2184,11 @@ public void cancelAllOrders() {
     LOGGER.info("Cancelling all outstanding orders");
 
     // Create a copy of the orders map to avoid concurrent modification
-    Map<Integer, MarketOrder> ordersCopy = new HashMap<>(orders);
+    Collection<MarketOrder> orderCollection = orderRepository.getAllOrders();
+    Map<Integer, MarketOrder> ordersCopy = new HashMap<>();
+    for (MarketOrder order : orderCollection) {
+        ordersCopy.put(order.getMyReqId(), order);
+    }
     for (MarketOrder order : ordersCopy.values()) {
         // Skip cancel requests
         if ("Cancel".equals(order.getVerb())) {
