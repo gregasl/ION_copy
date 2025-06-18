@@ -69,6 +69,9 @@ public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener {
    */
   private static int reqId = 0;
 
+  private long standardizedTimestamp; // Epoch milliseconds
+  private String standardizedTimestampStr; // ISO 8601 format
+
   /**
    * Creates a new market order by calling the VCMIOrderAdd181 function on the gateway.
    * This is the main entry point for creating orders and registering a listener for updates.
@@ -592,6 +595,22 @@ public String getVerb() {
       return System.currentTimeMillis() - creationTimestamp;
   }
   
+  public long getStandardizedTimestamp() {
+      return standardizedTimestamp;
+  }
+
+  public void setStandardizedTimestamp(long timestamp) {
+      this.standardizedTimestamp = timestamp;
+  }
+
+  public String getStandardizedTimestampStr() {
+      return standardizedTimestampStr;
+  }
+
+  public void setStandardizedTimestampStr(String timestampStr) {
+      this.standardizedTimestampStr = timestampStr;
+  }
+
   /**
    * Sets the active status of this order based on MKV updates
    * 
