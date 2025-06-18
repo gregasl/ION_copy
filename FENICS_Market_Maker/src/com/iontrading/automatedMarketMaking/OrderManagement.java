@@ -319,7 +319,7 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
       // Initialize centralized logging before anything else
       try {
           System.out.println("### STARTUP: Beginning application initialization");
-    	  if (!ApplicationLogging.initialize("MarketMaker")) {
+    	  if (!ApplicationLogging.initialize("automatedMarketMaking")) {
     		  System.err.println("Failed to initialize logging, exiting");
     		  System.exit(1);
     	  }
@@ -1405,7 +1405,7 @@ public void onFullUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolean isSna
         boolean currentlyActive = "Yes".equals(active);
 
         boolean thisApp = appName.equals("automatedMarketMaking");
-
+        LOGGER.info("Processing order from app: {}", appName);
         boolean isEligible = bondEligibilityListener.isIdEligible(Id);
         
         if (!thisApp) {
@@ -1449,12 +1449,15 @@ public void onFullUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolean isSna
         }
 
         ActiveQuote quote = orderRepository.getQuote(Id);
+        boolean wasPriorQuoteActive = false;
 
         // Update order status in ActiveQuote
         if (quote != null) {
             if ("Buy".equals(VerbStr)) {
+                wasPriorQuoteActive = quote.isBidActive();
                 quote.setBidActive(currentlyActive);
             } else if ("Sell".equals(VerbStr)) {
+                wasPriorQuoteActive = quote.isAskActive();
                 quote.setAskActive(currentlyActive);
             }
         }
@@ -1476,7 +1479,7 @@ public void onFullUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolean isSna
         }
 
             // Process transition from active to inactive (order filled/cancelled)
-        if (currentlyActive == false) {
+        if (currentlyActive == false && wasPriorQuoteActive == true) {
             LOGGER.info("Order status change detected for origId={}: ActiveStr changed to No", origId);
                 
             // Continue with existing hedging logic
@@ -1521,6 +1524,10 @@ public void onFullUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolean isSna
             }
             // Now we use the market variable to get the trader
             String trader = getTraderForVenue(market);
+            if (trader == null || trader.isEmpty()) {
+                LOGGER.warn("No trader found for market: {}", market);
+                return; // Cannot hedge without a trader
+            }
             String hedgeDirection = null;
             if (VerbStr.equals("Buy")) {
                 hedgeDirection = "Sell"; // Hedge buy with sell
@@ -1539,8 +1546,12 @@ public void onFullUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolean isSna
             }
 
             String nativeId = getNativeInstrumentId(Id, market, false);
-
-            if (trader != null && orderPrice > 0.0 && qtyHit > 0.0) {
+            if (nativeId == null || nativeId.isEmpty()) {
+                LOGGER.warn("No native ID found for instrument: {}, market: {}", Id, market);
+                return; // Cannot hedge without a native ID
+            }
+            
+            if (orderPrice > 0.0 && qtyHit > 0.0) {
                 LOGGER.info("Preparing hedging order before self match: market={}, trader={}, Id={}, nativeId={}, verb={}, qtyFilled={}, price={}",
                     market, trader, Id, nativeId, hedgeDirection, qtyHit, orderPrice);
                 if (hedgeDirection.equals("Buy")) {
@@ -1561,6 +1572,8 @@ public void onFullUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolean isSna
             } else {
                 LOGGER.warn("Cannot process hedge: trader={}, orderPrice={}, qtyHit={}", trader, orderPrice, qtyHit);
             }
+        } else {
+            LOGGER.warn("Hedging not applicable for Id={}, market={}, Verb={}, currentlyActive={}, priorActive={}", Id, src, VerbStr, currentlyActive, wasPriorQuoteActive);
         }
     } catch (Exception e) {
         LOGGER.error("Error processing order update: {}", e.getMessage(), e);
