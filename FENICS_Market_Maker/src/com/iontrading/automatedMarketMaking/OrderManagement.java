@@ -1478,8 +1478,8 @@ public void onFullUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolean isSna
             orderRepository.updateOrderStatus(Id, VerbStr, false);
         }
 
-            // Process transition from active to inactive (order filled/cancelled)
-        if (currentlyActive == false && wasPriorQuoteActive == true) {
+            // Only process first transition from active to inactive (this is needed as get duplicate Order messages) and requires a Complete or Partial fill
+        if (currentlyActive == false && wasPriorQuoteActive == true && (qtyStatusStr.equals("Cf") || qtyStatusStr.equals("Pf"))) {
             LOGGER.info("Order status change detected for origId={}: ActiveStr changed to No", origId);
                 
             // Continue with existing hedging logic
