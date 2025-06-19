@@ -2514,6 +2514,101 @@ public class MarketMaker implements IOrderManager {
         }
     }
 
+    /**
+     * Implements the asynchronous shutdown process for the market maker component.
+     * This is called as part of the first phase of the platform's two-phase shutdown.
+     * 
+     * @param phase The shutdown phase (1 for initial preparation, 2 for final cleanup)
+     * @return true if ready to stop, false if more processing is needed
+     */
+    public boolean asyncShutdown(int phase) {
+        if (LOGGER.isInfoEnabled()) {
+            LOGGER.info("MarketMaker async shutdown phase {}", phase);
+        }
+        
+        try {
+            if (phase == 1) {
+                // First phase: disable trading but don't cancel orders yet
+                if (LOGGER.isInfoEnabled()) {
+                    LOGGER.info("Async shutdown phase 1: Preparing for shutdown");
+                }
+                
+                // Disable market making to prevent new orders
+                this.enabled = false;
+                
+                // Stop the scheduler to prevent any new tasks
+                if (scheduler != null && !scheduler.isShutdown()) {
+                    if (LOGGER.isInfoEnabled()) {
+                        LOGGER.info("Shutting down market maker scheduler");
+                    }
+                    
+                    List<Runnable> pendingTasks = scheduler.shutdownNow();
+                    if (LOGGER.isInfoEnabled()) {
+                        LOGGER.info("Cancelled {} pending scheduler tasks", pendingTasks.size());
+                    }
+                }
+                
+                // Signal that we need another phase
+                return false;
+                
+            } else if (phase == 2) {
+                // Second phase: Cancel all orders and clean up
+                if (LOGGER.isInfoEnabled()) {
+                    LOGGER.info("Async shutdown phase 2: Cancelling orders and cleaning up");
+                }
+                
+                // Check if MKV is still available for cancelling orders
+                boolean mkvAvailable = false;
+                try {
+                    Mkv mkv = Mkv.getInstance();
+                    if (mkv != null) {
+                        MkvPublishManager pm = mkv.getPublishManager();
+                        mkvAvailable = (pm != null);
+                    }
+                } catch (Exception e) {
+                    if (LOGGER.isWarnEnabled()) {
+                        LOGGER.warn("MKV API is already stopped, cannot get instance");
+                    }
+                }
+                
+                if (mkvAvailable) {
+                    // Cancel all orders with a short timeout
+                    if (LOGGER.isInfoEnabled()) {
+                        LOGGER.info("MKV still available, cancelling all active quotes");
+                    }
+                    
+                    boolean success = cancelAllOrders(5000);
+                    if (LOGGER.isInfoEnabled()) {
+                        LOGGER.info("Order cancellation complete: success={}", success);
+                    }
+                }
+                
+                // Final cleanup of data structures
+                activeQuotes.clear();
+                trackedInstruments.clear();
+                orderIdToReqIdMap.clear();
+                instrumentUpdateCounters.clear();
+                
+                if (LOGGER.isInfoEnabled()) {
+                    LOGGER.info("Async shutdown phase 2 complete");
+                }
+                
+                // Signal that we're done
+                return true;
+            } else {
+                if (LOGGER.isWarnEnabled()) {
+                    LOGGER.warn("Unknown async shutdown phase: {}", phase);
+                }
+                return true; // Default to ready to stop for unknown phases
+            }
+        } catch (Exception e) {
+            if (LOGGER.isErrorEnabled()) {
+                LOGGER.error("Error during market maker async shutdown phase {}: {}", phase, e.getMessage(), e);
+            }
+            return true; // Return ready to stop if we encounter an error
+        }
+    }
+
     // Add a method to check if shutdown is already handled
     private boolean markShutdownHandled() {
         synchronized (this) {
