@@ -1648,6 +1648,7 @@ private void handleResumeCommand(Map<String, Object> controlMessage) {
                         "orderBidSize={}, reg_gc={}, ask={}, minsizeDiff={}, orderAskSize={}",
                         id, isCash ? "CASH" : "REG", ask, bid, orderBidSize, reg_gc, ask, minsizeDiff, orderAskSize);
                 }
+                return;
             }
         } 
 
