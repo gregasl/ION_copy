@@ -29,14 +29,12 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
-import java.text.SimpleDateFormat;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.iontrading.lowlatency.net.bytebuddy.dynamic.TypeResolutionStrategy.Active;
 import com.iontrading.mkv.Mkv;
 import com.iontrading.mkv.MkvChain;
 import com.iontrading.mkv.MkvObject;
@@ -51,6 +49,10 @@ import com.iontrading.mkv.events.MkvPublishListener;
 import com.iontrading.mkv.events.MkvRecordListener;
 import com.iontrading.mkv.exceptions.MkvException;
 import com.iontrading.mkv.qos.MkvQoS;
+import com.iontrading.mkv.enums.MkvPlatformEvent;
+import com.iontrading.mkv.enums.MkvShutdownMode;
+import com.iontrading.mkv.events.MkvPlatformListener;
+import com.iontrading.mkv.MkvComponent;
 
 import redis.clients.jedis.Jedis;
 import redis.clients.jedis.JedisPubSub;
@@ -179,16 +181,6 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
   // Market maker configuration
   private MarketMakerConfig marketMakerConfig;
 
-  //Map to track which instrument pairs we've already traded
-  private final Map<String, Long> lastTradeTimeByInstrument = 
-    Collections.synchronizedMap(new LinkedHashMap<String, Long>(16, 0.75f, true) {
-        @Override
-        protected boolean removeEldestEntry(Map.Entry<String, Long> eldest) {
-            return size() > 10000;
-        }
-    });
-  //Minimum time between trades for the same instrument (milliseconds)
-  private static final long MIN_TRADE_INTERVAL_MS = 200; // 200 milliseconds
   //Flag to enable or disable continuous trading
   private boolean continuousTradingEnabled = true;
   //Timer for periodic market rechecks
@@ -214,7 +206,6 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
   private final Object subscriptionLock = new Object();
  
   private final ScheduledExecutorService heartbeatScheduler = Executors.newScheduledThreadPool(1);
-
   private final ScheduledExecutorService orderExpirationScheduler = Executors.newScheduledThreadPool(1);
   
   private static final ThreadLocal<StringBuilder> messageBuilder = 
@@ -250,6 +241,9 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
   private final Map<String, Object> orderActiveStatusMap = new ConcurrentHashMap<>();
   private static final String STATUS_KEY_PREFIX = "status:";
   private static final String TRACKING_KEY_PREFIX = "track:";
+
+  private final AtomicInteger readyToStop = new AtomicInteger(2);
+  private boolean asyncShutdownInProgress = false;
 
   private final Map<String, Best> latestBestByInstrument = new ConcurrentHashMap<String, Best>() {
     private static final int MAX_SIZE = 5000;
@@ -338,181 +332,195 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
       }
   }
   
-  /**
-   * Main method to start the application.
-   * Initializes the MKV API and sets up subscriptions.
-   */
-  public static void main(String[] args) {
-      // Initialize centralized logging before anything else
-      try {
-          System.out.println("### STARTUP: Beginning application initialization");
-    	  if (!ApplicationLogging.initialize("MarketMaker")) {
-    		  System.err.println("Failed to initialize logging, exiting");
-    		  System.exit(1);
-    	  }
+    /**
+     * Main method to start the application.
+     * Initializes the MKV API and sets up subscriptions.
+     */
+    public static void main(String[] args) {
+        // Initialize centralized logging before anything else
+        try {
+            System.out.println("### STARTUP: Beginning application initialization");
+            if (!ApplicationLogging.initialize("MarketMaker")) {
+                System.err.println("Failed to initialize logging, exiting");
+                System.exit(1);
+            }
 
-    	  LOGGER.info("Starting OrderManagement");
-      } catch (Exception e) {
-    	  LOGGER.error("Failed to start: {}", e.getMessage(), e);
-      }
-
-    System.out.println("### DIRECT: Creating BondEligibilityListener instance");
-    BondEligibilityListener bondEligibilityListener = new BondEligibilityListener();
-
-    System.out.println("### DIRECT: Creating OrderManagement instance");
-    // Create the order management instance
-    OrderManagement om = new OrderManagement();
-    System.out.println("### DIRECT: OrderManagement instance created");    
-    
-    try {
-    	// Get thread information
-    	Thread[] threads = new Thread[Thread.activeCount()];
-    	Thread.enumerate(threads);
-    	System.out.println("### DIRECT: Current threads:");
-    	for (Thread t : threads) {
-    	    if (t != null) {
-    	        System.out.println("  - " + t.getName() + " (daemon: " + t.isDaemon() + ", alive: " + t.isAlive() + ", state: " + t.getState() + ")");
-    	    }
-    	}
-    	
-    	AsyncLoggingManager manager = AsyncLoggingManager.getInstance();
-    	System.out.println("### DIRECT: AsyncLoggingManager instance: " + manager);
-    	System.out.println("### DIRECT: Current queue size: " + manager.getCurrentQueueSize());
-    	System.out.println("### DIRECT: Messages queued: " + manager.getMessagesQueued());
-    	System.out.println("### DIRECT: Messages processed: " + manager.getMessagesProcessed());
-      
-      // Set up the Quality of Service for the MKV API
-      MkvQoS qos = new MkvQoS();
-      qos.setArgs(args);
-      qos.setPublishListeners(new MkvPublishListener[] { om });
-
-      LOGGER.info("Starting MKV API");
-      // Start the MKV API if it hasn't been started already
-      try {
-          Mkv existingMkv = Mkv.getInstance();
-          if (existingMkv == null) {
-              Mkv.start(qos);
-              LOGGER.info("Mkv started successfully.");
-          } else {
-              LOGGER.info("MKV API already started");
-              existingMkv.getPublishManager().addPublishListener(om);
-        }
+            LOGGER.info("Starting OrderManagement");
         } catch (Exception e) {
-            LOGGER.warn("Failed to start Mkv", e);
+            LOGGER.error("Failed to start: {}", e.getMessage(), e);
         }
-      // Initialize DepthListener after MKV is started
-      depthListener = new DepthListener(om);
-      LOGGER.info("DepthListener initialized");
 
-      // DepthListener now handles instrument data loading internally
-      // and reports status through its health monitoring methods
-      LOGGER.info("Instrument data will be loaded by DepthListener automatically");
+        System.out.println("### DIRECT: Creating BondEligibilityListener instance");
+        BondEligibilityListener bondEligibilityListener = new BondEligibilityListener();
 
-      // Initialize the market maker component
-      LOGGER.info("Initializing market maker component");
-      om.initializeMarketMaker();
+        System.out.println("### DIRECT: Creating OrderManagement instance");
+        // Create the order management instance
+        OrderManagement om = new OrderManagement();
+        System.out.println("### DIRECT: OrderManagement instance created");    
+        
+        try {
+            // Get thread information
+            Thread[] threads = new Thread[Thread.activeCount()];
+            Thread.enumerate(threads);
+            System.out.println("### DIRECT: Current threads:");
+            for (Thread t : threads) {
+                if (t != null) {
+                    System.out.println("  - " + t.getName() + " (daemon: " + t.isDaemon() + ", alive: " + t.isAlive() + ", state: " + t.getState() + ")");
+                }
+            }
+            
+            AsyncLoggingManager manager = AsyncLoggingManager.getInstance();
+            System.out.println("### DIRECT: AsyncLoggingManager instance: " + manager);
+            System.out.println("### DIRECT: Current queue size: " + manager.getCurrentQueueSize());
+            System.out.println("### DIRECT: Messages queued: " + manager.getMessagesQueued());
+            System.out.println("### DIRECT: Messages processed: " + manager.getMessagesProcessed());
 
-      // Set up depth subscriptions - this will trigger the instrument data loading
-      LOGGER.info("Setting up depths subscriptions");
-      om.subscribeToDepths();
+            // Initialize MKV API with async shutdown support
+            om.initializeMkvWithAsyncShutdown(args);
 
-      LOGGER.info("Completing market maker initialization");
-      om.completeMarketMakerInitialization();
+            // Initialize DepthListener after MKV is started
+            depthListener = new DepthListener(om);
+            LOGGER.info("DepthListener initialized");
 
-    } catch (Exception e) {
-      LOGGER.warn("Failed to start MKV API: {}", e.getMessage(), e);
-      LOGGER.warn("Error details", e);
-    }
-  }
-    
-  /**
-   * Gets the native instrument ID for a source.
-   * This delegates to the DepthListener.
-   * 
-   * @param instrumentId The instrument identifier
-   * @param sourceId The source identifier
-   * @return The native instrument ID or null if not found
-   */
-  public static String getNativeInstrumentId(String instrumentId, String sourceId, Boolean isAON) {
-    if (depthListener != null) {
-      return depthListener.getInstrumentFieldBySourceString(instrumentId, sourceId, isAON);
-    }
-    LOGGER.warn("DepthListener not initialized - cannot get native instrument ID");
-    return null;
-  }
-  
-  /**
-   * Map to cache market orders by their request ID.
-   * This allows tracking orders throughout their lifecycle.
-   */
-  private final Map<Integer, MarketOrder> orders = new HashMap<>();
+            // DepthListener now handles instrument data loading internally
+            // and reports status through its health monitoring methods
+            LOGGER.info("Instrument data will be loaded by DepthListener automatically");
 
-  /**
-   * Unique identifier for this instance of the application.
-   * Used to identify orders placed by this component.
-   */
-  private final String applicationId;
+            // Initialize the market maker component
+            LOGGER.info("Initializing market maker component");
+            om.initializeMarketMaker();
 
-/**
- * Creates a new instance of OrderManagement with a new BondEligibilityListener.
- * This constructor maintains backward compatibility.
- */
-public OrderManagement() {
-    this(new BondEligibilityListener());
-}
+            // Set up depth subscriptions - this will trigger the instrument data loading
+            LOGGER.info("Setting up depths subscriptions");
+            om.subscribeToDepths();
 
-  /**
-   * Creates a new instance of OrderManagement.
-   * Generates a unique application ID based on the current time.
-   */
-  public OrderManagement(BondEligibilityListener bondEligibilityListener) {
-    configureLogging(false, null);
+            LOGGER.info("Completing market maker initialization");
+            om.completeMarketMakerInitialization();
 
-    this.bondEligibilityListener = bondEligibilityListener;
-
-    applicationId = "Java_Order_Manager"; 
-    LOGGER.info("Application ID: {}", applicationId);
-    
-    initializeRedisConnection();
-    
-    // Add shutdown hook for Redis pool
-    Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-        if (jedisPool != null) {
-            LOGGER.info("Shutting down Redis connection pool");
-            jedisPool.destroy(); // Use destroy() for older Jedis versions
+        } catch (Exception e) {
+            LOGGER.warn("Failed to start MKV API: {}", e.getMessage(), e);
+            LOGGER.warn("Error details", e);
         }
-    }));
-    
-    // Initialize venue to trader mapping
-    initializeTraderMap();
-
-    // Initialize Redis control channel listener
-    initializeRedisControlListener();
-    
-    // Initialize heartbeats
-    initializeHeartbeat();
-
-    initializeSignalHandlers();
-
-}
-
-  /**
-   * Returns the unique application ID for this instance.
-   * This is used to identify orders placed by this component.
-   */
-  public String getApplicationId() {
-    return applicationId;
-  }
+    }
+        
+    /**
+     * Gets the native instrument ID for a source.
+     * This delegates to the DepthListener.
+     * 
+     * @param instrumentId The instrument identifier
+     * @param sourceId The source identifier
+     * @return The native instrument ID or null if not found
+     */
+    public static String getNativeInstrumentId(String instrumentId, String sourceId, Boolean isAON) {
+        if (depthListener != null) {
+        return depthListener.getInstrumentFieldBySourceString(instrumentId, sourceId, isAON);
+        }
+        LOGGER.warn("DepthListener not initialized - cannot get native instrument ID");
+        return null;
+    }
   
-  /**
-   * Gets the DepthListener instance.
-   * 
-   * @return The DepthListener or null if not initialized
-   */
-  public static DepthListener getDepthListener() {
-      return depthListener;
-  }
-  
+    /**
+     * Map to cache market orders by their request ID.
+     * This allows tracking orders throughout their lifecycle.
+     */
+    private final Map<Integer, MarketOrder> orders = new HashMap<>();
+
+    /**
+     * Unique identifier for this instance of the application.
+     * Used to identify orders placed by this component.
+     */
+    private final String applicationId;
+
+    /**
+     * Creates a new instance of OrderManagement with a new BondEligibilityListener.
+     * This constructor maintains backward compatibility.
+     */
+    public OrderManagement() {
+        this(new BondEligibilityListener());
+    }
+
+    /**
+     * Creates a new instance of OrderManagement.
+     * Generates a unique application ID based on the current time.
+     */
+    public OrderManagement(BondEligibilityListener bondEligibilityListener) {
+        configureLogging(false, null);
+
+        this.bondEligibilityListener = bondEligibilityListener;
+
+        applicationId = "Java_Order_Manager"; 
+        LOGGER.info("Application ID: {}", applicationId);
+        
+        initializeRedisConnection();
+        
+        // Add shutdown hook for Redis pool
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            if (jedisPool != null) {
+                LOGGER.info("Shutting down Redis connection pool");
+                jedisPool.destroy(); // Use destroy() for older Jedis versions
+            }
+        }));
+        
+        // Initialize venue to trader mapping
+        initializeTraderMap();
+
+        // Initialize Redis control channel listener
+        initializeRedisControlListener();
+        
+        // Initialize heartbeats
+        initializeHeartbeat();
+
+        initializeSignalHandlers();
+
+    }
+
+    /**
+     * Returns the unique application ID for this instance.
+     * This is used to identify orders placed by this component.
+     */
+    public String getApplicationId() {
+        return applicationId;
+    }
+    
+    /**
+     * Gets the DepthListener instance.
+     * 
+     * @return The DepthListener or null if not initialized
+     */
+    public static DepthListener getDepthListener() {
+        return depthListener;
+    }
+    
+    /**
+     * Initializes MKV API with appropriate platform listeners for async shutdown.
+     * This should be called during startup before Mkv.start().
+     * 
+     * @param args Command line arguments to pass to MKV
+     */
+    public void initializeMkvWithAsyncShutdown(String[] args) {
+        try {
+            LOGGER.info("Initializing MKV API with async shutdown support");
+            
+            MkvQoS qos = new MkvQoS();
+            qos.setArgs(args);
+            qos.setPublishListeners(new MkvPublishListener[] { this });
+            
+            // Add the platform listener for async shutdown
+            qos.setPlatformListeners(new MkvPlatformListener[] { new OrderManagementPlatformListener() });
+            
+            // Start MKV with our QoS settings
+            Mkv existingMkv = Mkv.getInstance();
+            if (existingMkv == null) {
+                Mkv.start(qos);
+                LOGGER.info("MKV started with async shutdown support");
+            } else {
+                LOGGER.info("MKV API already started, adding our listeners");
+                existingMkv.getPublishManager().addPublishListener(this);
+            }
+        } catch (Exception e) {
+            LOGGER.error("Failed to initialize MKV with async shutdown: {}", e.getMessage(), e);
+        }
+    }
   
   // Initialize the mapping of venues to trader IDs
   private void initializeTraderMap() {
@@ -567,6 +575,9 @@ public OrderManagement() {
             LOGGER.info("SIGINT (Ctrl+C) received, starting controlled shutdown");
             
             try {
+                // Mark that we're shutting down
+                isShuttingDown = true;
+                
                 // Create a countdown latch to block the shutdown process
                 final CountDownLatch shutdownLatch = new CountDownLatch(1);
                 
@@ -578,10 +589,16 @@ public OrderManagement() {
                         // First cancel market maker orders
                         if (marketMaker != null) {
                             try {
-                                LOGGER.info("Cancelling market maker orders");
-                                marketMaker.cancelAllOrders(10000);
+                                // Use the asyncShutdown method for consistency
+                                LOGGER.info("Executing market maker shutdown phase 1");
+                                marketMaker.asyncShutdown(1);
+                                
+                                LOGGER.info("Executing market maker shutdown phase 2");
+                                marketMaker.asyncShutdown(2);
+                                
+                                LOGGER.info("Market maker shutdown complete");
                             } catch (Exception e) {
-                                LOGGER.error("Error cancelling market maker orders: {}", e.getMessage());
+                                LOGGER.error("Error during market maker shutdown: {}", e.getMessage());
                             }
                         }
                         
@@ -1031,6 +1048,104 @@ public OrderManagement() {
       LOGGER.debug("Subscription event for: {}", mkvObject.getName());
     }
   }
+
+    /**
+     * Platform listener implementation that handles the async shutdown process.
+     * This allows the application to gracefully shut down when requested by the daemon.
+     */
+    private class OrderManagementPlatformListener implements MkvPlatformListener {
+        @Override
+        public void onMain(MkvPlatformEvent event) {
+            switch (event.intValue()) {
+                case MkvPlatformEvent.START_code:
+                    LOGGER.info("MKV platform START event received");
+                    break;
+                    
+                case MkvPlatformEvent.STOP_code:
+                    LOGGER.info("MKV platform STOP event received");
+                    if (asyncShutdownInProgress) {
+                        LOGGER.info("Final STOP event received after async shutdown - completing shutdown process");
+                    }
+                    break;
+                    
+                case MkvPlatformEvent.SHUTDOWN_REQUEST_code:
+                    LOGGER.info("MKV platform SHUTDOWN_REQUEST event received - beginning async shutdown sequence");
+                    
+                    try {
+                        // First phase of the shutdown process
+                        asyncShutdownInProgress = true;
+                        
+                        // If we're not ready to stop yet, ask for an async shutdown
+                        if (readyToStop.decrementAndGet() > 0) {
+                            LOGGER.info("Not ready to stop - requesting async shutdown (pending phases: {})", readyToStop.get());
+                            
+                            // Start the graceful shutdown in a separate thread
+                            Thread shutdownThread = new Thread(() -> {
+                                try {
+                                    LOGGER.info("Beginning first phase of graceful shutdown...");
+                                    
+                                    // First prepare the market maker (disable but don't cancel orders yet)
+                                    if (marketMaker != null) {
+                                        LOGGER.info("Preparing market maker for shutdown");
+                                        marketMaker.prepareForShutdown();
+                                    }
+                                    
+                                    // Cancel market maker orders with a timeout
+                                    LOGGER.info("Cancelling market maker orders");
+                                    boolean cancelled = cancelMarketMakerOrders(10000);
+                                    LOGGER.info("Market maker order cancellation complete: all cancelled={}", cancelled);
+                                    
+                                    // Then cancel any remaining orders
+                                    LOGGER.info("Cancelling remaining orders");
+                                    cancelAllOrders();
+                                    
+                                    // Notify that we're ready for final shutdown
+                                    LOGGER.info("All orders cancelled, ready for final shutdown");
+                                    readyToStop.decrementAndGet();
+                                    
+                                    // Request a synchronous shutdown now that we're ready
+                                    LOGGER.info("Requesting synchronous shutdown to complete process");
+                                    Mkv.getInstance().shutdown(MkvShutdownMode.SYNC, "Component is stopping...");
+                                } catch (Exception e) {
+                                    LOGGER.error("Error during async shutdown sequence: {}", e.getMessage(), e);
+                                    
+                                    // Force sync shutdown if we hit an error
+                                    try {
+                                        Mkv.getInstance().shutdown(MkvShutdownMode.SYNC, "Component is stopping due to error...");
+                                    } catch (Exception ex) {
+                                        LOGGER.error("Failed to request sync shutdown: {}", ex.getMessage(), ex);
+                                    }
+                                }
+                            }, "AsyncShutdown-Thread");
+                            
+                            // Make sure this doesn't prevent JVM exit if it hangs
+                            shutdownThread.setDaemon(true);
+                            shutdownThread.start();
+                            
+                            // Request async shutdown to delay the process
+                            Mkv.getInstance().shutdown(MkvShutdownMode.ASYNC, "Not yet ready to stop, cancelling orders...");
+                        } else {
+                            // We're already ready to stop, so request a sync shutdown
+                            LOGGER.info("Ready to stop - requesting sync shutdown");
+                            Mkv.getInstance().shutdown(MkvShutdownMode.SYNC, "Component is stopping...");
+                        }
+                    } catch (MkvException e) {
+                        LOGGER.error("Error handling shutdown request: {}", e.getMessage(), e);
+                    }
+                    break;
+            }
+        }
+
+        @Override
+        public void onComponent(MkvComponent comp, boolean start) {
+            LOGGER.info("MKV component event: component={}, start={}", comp.getName(), start);
+        }
+
+        @Override
+        public void onConnect(String comp, boolean start) {
+            LOGGER.info("MKV connect event: component={}, start={}", comp, start);
+        }
+    }
 
   /**
    * Sets up subscriptions to depth records using a pattern-based approach.
@@ -2124,59 +2239,58 @@ private void setupPatternSubscriptionMonitor() {
     }
 }
 
-/**
- * Initiates shutdown process for the application.
- */
-public void initiateShutdown() {
-    // Mark as shutting down
-    isShuttingDown = true;
-    
-    // Trigger the full shutdown process
-    shutdown();
-}
-
-/**
- * Checks if the application is currently shutting down.
- * 
- * @return true if the application is shutting down, false otherwise
- */
-public boolean isShuttingDown() {
-    return isShuttingDown;
-}
-
-/**
- * Helper method to shutdown an executor service
- */
-private void shutdownExecutor(ExecutorService executor, String name) {
-    if (executor == null) {
-        return;
-    }
-    
-    try {
-        LOGGER.info("Shutting down {} executor", name);
-        executor.shutdown();
+    /**
+     * Initiates shutdown process for the application.
+     */
+    public void initiateShutdown() {
+        // Mark as shutting down
+        isShuttingDown = true;
         
-        if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
-            LOGGER.warn("{} executor did not terminate gracefully, forcing shutdown", name);
-            List<Runnable> pendingTasks = executor.shutdownNow();
-            LOGGER.warn("Cancelled {} pending tasks for {}", pendingTasks.size(), name);
-            
-            if (!executor.awaitTermination(2, TimeUnit.SECONDS)) {
-                LOGGER.error("{} executor did not terminate after forced shutdown", name);
-            }
-        }
-    } catch (InterruptedException e) {
-        LOGGER.warn("Interrupted while shutting down {} executor", name);
-        executor.shutdownNow();
-        Thread.currentThread().interrupt();
-    } catch (Exception e) {
-        LOGGER.error("Error shutting down {} executor: {}", name, e.getMessage(), e);
+        // Trigger the full shutdown process
+        shutdown();
     }
-}
 
     /**
-     * Performs a complete shutdown of the application with explicit MKV lifecycle control.
-     * Uses Thread.join() to ensure order cancellations complete before MKV shutdown.
+     * Checks if the application is currently shutting down.
+     * 
+     * @return true if the application is shutting down, false otherwise
+     */
+    public boolean isShuttingDown() {
+        return isShuttingDown;
+    }
+
+    /**
+     * Helper method to shutdown an executor service
+     */
+    private void shutdownExecutor(ExecutorService executor, String name) {
+        if (executor == null) {
+            return;
+        }
+        
+        try {
+            LOGGER.info("Shutting down {} executor", name);
+            executor.shutdown();
+            
+            if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
+                LOGGER.warn("{} executor did not terminate gracefully, forcing shutdown", name);
+                List<Runnable> pendingTasks = executor.shutdownNow();
+                LOGGER.warn("Cancelled {} pending tasks for {}", pendingTasks.size(), name);
+                
+                if (!executor.awaitTermination(2, TimeUnit.SECONDS)) {
+                    LOGGER.error("{} executor did not terminate after forced shutdown", name);
+                }
+            }
+        } catch (InterruptedException e) {
+            LOGGER.warn("Interrupted while shutting down {} executor", name);
+            executor.shutdownNow();
+            Thread.currentThread().interrupt();
+        } catch (Exception e) {
+            LOGGER.error("Error shutting down {} executor: {}", name, e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Updates the existing shutdown method to work with async shutdown
      */
     public void shutdown() {
         // Mark as shutting down
@@ -2184,8 +2298,32 @@ private void shutdownExecutor(ExecutorService executor, String name) {
         
         LOGGER.info("Starting application shutdown sequence");
         
+        // If async shutdown is in progress, this is being called as part
+        // of that process, so handle differently
+        if (asyncShutdownInProgress) {
+            LOGGER.info("Async shutdown in progress, performing resource cleanup only");
+            
+            // Clean up executors
+            shutdownExecutor(heartbeatScheduler, "Heartbeat scheduler");
+            shutdownExecutor(scheduler, "Market recheck scheduler");
+            shutdownExecutor(orderExpirationScheduler, "Order expiration scheduler");
+            
+            // Shutdown Redis connection pool
+            if (jedisPool != null) {
+                try {
+                    LOGGER.info("Closing Redis connection pool");
+                    jedisPool.destroy(); // Use destroy() for older Jedis versions
+                } catch (Exception e) {
+                    LOGGER.warn("Error closing Redis connection pool: {}", e.getMessage());
+                }
+            }
+            
+            LOGGER.info("Resource cleanup for async shutdown complete");
+            return;
+        }
+        
+        // Regular synchronous shutdown process:
         // First notify the market maker to prepare for shutdown 
-        // (disable but don't cancel orders yet)
         if (marketMaker != null) {
             try {
                 LOGGER.info("Preparing market maker for shutdown");
@@ -2195,7 +2333,7 @@ private void shutdownExecutor(ExecutorService executor, String name) {
             }
         }
         
-        // Cancel market maker orders directly through OrderManagement
+        // Cancel market maker orders
         try {
             LOGGER.info("Cancelling all market maker orders");
             boolean allCancelled = cancelMarketMakerOrders(10000);  // 10 second timeout
@@ -2206,7 +2344,7 @@ private void shutdownExecutor(ExecutorService executor, String name) {
             LOGGER.error("Error cancelling market maker orders: {}", e.getMessage(), e);
         }
         
-        // Now cancel all remaining orders (non-market maker orders)
+        // Cancel all remaining orders
         try {
             LOGGER.info("Cancelling all remaining orders");
             cancelAllOrders();
@@ -2214,7 +2352,7 @@ private void shutdownExecutor(ExecutorService executor, String name) {
             LOGGER.warn("Error cancelling orders during shutdown: {}", e.getMessage());
         }
         
-        // Complete market maker shutdown (cleanup without MKV operations)
+        // Complete market maker shutdown
         if (marketMaker != null) {
             try {
                 LOGGER.info("Completing market maker shutdown");
@@ -2371,60 +2509,61 @@ private void shutdownExecutor(ExecutorService executor, String name) {
         }
     }
 
-/**
- * Cancels all outstanding orders currently tracked by this OrderManagement instance.
- */
-public void cancelAllOrders() {
-    LOGGER.info("Cancelling all outstanding orders");
+    /*
+    * Cancels all outstanding orders currently tracked by this OrderManagement instance.
+    */
+    public void cancelAllOrders() {
+        LOGGER.info("Cancelling all outstanding orders");
 
-    // Create a copy of the orders map to avoid concurrent modification
-    Map<Integer, MarketOrder> ordersCopy = new HashMap<>(orders);
-    for (MarketOrder order : ordersCopy.values()) {
-        // Skip cancel requests
-        if ("Cancel".equals(order.getVerb())) {
-            continue;
-        }
-        
-        // Get necessary info for the cancel request
-        String orderId = order.getOrderId();
-        String marketSource = order.getMarketSource();
-        
-        // Check if the order is in a valid state for cancellation
-        if (orderId == null || orderId.isEmpty()) {
-            LOGGER.warn("Order ID is null or empty for order: {}", order);
-            continue;
-        }
-
-        // Only try to cancel if we have an order ID
-        if (orderId != null && !orderId.isEmpty()) {
-            String traderId = getTraderForVenue(marketSource);
-
-            LOGGER.info("Cancelling order: reqId={}, orderId={}", order.getMyReqId(), orderId);
+        // Create a copy of the orders map to avoid concurrent modification
+        Map<Integer, MarketOrder> ordersCopy = new HashMap<>(orders);
+        for (MarketOrder order : ordersCopy.values()) {
+            // Skip cancel requests
+            if ("Cancel".equals(order.getVerb())) {
+                continue;
+            }
             
-            // Issue the cancel request
-            MarketOrder cancelOrder = MarketOrder.orderCancel(
-                marketSource, 
-                traderId, 
-                orderId, 
-                this
-            );
+            // Get necessary info for the cancel request
+            String orderId = order.getOrderId();
+            String marketSource = order.getMarketSource();
             
-            if (cancelOrder != null) {
-                // Track the cancel request
-                removeOrder(order.getMyReqId());
+            // Check if the order is in a valid state for cancellation
+            if (orderId == null || orderId.isEmpty()) {
+                LOGGER.warn("Order ID is null or empty for order: {}", order);
+                continue;
+            }
+
+            // Only try to cancel if we have an order ID
+            if (orderId != null && !orderId.isEmpty()) {
+                String traderId = getTraderForVenue(marketSource);
+
+                LOGGER.info("Cancelling order: reqId={}, orderId={}", order.getMyReqId(), orderId);
                 
-                // Log to machine-readable format
-                ApplicationLogging.logOrderUpdate(
-                    "AUTO_CANCEL", 
-                    order.getMyReqId(),
-                    order.getOrderId(),
-                    "Order cancelled by system shutdown"
+                // Issue the cancel request
+                MarketOrder cancelOrder = MarketOrder.orderCancel(
+                    marketSource, 
+                    traderId, 
+                    orderId, 
+                    this
                 );
+                
+                if (cancelOrder != null) {
+                    // Track the cancel request
+                    removeOrder(order.getMyReqId());
+                    
+                    // Log to machine-readable format
+                    ApplicationLogging.logOrderUpdate(
+                        "AUTO_CANCEL", 
+                        order.getMyReqId(),
+                        order.getOrderId(),
+                        "Order cancelled by system shutdown"
+                    );
+                }
             }
         }
+        LOGGER.info("All outstanding orders cancelled");
     }
-    LOGGER.info("All outstanding orders cancelled");
-    }
+
     /**
      * Updates the market maker configuration
      * 

@@ -11,7 +11,6 @@
 package com.iontrading.samples.advanced.orderManagement;
 
 import java.util.Set;
-import java.util.Date;
 import java.util.HashSet;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -29,7 +28,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
-import java.text.SimpleDateFormat;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
@@ -49,6 +47,10 @@ import com.iontrading.mkv.events.MkvPublishListener;
 import com.iontrading.mkv.events.MkvRecordListener;
 import com.iontrading.mkv.exceptions.MkvException;
 import com.iontrading.mkv.qos.MkvQoS;
+import com.iontrading.mkv.MkvComponent;
+import com.iontrading.mkv.enums.MkvPlatformEvent;
+import com.iontrading.mkv.enums.MkvShutdownMode;
+import com.iontrading.mkv.events.MkvPlatformListener;
 
 import redis.clients.jedis.Jedis;
 import redis.clients.jedis.JedisPubSub;
@@ -58,7 +60,7 @@ import redis.clients.jedis.exceptions.JedisConnectionException;
  * OrderManagement is the main component of the system.
  */
 public class OrderManagement implements MkvPublishListener, MkvRecordListener,
-    MkvChainListener, IOrderManager {
+    MkvChainListener, IOrderManager, MkvPlatformListener {
     
   // Add logger for debugging
 private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.class);
@@ -250,6 +252,12 @@ private final Map<String, Long> lastTradeTimeByInstrument =
         return super.put(key, value);
     }
 };
+
+  private volatile boolean shutdownRequested = false;
+  private volatile int pendingOperations = 0;
+  private final Object shutdownLock = new Object();
+  private static final long SHUTDOWN_TIMEOUT_MS = 30000; // 30 seconds
+
   // Initialize Redis connection pool
   private void initializeRedisConnection() {
       if (!isRedisConnected) {
@@ -365,6 +373,7 @@ private final Map<String, Long> lastTradeTimeByInstrument =
       MkvQoS qos = new MkvQoS();
       qos.setArgs(args);
       qos.setPublishListeners(new MkvPublishListener[] { om });
+      qos.setPlatformListeners(new MkvPlatformListener[] { om });
 
       LOGGER.info("Starting MKV API");
       // Start the MKV API if it hasn't been started already
@@ -374,6 +383,7 @@ private final Map<String, Long> lastTradeTimeByInstrument =
       } else {
           LOGGER.info("MKV API already started");
           existingMkv.getPublishManager().addPublishListener(om);
+          existingMkv.getPlatform().addPlatformListener(om);
       }
 
       // Initialize DepthListener after MKV is started
@@ -743,6 +753,55 @@ private void handleResumeCommand(Map<String, Object> controlMessage) {
       LOGGER.debug("Subscription event for: {}", mkvObject.getName());
     }
   }
+
+  /**
+ * Implements the MkvPlatformListener.onMain method to handle platform events.
+ * This is where we'll handle the shutdown request from the daemon.
+ */
+@Override
+public void onMain(MkvPlatformEvent event) {
+    if (event.intValue() == MkvPlatformEvent.SHUTDOWN_REQUEST_code) {
+        LOGGER.warn("Received shutdown request from MKV platform");
+        
+        // Set the shutdown flag
+        shutdownRequested = true;
+        
+        try {
+            // Request async shutdown to give us time to clean up
+            Mkv.getInstance().shutdown(MkvShutdownMode.ASYNC, 
+                "OrderManagement is processing pending operations before shutdown...");
+            
+            // Start the graceful shutdown process in a separate thread
+            // to avoid blocking the platform event thread
+            Thread shutdownThread = new Thread(this::performGracefulShutdown, "Shutdown-Handler");
+            shutdownThread.setDaemon(true);
+            shutdownThread.start();
+        } catch (MkvException e) {
+            LOGGER.error("Error during async shutdown request: {}", e.getMessage(), e);
+            
+            // If the async shutdown request fails, try to continue with normal shutdown
+            initiateShutdown();
+        }
+    }
+}
+
+/**
+ * Implements the MkvPlatformListener.onComponent method.
+ * This is called when component state changes.
+ */
+@Override
+public void onComponent(MkvComponent comp, boolean start) {
+    LOGGER.info("Component {} {}", comp.getName(), start ? "started" : "stopped");
+}
+
+/**
+ * Implements the MkvPlatformListener.onConnect method.
+ * This is called when the connection state changes.
+ */
+@Override
+public void onConnect(String comp, boolean start) {
+    LOGGER.info("Connection to {} {}", comp, start ? "established" : "lost");
+}
 
   /**
    * Sets up subscriptions to depth records using a pattern-based approach.
@@ -1177,12 +1236,17 @@ private void handleResumeCommand(Map<String, Object> controlMessage) {
    * Implementation of IOrderManager.orderDead()
    */
   public void orderDead(MarketOrder order) {
-    if (LOGGER.isInfoEnabled()) {
-      LOGGER.info("Order is dead: orderId={}, reqId={}", order.getOrderId(), order.getMyReqId());
+    incrementPendingOperations();
+    try {
+        if (LOGGER.isInfoEnabled()) {
+            LOGGER.info("Order is dead: orderId={}, reqId={}", order.getOrderId(), order.getMyReqId());
+        }
+        // Remove the order from the cache
+        removeOrder(order.getMyReqId());
+    } finally {
+        decrementPendingOperations();
     }
-    // Remove the order from the cache
-    removeOrder(order.getMyReqId());
-  }
+}
   
   /**
    * Adds an order for the given instrument, quantity, and other parameters.
@@ -1194,110 +1258,50 @@ private void handleResumeCommand(Map<String, Object> controlMessage) {
       double price, String type, String tif) {
     
     // Check if the system is in stopped state
-    if (isSystemStopped) {
+    if (isSystemStopped  || isShutdownRequested()) {
         LOGGER.error("Order rejected - system is in STOPPED state: source={}, trader={}, instrId={}",
             MarketSource, TraderId, instrId);
-
-        // Log the rejection
-        ApplicationLogging.logOrderEvent(
-            "REJECTED_STOPPED", 
-            MarketSource, 
-            TraderId, 
-            instrId, 
-            verb, 
-            qty, 
-            price, 
-            type, 
-            tif, 
-            -1,  // No request ID assigned
-            null // No order ID assigned
-        );
-        
         return null;
     }
 
-	LOGGER.info("Attempting to create order: source={}, trader={}, instrId={}, verb={}, qty={}, price={}, type={}, tif={}",
-	             MarketSource, TraderId, instrId, verb, qty, price, type, tif);
+    // Increment pending operations before creating the order
+    incrementPendingOperations();
+    try {
+        LOGGER.info("Attempting to create order: source={}, trader={}, instrId={}, verb={}, qty={}, price={}, type={}, tif={}",
+                    MarketSource, TraderId, instrId, verb, qty, price, type, tif);
 
-    // Log to machine-readable format BEFORE sending the order
-    ApplicationLogging.logOrderEvent(
-        "SEND", 
-        MarketSource, 
-        TraderId, 
-        instrId, 
-        verb, 
-        qty, 
-        price, 
-        type, 
-        tif, 
-        -1,  // Request ID not assigned yet
-        null // Order ID not assigned yet
-    );
-	
-	// Create the order using the static factory method
-    MarketOrder order = MarketOrder.orderCreate(MarketSource, TraderId, instrId, verb, qty, price,
-        type, tif, this);
-    
-    if (order != null) {
-      // If creation succeeded, add the order to the cache
-      addOrder(order);
-      
-      // Update machine-readable log with the assigned request ID
-      ApplicationLogging.logOrderEvent(
-          "SENT", 
-          MarketSource, 
-          TraderId, 
-          instrId, 
-          verb, 
-          qty, 
-          price, 
-          type, 
-          tif, 
-          order.getMyReqId(),
-          order.getOrderId()
-      );
-      
-      // Check if there was an error code returned that indicates rejection
-      if (order.getErrCode() != 0) {
-        LOGGER.warn("Order rejected by market: reqId={}, instrId={}, errCode={}, errStr={}, source={}, trader={}",
-            order.getMyReqId(), instrId, order.getErrCode(), order.getErrStr(), MarketSource, TraderId);
-        // Log rejection to machine-readable format
-        ApplicationLogging.logOrderUpdate(
-            "REJECTED",
-            order.getMyReqId(),
-            order.getOrderId(),
-            "Error: " + order.getErrCode() + " - " + order.getErrStr()
-        );
+
+        // Create the order using the static factory method
+        MarketOrder order = MarketOrder.orderCreate(MarketSource, TraderId, instrId, verb, qty, price,
+            type, tif, this);
         
-        // Remove the rejected order from the cache since it won't be processed
-        removeOrder(order.getMyReqId());
-        return null; // Return null for rejected orders to indicate failure
-      }
-
-      if (LOGGER.isInfoEnabled()) {
-        LOGGER.info("Order created successfully: reqId={}, instrId={}", order.getMyReqId(), instrId);
-      }
-    } else {
-        // Log a more detailed error when order creation fails completely
-        LOGGER.error("Order creation failed: instrId={}, source={}, trader={}, verb={}, qty={}, price={}, type={}, tif={}",
-            instrId, MarketSource, TraderId, verb, qty, price, type, tif);
-
-        // Log failure to machine-readable format
-        ApplicationLogging.logOrderEvent(
-            "FAILED", 
-            MarketSource, 
-            TraderId, 
-            instrId, 
-            verb, 
-            qty, 
-            price, 
-            type, 
-            tif, 
-            -1,  // No request ID assigned
-            null // No order ID assigned
-        );
+        if (order != null) {
+        // If creation succeeded, add the order to the cache
+        addOrder(order);
+        
+        // Check if there was an error code returned that indicates rejection
+        if (order.getErrCode() != 0) {
+            LOGGER.warn("Order rejected by market: reqId={}, instrId={}, errCode={}, errStr={}, source={}, trader={}",
+                order.getMyReqId(), instrId, order.getErrCode(), order.getErrStr(), MarketSource, TraderId);
+            
+            // Remove the rejected order from the cache since it won't be processed
+            removeOrder(order.getMyReqId());
+            return null; // Return null for rejected orders to indicate failure
         }
-    return order;
+
+        if (LOGGER.isInfoEnabled()) {
+            LOGGER.info("Order created successfully: reqId={}, instrId={}", order.getMyReqId(), instrId);
+        }
+        } else {
+            // Log a more detailed error when order creation fails completely
+            LOGGER.error("Order creation failed: instrId={}, source={}, trader={}, verb={}, qty={}, price={}, type={}, tif={}",
+                instrId, MarketSource, TraderId, verb, qty, price, type, tif);
+            }
+        return order;
+    } finally {
+            // Decrement pending operations after processing the order
+            decrementPendingOperations();
+    }
   }
 
   /**
@@ -2288,38 +2292,25 @@ private void setupPatternSubscriptionMonitor() {
 public void initiateShutdown() {
     // Mark as shutting down
     isShuttingDown = true;
+    shutdownRequested = true;
+        
+    // Log that we're starting shutdown
+    LOGGER.warn("Initiating application shutdown");
     
-    // Trigger the full shutdown process
-    shutdown();
+    // Start the graceful shutdown process in a separate thread
+    Thread shutdownThread = new Thread(this::performGracefulShutdown, "Manual-Shutdown");
+    shutdownThread.setDaemon(true);
+    shutdownThread.start();
 }
 
 /**
  * Performs a complete shutdown of the application.
+ * @deprecated Use {@link #initiateShutdown()} instead.
  */
+@Deprecated
 public void shutdown() {
-    // Mark as shutting down
-    isShuttingDown = true;
-    
-    // Cancel all pending orders
-    cancelAllOrders();
-    
-    // Shutdown Redis connection pool
-    if (jedisPool != null) {
-        try {
-            LOGGER.info("Closing Redis connection pool");
-            jedisPool.destroy(); // Use destroy() for older Jedis versions
-        } catch (Exception e) {
-            LOGGER.warn("Error closing Redis connection pool: {}", e.getMessage());
-        }
-    }
-
-    // Shutdown all executors
-    shutdownExecutor(heartbeatScheduler, "Heartbeat scheduler");
-    shutdownExecutor(scheduler, "Market recheck scheduler");
-    shutdownExecutor(orderExpirationScheduler, "Order expiration scheduler");
-    
-    // Log successful shutdown
-    LOGGER.info("OrderManagement shutdown complete");
+    LOGGER.info("shutdown() called - redirecting to initiateShutdown()");
+    initiateShutdown();
 }
 
 /**
@@ -2368,6 +2359,166 @@ private void shutdownExecutorGracefully(ExecutorService executor, String name, i
         Thread.currentThread().interrupt();
     }
 }
+
+/**
+ * Performs a graceful shutdown of the OrderManagement component.
+ * This includes canceling all orders and cleaning up resources.
+ */
+private void performGracefulShutdown() {
+    LOGGER.warn("Starting graceful shutdown sequence");
+    
+    // Mark as shutting down
+    isShuttingDown = true;
+    
+    try {
+        // 1. Stop accepting new orders
+        isSystemStopped = true;
+        continuousTradingEnabled = false;
+        LOGGER.info("Stopped accepting new orders");
+        
+        // 2. Cancel all existing orders
+        cancelAllOrders();
+        LOGGER.info("All orders canceled");
+        
+        // 3. Wait for any pending operations to complete (with timeout)
+        waitForPendingOperations();
+        
+        // 4. Cleanup resources
+        cleanupResources();
+        
+        // 5. Signal that we're ready to stop
+        signalReadyToStop();
+        
+    } catch (Exception e) {
+        LOGGER.error("Error during graceful shutdown: {}", e.getMessage(), e);
+        
+        // Even if there's an error, try to signal that we're ready to stop
+        try {
+            signalReadyToStop();
+        } catch (Exception ex) {
+            LOGGER.error("Error signaling ready to stop: {}", ex.getMessage(), ex);
+        }
+    }
+}
+
+/**
+ * Waits for any pending operations to complete, with a timeout.
+ */
+private void waitForPendingOperations() {
+    LOGGER.info("Waiting for {} pending operations to complete", pendingOperations);
+    
+    long startTime = System.currentTimeMillis();
+    long endTime = startTime + SHUTDOWN_TIMEOUT_MS;
+    
+    while (pendingOperations > 0 && System.currentTimeMillis() < endTime) {
+        synchronized (shutdownLock) {
+            try {
+                // Wait for notification with timeout
+                long remainingTime = endTime - System.currentTimeMillis();
+                if (remainingTime > 0) {
+                    shutdownLock.wait(Math.min(1000, remainingTime));
+                }
+            } catch (InterruptedException e) {
+                LOGGER.warn("Interrupted while waiting for pending operations", e);
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        
+        // Log progress periodically
+        if (pendingOperations > 0 && System.currentTimeMillis() > startTime + 5000) {
+            startTime = System.currentTimeMillis();
+            LOGGER.info("Still waiting for {} pending operations to complete", pendingOperations);
+        }
+    }
+    
+    if (pendingOperations > 0) {
+        LOGGER.warn("Timeout waiting for {} pending operations to complete", pendingOperations);
+    } else {
+        LOGGER.info("All pending operations completed");
+    }
+}
+
+/**
+ * Cleans up resources before shutdown.
+ */
+private void cleanupResources() {
+    LOGGER.info("Cleaning up resources");
+    
+    // Shutdown Redis connection pool
+    if (jedisPool != null) {
+        try {
+            LOGGER.info("Closing Redis connection pool");
+            jedisPool.destroy(); // Use destroy() for older Jedis versions
+        } catch (Exception e) {
+            LOGGER.warn("Error closing Redis connection pool: {}", e.getMessage());
+        }
+    }
+
+    // Shutdown all executors
+    shutdownExecutor(heartbeatScheduler, "Heartbeat scheduler");
+    shutdownExecutor(scheduler, "Market recheck scheduler");
+    shutdownExecutor(orderExpirationScheduler, "Order expiration scheduler");
+    
+    LOGGER.info("Resource cleanup completed");
+}
+
+/**
+ * Signals to the MKV platform that we're ready to stop.
+ */
+private void signalReadyToStop() throws MkvException {
+    LOGGER.warn("OrderManagement is now ready to stop");
+    
+    // Signal that we're ready for a synchronous shutdown
+    Mkv.getInstance().shutdown(MkvShutdownMode.SYNC, "OrderManagement is ready to stop");
+}
+
+/**
+ * Increments the count of pending operations.
+ * This should be called when starting an operation that must complete
+ * before shutdown.
+ */
+public void incrementPendingOperations() {
+    synchronized (shutdownLock) {
+        pendingOperations++;
+        if (LOGGER.isDebugEnabled()) {
+            LOGGER.debug("Incremented pending operations to {}", pendingOperations);
+        }
+    }
+}
+
+/**
+ * Decrements the count of pending operations.
+ * This should be called when an operation completes.
+ */
+public void decrementPendingOperations() {
+    synchronized (shutdownLock) {
+        if (pendingOperations > 0) {
+            pendingOperations--;
+        }
+        
+        if (LOGGER.isDebugEnabled()) {
+            LOGGER.debug("Decremented pending operations to {}", pendingOperations);
+        }
+        
+        // If we're shutting down and there are no more pending operations,
+        // notify any waiting threads
+        if (shutdownRequested && pendingOperations == 0) {
+            shutdownLock.notifyAll();
+        }
+    }
+}
+
+/**
+ * Checks if shutdown has been requested.
+ * This can be used to avoid starting new operations during shutdown.
+ * 
+ * @return true if shutdown has been requested, false otherwise
+ */
+public boolean isShutdownRequested() {
+    return shutdownRequested;
+}
+
 /**
  * Cancels all outstanding orders currently tracked by this OrderManagement instance.
  */
