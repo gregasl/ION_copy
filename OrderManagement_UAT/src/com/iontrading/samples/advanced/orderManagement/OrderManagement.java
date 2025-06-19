@@ -1625,15 +1625,31 @@ private void handleResumeCommand(Map<String, Object> controlMessage) {
   		  	}
   	    	cashRegAdjustment = 0.00;
   	    } else if (isREG) {
-  	    	// for REG, we're not applying the avoid specials crosses logic
-//  		  	if (reg_gc != 0) {
-//  		  		if ((reg_gc - ask) > 2.0) {
-//  		  			return;
-//  		  		}
-//  		  	}
-  	    	cashRegAdjustment = 0.02;
+  	    	cashRegAdjustment = 0.0;
   	    }
-  	    
+
+        // calculate if trade is close enough to breakeven or not
+  	    if (isCash && (cash_gc != 0)) {
+            if (((ask-bid) * orderBidSize) - ((cash_gc - ask) * minsizeDiff) / orderAskSize < -0.005) {
+                // Trade is not close enough to breakeven
+                if (LOGGER.isInfoEnabled()) {
+                    LOGGER.info("ID: {} - Skipping trade as not close enough to breakeven: Details: [{}], {}, ask={}, bid={}, " +
+                        "orderBidSize={}, cash_gc={}, ask={}, minsizeDiff={}, orderAskSize={}",
+                        id, isCash ? "CASH" : "REG", ask, bid, orderBidSize, cash_gc, ask, minsizeDiff, orderAskSize);
+                }
+                return;
+            }
+        } else if (isREG && (reg_gc != 0)) {
+            if (((ask-bid) * orderBidSize) - ((reg_gc - ask) * minsizeDiff) / orderAskSize > 0.005) {
+                // Trade is not close enough to breakeven
+                if (LOGGER.isInfoEnabled()) {
+                    LOGGER.info("ID: {} - Skipping trade as not close enough to breakeven: Details: [{}], {}, ask={}, bid={}, " +
+                        "orderBidSize={}, reg_gc={}, ask={}, minsizeDiff={}, orderAskSize={}",
+                        id, isCash ? "CASH" : "REG", ask, bid, orderBidSize, reg_gc, ask, minsizeDiff, orderAskSize);
+                }
+            }
+        } 
+
         String reason = "";
   	    double spread = ask - bid;
   	    String securityType = isCash ? "CASH" : (isREG ? "REG" : "UNKNOWN");
