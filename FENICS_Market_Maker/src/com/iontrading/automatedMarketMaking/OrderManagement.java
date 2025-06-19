@@ -37,6 +37,7 @@ import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.iontrading.janino.p;
 import com.iontrading.lowlatency.net.bytebuddy.dynamic.TypeResolutionStrategy.Active;
 import com.iontrading.mkv.Mkv;
 import com.iontrading.mkv.MkvChain;
@@ -193,6 +194,8 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
   private static final String[] ORDER_FIELDS = MarketDef.ORDER_FIELDS;
   private static final String DEPTH_PATTERN = MarketDef.DEPTH_PATTERN;
   private static final String[] DEPTH_FIELDS = MarketDef.DEPTH_FIELDS;
+  private static final String LOGIN_PATTERN = MarketDef.LOGIN_PATTERN;
+  private static final String[] LOGIN_FIELDS = MarketDef.LOGIN_FIELDS;
   private static final String INSTRUMENT_PATTERN = MarketDef.INSTRUMENT_PATTERN;
   private static final String[] INSTRUMENT_FIELDS = MarketDef.INSTRUMENT_FIELDS;
     
@@ -1022,7 +1025,10 @@ public OrderManagement() {
             subscribeToPattern();
             
             // Subscribe to order records
-            subscribeToRecord();
+            subscribeToRecord(ORDER_PATTERN, ORDER_FIELDS);
+
+            // Subscribe to login records
+            subscribeToRecord(LOGIN_PATTERN, LOGIN_FIELDS);
 
             // Set up a monitor to check subscription status periodically
             setupPatternSubscriptionMonitor();
@@ -1033,6 +1039,104 @@ public OrderManagement() {
         }
     }
 
+    private void subscribeToRecord(String pattern, String[] fields) {
+        try {
+            // Get the publish manager to access patterns
+            MkvPublishManager pm = Mkv.getInstance().getPublishManager();
+        
+            // Look up the pattern object
+            MkvObject obj = pm.getMkvObject(pattern);
+
+            if (obj != null && obj.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
+                // Subscribe within a synchronized block
+                synchronized (subscriptionLock) {
+                    // Check again inside synchronization to avoid race conditions
+                    if (!isPatternSubscribed) {
+                        LOGGER.info("Found " + pattern + ", subscribing: {}", pattern);
+
+                        ((MkvPattern) obj).subscribe(fields, this);
+
+                        // Mark that we've successfully subscribed
+                        isPatternSubscribed = true;
+
+                        LOGGER.info("Successfully subscribed to {}", pattern);
+                    }
+                }
+            } else {
+                LOGGER.warn("Pattern not found: {}", pattern);
+
+                // Create a single shared listener instance instead of an anonymous one
+                final MkvPublishListener patternListener = new MkvPublishListener() {
+                    @Override
+                    public void onPublish(MkvObject mkvObject, boolean pub_unpub, boolean dwl) {
+                        // Only proceed if we're not already subscribed
+                        if (isPatternSubscribed) {
+                            return;
+                        }
+                        
+                        // Check if this is our pattern being published
+                        if (pub_unpub && mkvObject.getName().equals(pattern) &&
+                            mkvObject.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
+                            trySubscribeAndRemoveListener(mkvObject, pm, this, pattern, fields);
+                        }
+                    }
+                
+                    @Override
+                    public void onPublishIdle(String component, boolean start) {
+                        // Only proceed if we're not already subscribed
+                        if (isPatternSubscribed) {
+                            return;
+                        }
+                        
+                        // Try looking for the pattern again at idle time
+                        MkvObject obj = pm.getMkvObject(pattern);
+
+                        if (obj != null && obj.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
+                            trySubscribeAndRemoveListener(obj, pm, this, pattern, fields);
+                        }
+                    }
+                
+                    @Override
+                    public void onSubscribe(MkvObject mkvObject) {
+                        // Not needed
+                    }
+                };
+                
+                // Add the shared listener
+                pm.addPublishListener(patternListener);
+            }
+        } catch (Exception e) {
+            LOGGER.error("Error subscribing to pattern: {}", e.getMessage(), e);
+        }
+    }
+
+// Helper method to handle subscription and listener removal safely
+private void trySubscribeAndRemoveListener(MkvObject mkvObject, MkvPublishManager pm, MkvPublishListener listener, String pattern, String[] fields) {
+    synchronized (subscriptionLock) {
+        // Check again inside synchronization to avoid race conditions
+        if (isPatternSubscribed) {
+            return;
+        }
+        
+        try {
+            LOGGER.info("Pattern found, subscribing: {}", pattern);
+
+            ((MkvPattern) mkvObject).subscribe(fields, this);
+            isPatternSubscribed = true;
+
+            LOGGER.info("Successfully subscribed to pattern");
+
+            // Remove the listener now that we've subscribed - safely outside the callback
+            // but still inside synchronization
+            pm.removePublishListener(listener);
+        } catch (Exception e) {
+            LOGGER.error("Error subscribing to pattern: {}", e.getMessage(), e);
+        }
+    }
+  }
+
+
+    
 private void subscribeToRecord() {
     try {
         // Get the publish manager to access patterns
@@ -1377,12 +1481,32 @@ private void subscribeToPattern() {
     }
 
 /**
+ * Categorize and handle updates from CM_Order and CM_Login records.
+ * This method processes full updates and determines the type of record
+ */
+@Override
+public void onFullUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolean isSnap) {
+    try {
+        String recordName = mkvRecord.getName();
+            if (recordName.contains("CM_ORDER")) {
+                processOrderUpdate(mkvRecord, mkvSupply, isSnap);
+            } else if (recordName.contains("CM_LOGIN")) {
+                processLoginUpdate(mkvRecord, mkvSupply, isSnap);
+            } else {
+                LOGGER.warn("Received unexpected record type: {}", recordName);
+            }
+
+    } catch (Exception e) {
+        LOGGER.error("Error processing order update: {}", e.getMessage(), e);
+    }
+}
+
+/**
  * Process full updates for CM_ORDER records.
  * Detects order fills and triggers hedge trades when appropriate.
  * Also identifies and handles duplicate MarketMaker orders.
  */
-@Override
-public void onFullUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolean isSnap) {
+private void processOrderUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolean isSnap) {
     try {
         // Check if this is our order by looking at CompNameOrigin (should match our app ID)
         String active = mkvRecord.getValue("ActiveStr").getString();
@@ -1567,7 +1691,13 @@ public void onFullUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolean isSna
                     }
                     LOGGER.info("Hedging bid hit with sell order: nativeId={}, qtyHit={}", nativeId, qtyHit);
                 }
-                
+
+                // Check if venue is active
+                if (!orderRepository.isVenueActive(market)) {
+                    LOGGER.warn("Venue {} is not active for trader {}", market, trader);
+                    return;
+                }
+
                 addOrder(market, trader, nativeId, hedgeDirection, qtyHit, orderPrice, "Limit", "FAS");
             } else {
                 LOGGER.warn("Cannot process hedge: trader={}, orderPrice={}, qtyHit={}", trader, orderPrice, qtyHit);
@@ -1577,6 +1707,43 @@ public void onFullUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolean isSna
         }
     } catch (Exception e) {
         LOGGER.error("Error processing order update: {}", e.getMessage(), e);
+    }
+}
+
+private void processLoginUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolean isSnap) {
+    try {
+        //        public static String[] LOGIN_FIELDS = { "Id", "Src0", "Src1", "Src2", "Src3", "Src4", "Src5", "Src6", "Src7", "TStatusStr", "TStatusStr0", "TStatusStr1", "TStatusStr2", "TStatusStr3", "TStatusStr4", "TStatusStr5", "TStatusStr6", "TStatusStr7"};
+        String trader = mkvRecord.getValue("Id").getString();
+
+        if (!trader.equals("evan_gerhard")) {
+            LOGGER.debug("Ignoring login update from another trader: {}", trader);
+            return; // Not our trader
+        }
+
+        // for loop looping Src0 to Src7 checking if the Src is not null, the TstatusStr is not null and the TStatusStr is not "Unknown" and if its equal to "On"
+        // need to check valid venues against tStatusStr, can only send orders if TStatusStr is "On" for a venue, so have to store as a public concurrent hashmap
+        for (int i = 0; i < 8; i++) {
+            String src = mkvRecord.getValue("Src" + i).getString();
+            String tStatus = mkvRecord.getValue("TStatusStr" + i).getString();
+
+            if (src != null && !src.isEmpty() && tStatus != null && !tStatus.isEmpty()) {
+                //check if valid venue
+                if (!validVenues.contains(src)) {
+                    LOGGER.info("Not valid venue: {}", src);
+                    continue;
+                } else {
+                    if (tStatus.equals("On")){
+                        orderRepository.addVenueActive(src, true);
+                        LOGGER.info("Venue {} is now active for trader {}", src, trader);
+                    } else {
+                        orderRepository.addVenueActive(src, false);
+                        LOGGER.info("Venue {} is now inactive for trader {}", src, trader);
+                    }
+                }
+            }
+        }
+    } catch (Exception e) {
+        LOGGER.error("Error processing login update: {}", e.getMessage(), e);
     }
 }
 

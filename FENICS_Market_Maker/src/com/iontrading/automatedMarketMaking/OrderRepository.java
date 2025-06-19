@@ -44,6 +44,8 @@ public class OrderRepository {
 
     private final Map<String, Double> venueMinimumCache = new ConcurrentHashMap<>();
 
+    private final Map<String, Boolean> venueActive = new ConcurrentHashMap<>();
+
     private final Map<String, Long> lastTradeTimeByInstrument = 
     Collections.synchronizedMap(new LinkedHashMap<String, Long>(16, 0.75f, true) {
         @Override
@@ -118,6 +120,42 @@ public class OrderRepository {
         }
     }
     
+    /**
+     * Add a venue's active status
+     * 
+     * @param venue The venue identifier
+     * @param isActive True if the venue is active, false otherwise
+     */
+
+    public void addVenueActive(String venue, boolean isActive) {
+        if (venue == null || venue.isEmpty()) return;
+        
+        lock.writeLock().lock();
+        try {
+            venueActive.put(venue, isActive);
+            LOGGER.debug("Set venue {} active status to {}", venue, isActive);
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
+
+    /**
+     * Get the active status of a venue
+     * 
+     * @param venue The venue identifier
+     * @return True if the venue is active, false otherwise
+     */
+    public boolean isVenueActive(String venue) {
+        if (venue == null || venue.isEmpty()) return false;
+
+        lock.readLock().lock();
+        try {
+            return venueActive.getOrDefault(venue, false);
+        } finally {
+            lock.readLock().unlock();
+        }
+    }
+
     /**
      * Get an existing quote without creating a new one
      */

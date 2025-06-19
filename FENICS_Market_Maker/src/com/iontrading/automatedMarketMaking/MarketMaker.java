@@ -1382,9 +1382,6 @@ public class MarketMaker implements IOrderManager {
                     LOGGER.info("processMarketUpdate: Current ask price for {}: {}, update required: {}", 
                         Id, currentAskPrice, updateAsk);    
                     if (updateAsk) {
-                        // MarketOrder updatedAsk = updateOrder(
-                        //     Id, nativeInstrument, "Sell", decision.askPrice, 
-                        //     decision.askSource, hasActiveAsk ? existingQuote.getAskOrder() : null);
                         LOGGER.info("Cancelling existing ask order for {}: {}", Id, existingQuote.getAskOrder());
                         MarketOrder existingAskOrder = existingQuote.getAskOrder();
                         if (existingAskOrder != null) {
@@ -2237,6 +2234,12 @@ public class MarketMaker implements IOrderManager {
                 } else {
                     size = venueMinimum;
                 }
+            }
+
+            //check if venue is active
+            if (!orderRepository.isVenueActive(config.getMarketSource())) {
+                LOGGER.warn("Venue {} is not active for trader {}", config.getMarketSource(), fenicsTrader);
+                return;
             }
 
             MarketOrder order = orderManager.addOrder(
