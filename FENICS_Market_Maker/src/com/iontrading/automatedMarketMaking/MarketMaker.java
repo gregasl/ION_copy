@@ -1338,7 +1338,7 @@ public class MarketMaker implements IOrderManager {
                 if (decision.hasBid) {
                     // Check if we need to update bid
                     double currentBidPrice = existingQuote.getBidPrice();
-                    boolean updateBid = !hasActiveBid || (currentBidPrice != decision.bidPrice);
+                    boolean updateBid = (!hasActiveBid || ((currentBidPrice != decision.bidPrice) && (existingQuote.getBidAge() > 250)));
                     LOGGER.info("processMarketUpdate: Current bid price for {}: {}, update required: {}", 
                         Id, currentBidPrice, updateBid);
                     if (updateBid) {
@@ -1378,7 +1378,7 @@ public class MarketMaker implements IOrderManager {
                 if (decision.hasAsk) {
                     // Check if we need to update ask
                     double currentAskPrice = existingQuote.getAskPrice();
-                    boolean updateAsk = !hasActiveAsk || (currentAskPrice != decision.askPrice);
+                    boolean updateAsk = (!hasActiveAsk || ((currentAskPrice != decision.askPrice) && (existingQuote.getAskAge() > 250)));
                     LOGGER.info("processMarketUpdate: Current ask price for {}: {}, update required: {}", 
                         Id, currentAskPrice, updateAsk);    
                     if (updateAsk) {
@@ -2181,14 +2181,13 @@ public class MarketMaker implements IOrderManager {
      * @param cusip The CUSIP of the instrument
      * @param nativeInstrument The native instrument ID
      * @param verb The order direction ("Buy" or "Sell")
-     * @param size The order size
      * @param price The order price
      * @param referenceSource The source of the reference price
      */
     private void placeOrder(String Id, String nativeInstrument, String verb, 
                         double price, String referenceSource) {
         if (LOGGER.isInfoEnabled()) {
-            LOGGER.info("placeOrder: CUSIP={}, Native={}, Side={}, Price={}, Source={}", 
+            LOGGER.info("placeOrder: Id={}, Native={}, Side={}, Price={}, Source={}", 
                 Id, nativeInstrument, verb, price, referenceSource);
         }
 
@@ -2206,7 +2205,7 @@ public class MarketMaker implements IOrderManager {
             }
 
             if (LOGGER.isInfoEnabled()) {
-                LOGGER.info("Placing {} order on {}: {} ({}), size={}, price={}, reference={}", 
+                LOGGER.info("Placing {} order on {}: {} ({}), price={}, reference={}", 
                     verb, config.getMarketSource(), nativeInstrument, Id, price, referenceSource);
             }
 
@@ -2263,7 +2262,10 @@ public class MarketMaker implements IOrderManager {
                 if ("Buy".equals(verb)) {
                 // Update the ActiveQuote with bid information
                     quote.setBidOrder(order, referenceSource, price);
-                    
+
+                    LOGGER.info("Order saved in quote with the following details:  instrId={}, price={}, verb={}, reqId={}, source={}",
+                        order.getInstrId(), order.getPrice(), order.getVerb(), order.getMyReqId(), order.getMarketSource());
+
                     // Set source flags explicitly
                     quote.setGcBasedBid(referenceSource != null && referenceSource.startsWith("GC_"));
                     quote.setMarketBasedBid(referenceSource != null && 
@@ -2369,17 +2371,29 @@ public class MarketMaker implements IOrderManager {
         
         try {
             if (LOGGER.isInfoEnabled()) {
-                LOGGER.info("Cancelling order: Id={}, orderId={}, reqId={}", 
-                    Id, order.getOrderId(), order.getMyReqId());
+                LOGGER.info("Cancelling order: Id={}, orderId={}, reqId={}, marketSource={}, price={}, verb={}, instrId={}", 
+                    Id, order.getOrderId(), order.getMyReqId(), order.getMarketSource(), order.getPrice(), order.getVerb(), order.getInstrId());
             }
-            
-            // Check if the order is already dead/cancelled
-            if (order.isDead()) {
-                if (LOGGER.isInfoEnabled()) {
-                    LOGGER.info("Order already dead/cancelled: {}", order.getOrderId());
+
+            String marketSource = order.getMarketSource();
+            String traderId = orderManager.getTraderForVenue(marketSource);
+            String orderId = order.getOrderId();
+
+            // Send the cancel request
+            LOGGER.info("Sending cancel request for order: Id={}, orderId={}, reqId={}", 
+                Id, orderId, order.getMyReqId());
+            // Null checks prior to sending cancel request
+            if (marketSource == null || traderId == null || orderId == null) {
+                if (LOGGER.isErrorEnabled()) {
+                    LOGGER.error("Cannot cancel order: missing marketSource, traderId, or orderId for Id={}", Id);
                 }
-            
-                // Update the ActiveQuote even for already dead orders
+                return; // Cannot proceed without valid identifiers
+            }
+
+            MarketOrder cancelOrder = order.orderCancel(marketSource, traderId, orderId, orderManager);
+
+            // Update the ActiveQuote even for already dead orders
+            if (order.isDead()) {
                 ActiveQuote quote = orderRepository.findQuote(Id);
                 if (quote != null) {
                     // Determine if it's a bid or ask order
@@ -2397,24 +2411,7 @@ public class MarketMaker implements IOrderManager {
                         }
                     }
                 }
-                return;
             }
-            String marketSource = order.getMarketSource();
-            String traderId = orderManager.getTraderForVenue(marketSource);
-            String orderId = order.getOrderId();
-
-            // Send the cancel request
-            LOGGER.info("Sending cancel request for order: Id={}, orderId={}, reqId={}", 
-                Id, orderId, order.getMyReqId());
-            // Null checks prior to sending cancel request
-            if (marketSource == null || traderId == null || orderId == null) {
-                if (LOGGER.isErrorEnabled()) {
-                    LOGGER.error("Cannot cancel order: missing marketSource, traderId, or orderId for Id={}", Id);
-                }
-                return; // Cannot proceed without valid identifiers
-            }
-            
-            MarketOrder cancelOrder = order.orderCancel(marketSource, traderId, orderId, orderManager);
 
             if (cancelOrder != null) {
                 // Update the ActiveQuote

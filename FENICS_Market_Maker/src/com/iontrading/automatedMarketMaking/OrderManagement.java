@@ -19,7 +19,6 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.slf4j.Logger;
@@ -30,15 +29,12 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
-import java.text.SimpleDateFormat;
+
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.iontrading.janino.p;
-import com.iontrading.lowlatency.net.bytebuddy.dynamic.TypeResolutionStrategy.Active;
 import com.iontrading.mkv.Mkv;
 import com.iontrading.mkv.MkvChain;
 import com.iontrading.mkv.MkvObject;
@@ -51,7 +47,6 @@ import com.iontrading.mkv.enums.MkvObjectType;
 import com.iontrading.mkv.events.MkvChainListener;
 import com.iontrading.mkv.events.MkvPublishListener;
 import com.iontrading.mkv.events.MkvRecordListener;
-import com.iontrading.mkv.exceptions.MkvException;
 import com.iontrading.mkv.qos.MkvQoS;
 
 import redis.clients.jedis.Jedis;
@@ -206,7 +201,7 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
       MarketDef.FENICS_USREPO
   ));
 
-  private boolean isPatternSubscribed = false;
+  private final Set<String> subscribedPatterns = Collections.synchronizedSet(new HashSet<>());
   private final Object subscriptionLock = new Object();
  
   private final ScheduledExecutorService heartbeatScheduler = Executors.newScheduledThreadPool(1);
@@ -1051,26 +1046,24 @@ public OrderManagement() {
                 // Subscribe within a synchronized block
                 synchronized (subscriptionLock) {
                     // Check again inside synchronization to avoid race conditions
-                    if (!isPatternSubscribed) {
+                    if (!subscribedPatterns.contains(pattern)) {
                         LOGGER.info("Found " + pattern + ", subscribing: {}", pattern);
 
                         ((MkvPattern) obj).subscribe(fields, this);
 
                         // Mark that we've successfully subscribed
-                        isPatternSubscribed = true;
-
+                        subscribedPatterns.add(pattern);
                         LOGGER.info("Successfully subscribed to {}", pattern);
                     }
                 }
             } else {
                 LOGGER.warn("Pattern not found: {}", pattern);
 
-                // Create a single shared listener instance instead of an anonymous one
-                final MkvPublishListener patternListener = new MkvPublishListener() {
+                MkvPublishListener patternListener = new MkvPublishListener() {
                     @Override
                     public void onPublish(MkvObject mkvObject, boolean pub_unpub, boolean dwl) {
                         // Only proceed if we're not already subscribed
-                        if (isPatternSubscribed) {
+                        if (subscribedPatterns.contains(pattern)) {
                             return;
                         }
                         
@@ -1084,7 +1077,7 @@ public OrderManagement() {
                     @Override
                     public void onPublishIdle(String component, boolean start) {
                         // Only proceed if we're not already subscribed
-                        if (isPatternSubscribed) {
+                        if (subscribedPatterns.contains(pattern)) {
                             return;
                         }
                         
@@ -1114,7 +1107,7 @@ public OrderManagement() {
 private void trySubscribeAndRemoveListener(MkvObject mkvObject, MkvPublishManager pm, MkvPublishListener listener, String pattern, String[] fields) {
     synchronized (subscriptionLock) {
         // Check again inside synchronization to avoid race conditions
-        if (isPatternSubscribed) {
+        if (subscribedPatterns.contains(pattern)) {
             return;
         }
         
@@ -1122,107 +1115,9 @@ private void trySubscribeAndRemoveListener(MkvObject mkvObject, MkvPublishManage
             LOGGER.info("Pattern found, subscribing: {}", pattern);
 
             ((MkvPattern) mkvObject).subscribe(fields, this);
-            isPatternSubscribed = true;
+            subscribedPatterns.add(pattern);
 
-            LOGGER.info("Successfully subscribed to pattern");
-
-            // Remove the listener now that we've subscribed - safely outside the callback
-            // but still inside synchronization
-            pm.removePublishListener(listener);
-        } catch (Exception e) {
-            LOGGER.error("Error subscribing to pattern: {}", e.getMessage(), e);
-        }
-    }
-  }
-
-
-    
-private void subscribeToRecord() {
-    try {
-        // Get the publish manager to access patterns
-        MkvPublishManager pm = Mkv.getInstance().getPublishManager();
-       
-        // Look up the pattern object
-        MkvObject obj = pm.getMkvObject(ORDER_PATTERN);
-       
-        if (obj != null && obj.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
-            // Subscribe within a synchronized block
-            synchronized (subscriptionLock) {
-                // Check again inside synchronization to avoid race conditions
-                if (!isPatternSubscribed) {
-                    LOGGER.info("Found order pattern, subscribing: {}", ORDER_PATTERN);
-
-                    ((MkvPattern) obj).subscribe(ORDER_FIELDS, this);
-
-                    // Mark that we've successfully subscribed
-                    isPatternSubscribed = true;
-
-                    LOGGER.info("Successfully subscribed to order pattern");
-                }
-            }
-        } else {
-            LOGGER.warn("Order pattern not found: {}", ORDER_PATTERN);
-
-            // Create a single shared listener instance instead of an anonymous one
-            final MkvPublishListener patternListener = new MkvPublishListener() {
-                @Override
-                public void onPublish(MkvObject mkvObject, boolean pub_unpub, boolean dwl) {
-                    // Only proceed if we're not already subscribed
-                    if (isPatternSubscribed) {
-                        return;
-                    }
-                    
-                    // Check if this is our pattern being published
-                    if (pub_unpub && mkvObject.getName().equals(ORDER_PATTERN) &&
-                        mkvObject.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
-                        trySubscribeAndRemoveOrderListener(mkvObject, pm, this);
-                    }
-                }
-               
-                @Override
-                public void onPublishIdle(String component, boolean start) {
-                    // Only proceed if we're not already subscribed
-                    if (isPatternSubscribed) {
-                        return;
-                    }
-                    
-                    // Try looking for the pattern again at idle time
-                    MkvObject obj = pm.getMkvObject(ORDER_PATTERN);
-
-                    if (obj != null && obj.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
-                        trySubscribeAndRemoveOrderListener(obj, pm, this);
-                    }
-                }
-               
-                @Override
-                public void onSubscribe(MkvObject mkvObject) {
-                    // Not needed
-                }
-            };
-            
-            // Add the shared listener
-            pm.addPublishListener(patternListener);
-        }
-    } catch (Exception e) {
-        LOGGER.error("Error subscribing to pattern: {}", e.getMessage(), e);
-    }
-}
-
-// Helper method to handle subscription and listener removal safely
-private void trySubscribeAndRemoveOrderListener(MkvObject mkvObject, MkvPublishManager pm, MkvPublishListener listener) {
-    synchronized (subscriptionLock) {
-        // Check again inside synchronization to avoid race conditions
-        if (isPatternSubscribed) {
-            return;
-        }
-        
-        try {
-            LOGGER.info("Pattern found, subscribing: {}", ORDER_PATTERN);
-
-            ((MkvPattern) mkvObject).subscribe(ORDER_FIELDS, this);
-            isPatternSubscribed = true;
-
-            LOGGER.info("Successfully subscribed to pattern");
+            LOGGER.info("Successfully subscribed to {}", pattern);
 
             // Remove the listener now that we've subscribed - safely outside the callback
             // but still inside synchronization
@@ -1311,13 +1206,13 @@ private void subscribeToPattern() {
             // Subscribe within a synchronized block
             synchronized (subscriptionLock) {
                 // Check again inside synchronization to avoid race conditions
-                if (!isPatternSubscribed) {
+                if (!subscribedPatterns.contains(DEPTH_PATTERN)) {
                     LOGGER.info("Found consolidated depth pattern, subscribing: {}", DEPTH_PATTERN);
 
                     ((MkvPattern) obj).subscribe(DEPTH_FIELDS, depthListener);
 
                     // Mark that we've successfully subscribed
-                    isPatternSubscribed = true;
+                    subscribedPatterns.add(DEPTH_PATTERN);
 
                     LOGGER.info("Successfully subscribed to consolidated depth pattern");
                 }
@@ -1330,7 +1225,7 @@ private void subscribeToPattern() {
                 @Override
                 public void onPublish(MkvObject mkvObject, boolean pub_unpub, boolean dwl) {
                     // Only proceed if we're not already subscribed
-                    if (isPatternSubscribed) {
+                    if (subscribedPatterns.contains(DEPTH_PATTERN)) {
                         return;
                     }
                     
@@ -1344,7 +1239,7 @@ private void subscribeToPattern() {
                 @Override
                 public void onPublishIdle(String component, boolean start) {
                     // Only proceed if we're not already subscribed
-                    if (isPatternSubscribed) {
+                    if (subscribedPatterns.contains(DEPTH_PATTERN)) {
                         return;
                     }
                     
@@ -1374,7 +1269,7 @@ private void subscribeToPattern() {
     private void trySubscribeAndRemoveDepthListener(MkvObject mkvObject, MkvPublishManager pm, MkvPublishListener listener) {
         synchronized (subscriptionLock) {
             // Check again inside synchronization to avoid race conditions
-            if (isPatternSubscribed) {
+            if (subscribedPatterns.contains(DEPTH_PATTERN)) {
                 return;
             }
             
@@ -1382,9 +1277,9 @@ private void subscribeToPattern() {
                 LOGGER.info("Pattern found, subscribing: {}", DEPTH_PATTERN);
 
                 ((MkvPattern) mkvObject).subscribe(DEPTH_FIELDS, depthListener);
-                isPatternSubscribed = true;
+                subscribedPatterns.add(DEPTH_PATTERN);
 
-                LOGGER.info("Successfully subscribed to pattern");
+                LOGGER.info("Successfully subscribed to consolidated depth pattern");
 
                 // Remove the listener now that we've subscribed - safely outside the callback
                 // but still inside synchronization
@@ -1537,7 +1432,9 @@ private void processOrderUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolea
             LOGGER.debug("Ignoring order from another app: {}", appName);
             return;
         }
-
+        boolean wasOrderActive = orderRepository.getOrderStatus(orderId);
+        orderRepository.setOrderStatus(orderId, currentlyActive);
+        
         if (currentlyActive && !isEligible) {
             String traderId = getTraderForVenue(src);
             MarketOrder cancelOrder = MarketOrder.orderCancel(
@@ -1573,15 +1470,12 @@ private void processOrderUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolea
         }
 
         ActiveQuote quote = orderRepository.getQuote(Id);
-        boolean wasPriorQuoteActive = false;
 
         // Update order status in ActiveQuote
         if (quote != null) {
             if ("Buy".equals(VerbStr)) {
-                wasPriorQuoteActive = quote.isBidActive();
                 quote.setBidActive(currentlyActive);
             } else if ("Sell".equals(VerbStr)) {
-                wasPriorQuoteActive = quote.isAskActive();
                 quote.setAskActive(currentlyActive);
             }
         }
@@ -1590,7 +1484,6 @@ private void processOrderUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolea
         MarketOrder order = orderRepository.getOrderByOrderId(orderId);
         if (order != null) {
             order.setActive(currentlyActive);
-            
             // If filled, update the quote
             if (qtyFill > 0) {
                 quote.recordFill(orderId, qtyFill);
@@ -1603,26 +1496,20 @@ private void processOrderUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolea
         }
 
             // Only process first transition from active to inactive (this is needed as get duplicate Order messages) and requires a Complete or Partial fill
-        if (currentlyActive == false && wasPriorQuoteActive == true && (qtyStatusStr.equals("Cf") || qtyStatusStr.equals("Pf"))) {
-            LOGGER.info("Order status change detected for origId={}: ActiveStr changed to No", origId);
-                
-            // Continue with existing hedging logic
-            LOGGER.info("Processing order update: origId={}, orderId={}, status={}, fill={}", 
-                origId, orderId, tradeStatus, qtyFill);
+        if (currentlyActive == false && wasOrderActive == true && (qtyStatusStr.equals("Cf") || qtyStatusStr.equals("Pf"))) {
+            LOGGER.info("Order status change detected for origId={}: ActiveStr changed to No and qtyStatusStr={}", origId, qtyStatusStr);
 
-            LOGGER.info("Processing full update for record: {}, active={}, appName={}, src={}, Id={}, orderId={}, origId={}, VerbStr={}, tradeStatus={}, qtyFill={}, price={}, intQtyGoal={}, qtyHit={}, qtyStatus={}, qtyStatusStr={}, qtyTot={}, time={}", 
+            LOGGER.info("Processing order for hedging: {}, active={}, appName={}, src={}, Id={}, orderId={}, origId={}, VerbStr={}, tradeStatus={}, qtyFill={}, price={}, intQtyGoal={}, qtyHit={}, qtyStatus={}, qtyStatusStr={}, qtyTot={}, time={}",
                 mkvRecord.getName(), active, appName, src, Id, orderId, origId, VerbStr, tradeStatus, qtyFill, price, intQtyGoal, qtyHit, qtyStatus, qtyStatusStr, qtyTot, time);
 
             if (!"FENICS_USREPO".equals(src) || active.equals("Yes")) {
                 return; // Exit without hedging order if not hedging FENICS USREPO orders or if order is active
             }
 
-            LOGGER.debug("Processing order update: origId={}, orderId={}, status={}, fill={}", 
-                origId, orderId, tradeStatus, qtyFill);
-
             double orderPrice = 0.0;
             String market = null;
             boolean validVenue = false;
+            boolean positiveArb = false;
             // Get the best price information for this instrument
             Best bestMarket = orderRepository.getLatestBest(Id);
             if (bestMarket == null) {
@@ -1631,9 +1518,11 @@ private void processOrderUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolea
             } else {
                 if (VerbStr.equals("Buy")) {
                     orderPrice = bestMarket.getBid();
+                    positiveArb = (price >= orderPrice);
                     market = bestMarket.getBidSrc();
                 } else if (VerbStr.equals("Sell")) {
                     orderPrice = bestMarket.getAsk();
+                    positiveArb = (price <= orderPrice);
                     market = bestMarket.getAskSrc();
                 } else {
                     LOGGER.warn("Unknown verb for order: {}", VerbStr);
@@ -1663,9 +1552,9 @@ private void processOrderUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolea
             }
 
             // Check if execution price is approximately near the best price
-            if ((price - orderPrice) < -MAX_PRICE_DEVIATION) {
-                LOGGER.warn("Order price deviation too high: orderPrice={}, execPrice={}, maxDeviation={}",
-                    orderPrice, price, -MAX_PRICE_DEVIATION);
+            if (!positiveArb) {
+                LOGGER.warn("Not positive arb for: orderPrice={}, execPrice={}",
+                    orderPrice, price);
                 return; // Reject hedge if price is too far off
             }
 
@@ -1687,23 +1576,15 @@ private void processOrderUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolea
                 } else {
                     if (bestMarket.isMinePrice(bestMarket.getBidStatus())) {
                         LOGGER.info("Self match prevention on the bid side: nativeId={}, qtyHit={}", nativeId, qtyHit);
-                        return;
-                    }
-                    LOGGER.info("Hedging bid hit with sell order: nativeId={}, qtyHit={}", nativeId, qtyHit);
-                }
-
-                // Check if venue is active
-                if (!orderRepository.isVenueActive(market)) {
-                    LOGGER.warn("Venue {} is not active for trader {}", market, trader);
                     return;
+                    }
                 }
-
-                addOrder(market, trader, nativeId, hedgeDirection, qtyHit, orderPrice, "Limit", "FAS");
+                addOrder(market, trader, nativeId, hedgeDirection, qtyHit, orderPrice, "Limit", "FAS"); 
             } else {
-                LOGGER.warn("Cannot process hedge: trader={}, orderPrice={}, qtyHit={}", trader, orderPrice, qtyHit);
+                LOGGER.warn("Hedging not applicable for Id={}, market={}, Verb={}, currentlyActive={}, priorActive={}, qtyHit={}, price={}, wasOrderActive={}", Id, src, VerbStr, currentlyActive, qtyHit, orderPrice, wasOrderActive);
             }
         } else {
-            LOGGER.warn("Hedging not applicable for Id={}, market={}, Verb={}, currentlyActive={}, priorActive={}", Id, src, VerbStr, currentlyActive, wasPriorQuoteActive);
+            LOGGER.info("Hedging not applicable for Id={}, market={}, Verb={}, currentlyActive={}, priorActive={}", Id, src, VerbStr, currentlyActive, wasOrderActive);
         }
     } catch (Exception e) {
         LOGGER.error("Error processing order update: {}", e.getMessage(), e);
@@ -1753,66 +1634,59 @@ public void orderDead(MarketOrder order) {
         LOGGER.info("Order is now dead: reqId={}, orderId={}", 
             order.getMyReqId(), order.getOrderId());
     }
-    // Update the repository
-    orderRepository.markOrderDead(order);
-}
+    // Remove the order from the cache
+    removeOrder(order.getMyReqId());
+  }
+  
+  /**
+   * Adds an order for the given instrument, quantity, and other parameters.
+   * If the order creation succeeds, stores the order in the internal cache.
+   * 
+   * Implementation of IOrderManager.addOrder()
+   */
+  public MarketOrder addOrder(String marketSource, String traderId, String instrId, String verb, double qty,
+      double price, String type, String tif) {
 
-@Override
-public MarketOrder addOrder(String marketSource, String traderId, String instrId, 
-                    String verb, double qty, double price, String type, String tif) {
-    // Check if system is stopped
-    if (isSystemStopped) {
-        LOGGER.warn("System is stopped - not processing order: {}", instrId);
-        return null;
-    }
-    
-    LOGGER.info("Attempting to create order: source={}, trader={}, instrId={}, verb={}, qty={}, price={}, type={}, tif={}",
-                marketSource, traderId, instrId, verb, qty, price, type, tif);
-    
-    // Log to machine-readable format
-    ApplicationLogging.logOrderEvent(
-        "SEND", 
-        marketSource,
-        traderId,
-        instrId,
-        verb,
-        qty,
-        price,
-        type,
-        tif,
-        -1,
-        null
-    );
-    
-    // Create the order using static factory method
+	LOGGER.info("Attempting to create order: source={}, trader={}, instrId={}, verb={}, qty={}, price={}, type={}, tif={}",
+	             marketSource, traderId, instrId, verb, qty, price, type, tif);
+	
+	// Create the order using the static factory method
     MarketOrder order = MarketOrder.orderCreate(marketSource, traderId, instrId, verb, qty, price,
         type, tif, this);
     
     if (order != null) {
-        // Store order in the repository
-        orderRepository.storeOrder(order);
-        
-        // Get or create a quote for this instrument
-        ActiveQuote quote = orderRepository.getQuote(instrId);
-        
-        // Update the quote with order information
-        if (quote != null) {
-            if ("Buy".equals(verb)) {
-                quote.setBidVenue(marketSource, traderId, instrId);
-                quote.setBidOrder(order, "DEFAULT", price);
-                quote.setBidActive(true);
-            } else {
-                quote.setAskVenue(marketSource, traderId, instrId);
-                quote.setAskOrder(order, "DEFAULT", price);
-                quote.setAskActive(true);
+      // If creation succeeded, add the order to the cache
+      addOrder(order);
+      
+      // Check if there was an error code returned that indicates rejection
+      if (order.getErrCode() != 0) {
+            LOGGER.warn("Order rejected by market: reqId={}, instrId={}, errCode={}, errStr={}, source={}, trader={}",
+                order.getMyReqId(), instrId, order.getErrCode(), order.getErrStr(), marketSource, traderId);
+            // Remove the rejected order from the cache since it won't be processed
+            removeOrder(order.getMyReqId());
+            return null; // Return null for rejected orders to indicate failure
+      } else {
+            LOGGER.info("Order created successfully: reqId={}, instrId={}, source={}, trader={}",
+                order.getMyReqId(), instrId, marketSource, traderId);
+
+            // Get or create a quote for this instrument
+            ActiveQuote quote = orderRepository.getQuote(instrId);
+            
+            // Update the quote with order information
+            if (quote != null) {
+                if ("Buy".equals(verb)) {
+                    quote.setBidVenue(marketSource, traderId, instrId);
+                    quote.setBidOrder(order, "DEFAULT", price);
+                    quote.setBidActive(true);
+                } else {
+                    quote.setAskVenue(marketSource, traderId, instrId);
+                    quote.setAskOrder(order, "DEFAULT", price);
+                    quote.setAskActive(true);
+                }
             }
+            LOGGER.info("Order created successfully: {}", order.getMyReqId());
         }
-        
-        LOGGER.info("Order created successfully: {}", order.getMyReqId());
-    } else {
-        LOGGER.error("Failed to create order");
     }
-    
     return order;
 }
 
@@ -1973,15 +1847,15 @@ private void setupPatternSubscriptionMonitor() {
                     } catch (Exception e) {
                         LOGGER.error("Error calling subscribeToInstrumentPattern: {}", e.getMessage(), e);
 
-                        // Last resort: try to subscribe with just the absolute minimum field
-                        try {
-                            String[] bareMinimumFields = new String[] { "Id" };
-                            LOGGER.warn("Trying last resort subscription with field: {}", Arrays.toString(bareMinimumFields));
-                            pattern.subscribe(bareMinimumFields, depthListener);
-                            LOGGER.info("Successfully subscribed with bare minimum field");
-                        } catch (Exception e2) {
-                            LOGGER.error("All subscription attempts failed: {}", e2.getMessage(), e2);
-                        }
+                        // // Last resort: try to subscribe with just the absolute minimum field
+                        // try {
+                        //     String[] bareMinimumFields = new String[] { "Id" };
+                        //     LOGGER.warn("Trying last resort subscription with field: {}", Arrays.toString(bareMinimumFields));
+                        //     pattern.subscribe(bareMinimumFields, depthListener);
+                        //     LOGGER.info("Successfully subscribed with bare minimum field");
+                        // } catch (Exception e2) {
+                        //     LOGGER.error("All subscription attempts failed: {}", e2.getMessage(), e2);
+                        // }
                     }
                 }
             } else {
@@ -1991,9 +1865,8 @@ private void setupPatternSubscriptionMonitor() {
 
             // Check depth pattern
             MkvObject depthObj = pm.getMkvObject(DEPTH_PATTERN);
+            MkvPattern pattern = (MkvPattern) depthObj;
             if (depthObj != null && depthObj.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
-                MkvPattern pattern = (MkvPattern) depthObj;
-                
                 // Use a try-catch block to safely check subscription status
                 boolean currentlySubscribed = false;
                 try {
@@ -2003,26 +1876,31 @@ private void setupPatternSubscriptionMonitor() {
                 }
 
                 LOGGER.debug("Depth pattern subscription check: subscribed={}, our state={}",
-                    currentlySubscribed, isPatternSubscribed);
+                    currentlySubscribed, subscribedPatterns.contains(pattern));
 
                 // If we think we're subscribed but actually aren't, resubscribe
-                if (isPatternSubscribed && !currentlySubscribed) {
+                if (subscribedPatterns.contains(pattern) && !currentlySubscribed) {
                     LOGGER.warn("Depth pattern subscription lost, resubscribing");
                     pattern.subscribe(DEPTH_FIELDS, depthListener);
                 }
 
                 // Update our tracking state
-                isPatternSubscribed = currentlySubscribed;
-            } else {
-                if (isPatternSubscribed) {
-                    LOGGER.warn("Depth pattern not found but we thought we were subscribed");
-                    isPatternSubscribed = false;
+                if (currentlySubscribed) {
+                    subscribedPatterns.add(DEPTH_PATTERN);
+                } else {
+                    subscribedPatterns.remove(DEPTH_PATTERN);
                 }
-                
+            } else {
+                if (subscribedPatterns.contains(pattern)) {
+                    LOGGER.warn("Depth pattern not found but we thought we were subscribed");
+                    subscribedPatterns.remove(pattern);
+                }
                 // Try to find and subscribe to the pattern again
                 subscribeToPattern();
             }
             
+
+
             // Additional detailed logging
             if (depthListener != null) {
                 Map<String, Object> healthStatus = depthListener.getHealthStatus();
