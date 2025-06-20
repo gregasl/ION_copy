@@ -2340,6 +2340,10 @@ private void shutdownExecutor(ExecutorService executor, String name) {
 }
 
 private void shutdownExecutorGracefully(ExecutorService executor, String name, int timeoutSeconds) {
+    if (executor == null || executor.isShutdown()) {
+        return;
+    }
+    
     try {
         LOGGER.info("Shutting down {} executor", name);
         executor.shutdown();
@@ -2347,16 +2351,15 @@ private void shutdownExecutorGracefully(ExecutorService executor, String name, i
         if (!executor.awaitTermination(timeoutSeconds, TimeUnit.SECONDS)) {
             LOGGER.warn("{} executor did not terminate gracefully, forcing shutdown", name);
             List<Runnable> pendingTasks = executor.shutdownNow();
-            LOGGER.warn("Cancelled {} pending tasks for {}", pendingTasks.size(), name);
-            
-            if (!executor.awaitTermination(2, TimeUnit.SECONDS)) {
-                LOGGER.error("{} executor did not terminate after forced shutdown", name);
-            }
+            LOGGER.info("Cancelled {} pending tasks for {}", pendingTasks.size(), name);
         }
     } catch (InterruptedException e) {
         LOGGER.warn("Interrupted while shutting down {} executor", name);
         executor.shutdownNow();
         Thread.currentThread().interrupt();
+    } catch (Exception e) {
+        LOGGER.error("Error shutting down {} executor: {}", name, e.getMessage());
+        executor.shutdownNow();
     }
 }
 

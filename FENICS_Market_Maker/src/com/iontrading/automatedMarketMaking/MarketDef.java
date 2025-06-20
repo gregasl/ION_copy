@@ -36,6 +36,13 @@ public class MarketDef {
                         "OrigSrc", "Price", "QtyFill", "QtyHit", "QtyStatus",  "QtyStatusStr", "QtyTot", "Time", "TimeCreation","TimeStamp",
 			"TradingStatus", "TradingStatusStr", "Verb", "VerbStr" };
 
+        /**
+         * The standard login fields to subscribe to for CM_LOGIN records.
+         * These fields provide essential information about user login state.
+         */
+        public static String[] LOGIN_FIELDS = { "Id", "Src0", "Src1", "Src2", "Src3", "Src4", "Src5", "Src6", "Src7", "TStatusStr", "TStatusStr0", "TStatusStr1", 
+                        "TStatusStr2", "TStatusStr3", "TStatusStr4", "TStatusStr5", "TStatusStr6", "TStatusStr7"};
+
 	/**
 	 * The standard depth fields to subscribe to for CM_DEPTH records.
 	 * These provide the best bid/ask prices and sizes.
@@ -73,9 +80,10 @@ public class MarketDef {
      * Pattern names for market data subscriptions
      */
     public static final String ORDER_PATTERN = "USD.CM_ORDER.VMO_REPO_US.";
-    public static final String DEPTH_PATTERN = "USD.CM_DEPTH.VMO_REPO_US.";
     public static final String INSTRUMENT_PATTERN = "USD.CM_INSTRUMENT.VMO_REPO_US.";
-    
+    public static final String DEPTH_PATTERN = "USD.CM_DEPTH.VMO_REPO_US.";
+    public static final String LOGIN_PATTERN = "USD.CM_LOGIN.VMO_REPO_US.";
+
     /**
      * Special instrument IDs for GC levels
      */

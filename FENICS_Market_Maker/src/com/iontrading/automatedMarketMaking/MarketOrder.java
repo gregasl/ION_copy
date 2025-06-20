@@ -52,8 +52,7 @@ import com.iontrading.mkv.helper.MkvSupplyFactory;
  */
 public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener {
   
-  private static String marketSource;
-	
+  private final String marketSource;	
   /**
    * Timestamp when the order was created (in milliseconds since epoch)
    */
@@ -68,6 +67,9 @@ public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener {
    * the generation of unique identifiers would likely be more sophisticated.
    */
   private static int reqId = 0;
+
+  private long standardizedTimestamp; // Epoch milliseconds
+  private String standardizedTimestampStr; // ISO 8601 format
 
   /**
    * Creates a new market order by calling the VCMIOrderAdd181 function on the gateway.
@@ -93,13 +95,11 @@ public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener {
     
     // Log the order creation attempt
     if (LOGGER.isInfoEnabled()) {
-      LOGGER.info("Creating order request #{} for {} {} @ {}", reqId, verb, instrId, qty, price);
+      LOGGER.info("Creating order request #{} for {} {} {} @ {}", MarketSource, reqId, verb, instrId, qty, price);
     }
 
     // Get the publish manager to access functions
     MkvPublishManager pm = Mkv.getInstance().getPublishManager();
-    
-    marketSource = MarketSource;
     
     // Get the order add function from the ION gateway
     MkvFunction fn = pm.getMkvFunction(MarketSource + "_VCMIOrderAdd181");
@@ -114,7 +114,7 @@ public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener {
       String freeText = orderManager.getApplicationId();
       
       // Create a new MarketOrder object that will track this order
-      MarketOrder order = new MarketOrder(reqId, instrId, verb, qty, price, tif, orderManager);
+      MarketOrder order = new MarketOrder(MarketSource, reqId, instrId, verb, qty, price, tif, orderManager);
      
       // Create the function arguments for the order creation
       // This is specific to the VCMIOrderAdd181 function interface
@@ -180,8 +180,6 @@ public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener {
     // Get the publish manager to access functions
     MkvPublishManager pm = Mkv.getInstance().getPublishManager();
     
-    marketSource = MarketSource;
-    
     // Get the order add function from the ION gateway
     MkvFunction fn = pm.getMkvFunction(MarketSource + "_VCMIOrderRwt181");
     
@@ -197,7 +195,7 @@ public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener {
       String freeText = orderManager.getApplicationId();
       
       // Create a new MarketOrder object that will track this order
-      MarketOrder order = new MarketOrder(reqId, instrId, verb, qty, price, "UPDATE", orderManager);
+      MarketOrder order = new MarketOrder(MarketSource, reqId, instrId, verb, qty, price, "UPDATE", orderManager);
      
       // Create the function arguments for the order creation
       // This is specific to the VCMIOrderRwt181 function interface
@@ -265,7 +263,7 @@ public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener {
           
           // Create a new MarketOrder object that will track this cancel request
           // Using special values for a cancel request
-          MarketOrder order = new MarketOrder(reqId, orderId, "Cancel", 0, 0, "CANCEL", orderManager);
+          MarketOrder order = new MarketOrder(marketSource, reqId, orderId, "Cancel", 0, 0, "CANCEL", orderManager);
           
           // Create the function arguments for the order cancellation
           // This is specific to the VCMIOrderDel function interface
@@ -340,10 +338,11 @@ public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener {
    * Creates a new instance of MarketOrder
    * Private constructor - instances should be created via orderCreate() or orderCancel()
    */
-  private MarketOrder(int _reqId, String instrId, String verb, double qty,
+  private MarketOrder(String marketSource, int _reqId, String instrId, String verb, double qty,
       double price, String tif, IOrderManager callback) {
       this.myReqId = _reqId;
       this.verb = verb;
+      this.marketSource = marketSource;
       this.orderCallback = callback;
       this.instrId = instrId;
       this.creationTimestamp = System.currentTimeMillis();
@@ -592,6 +591,22 @@ public String getVerb() {
       return System.currentTimeMillis() - creationTimestamp;
   }
   
+  public long getStandardizedTimestamp() {
+      return standardizedTimestamp;
+  }
+
+  public void setStandardizedTimestamp(long timestamp) {
+      this.standardizedTimestamp = timestamp;
+  }
+
+  public String getStandardizedTimestampStr() {
+      return standardizedTimestampStr;
+  }
+
+  public void setStandardizedTimestampStr(String timestampStr) {
+      this.standardizedTimestampStr = timestampStr;
+  }
+
   /**
    * Sets the active status of this order based on MKV updates
    * 
