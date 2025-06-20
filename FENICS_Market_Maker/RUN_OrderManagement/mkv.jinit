@@ -1,5 +1,5 @@
 #STANDARD SETTINGS
-mkv.component = MarketMaker
+mkv.component = automatedMarketMaking
 mkv.user = mkv
 mkv.pwd = mkvpwd
 mkv.cshost = 10.74.124.71
