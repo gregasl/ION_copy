@@ -41,10 +41,9 @@ public class OrderRepository {
     private final Map<String, Long> lastOrderUpdateTime = new ConcurrentHashMap<>();
     private final Set<String> trackedInstruments = ConcurrentHashMap.newKeySet();
     private final Map<String, AtomicInteger> instrumentUpdateCounters = new ConcurrentHashMap<>();
-
     private final Map<String, Double> venueMinimumCache = new ConcurrentHashMap<>();
-
     private final Map<String, Boolean> venueActive = new ConcurrentHashMap<>();
+    private final Map<String, Boolean> orderStatus = new ConcurrentHashMap<>();
 
     private final Map<String, Long> lastTradeTimeByInstrument = 
     Collections.synchronizedMap(new LinkedHashMap<String, Long>(16, 0.75f, true) {
@@ -492,6 +491,29 @@ public Map<String, Boolean> getOrderActivityStatusMap() {
         return activeQuotes;
     }
     
+public void setOrderStatus(String orderId, boolean isActive) {
+        if (orderId == null || orderId.isEmpty()) return;
+        
+        lock.writeLock().lock();
+        try {
+            orderStatus.put(orderId, isActive);
+            LOGGER.debug("Set order status for {} to {}", orderId, isActive);
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
+
+public boolean getOrderStatus(String orderId) {
+        if (orderId == null || orderId.isEmpty()) return false;
+
+        lock.readLock().lock();
+        try {
+            return orderStatus.getOrDefault(orderId, false);
+        } finally {
+            lock.readLock().unlock();
+        }
+    }
+
     /**
      * Get all orders currently in the repository
      */

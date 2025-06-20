@@ -2280,28 +2280,31 @@ public void initiateShutdown() {
  * Performs a complete shutdown of the application.
  */
 public void shutdown() {
-    // Mark as shutting down
+    // Set flag to prevent re-entry
+    if (isShuttingDown) {
+        LOGGER.warn("Shutdown already in progress, ignoring duplicate request");
+        return;
+    }
     isShuttingDown = true;
     
-    // Cancel all pending orders
+    // Cancel all orders once
     cancelAllOrders();
     
-    // Shutdown Redis connection pool
-    if (jedisPool != null) {
+    // Close Redis pool
+    if (jedisPool != null && !jedisPool.isClosed()) {
         try {
             LOGGER.info("Closing Redis connection pool");
-            jedisPool.destroy(); // Use destroy() for older Jedis versions
+            jedisPool.close();
         } catch (Exception e) {
             LOGGER.warn("Error closing Redis connection pool: {}", e.getMessage());
         }
     }
 
-    // Shutdown all executors
-    shutdownExecutor(heartbeatScheduler, "Heartbeat scheduler");
-    shutdownExecutor(scheduler, "Market recheck scheduler");
-    shutdownExecutor(orderExpirationScheduler, "Order expiration scheduler");
+    // Shutdown executors
+    shutdownExecutorGracefully(heartbeatScheduler, "Heartbeat", 2);
+    shutdownExecutorGracefully(orderExpirationScheduler, "Order expiration", 5);
+    shutdownExecutorGracefully(scheduler, "Market recheck", 10);
     
-    // Log successful shutdown
     LOGGER.info("OrderManagement shutdown complete");
 }
 
@@ -2332,6 +2335,10 @@ private void shutdownExecutor(ExecutorService executor, String name) {
 }
 
 private void shutdownExecutorGracefully(ExecutorService executor, String name, int timeoutSeconds) {
+    if (executor == null || executor.isShutdown()) {
+        return;
+    }
+    
     try {
         LOGGER.info("Shutting down {} executor", name);
         executor.shutdown();
@@ -2339,18 +2346,18 @@ private void shutdownExecutorGracefully(ExecutorService executor, String name, i
         if (!executor.awaitTermination(timeoutSeconds, TimeUnit.SECONDS)) {
             LOGGER.warn("{} executor did not terminate gracefully, forcing shutdown", name);
             List<Runnable> pendingTasks = executor.shutdownNow();
-            LOGGER.warn("Cancelled {} pending tasks for {}", pendingTasks.size(), name);
-            
-            if (!executor.awaitTermination(2, TimeUnit.SECONDS)) {
-                LOGGER.error("{} executor did not terminate after forced shutdown", name);
-            }
+            LOGGER.info("Cancelled {} pending tasks for {}", pendingTasks.size(), name);
         }
     } catch (InterruptedException e) {
         LOGGER.warn("Interrupted while shutting down {} executor", name);
         executor.shutdownNow();
         Thread.currentThread().interrupt();
+    } catch (Exception e) {
+        LOGGER.error("Error shutting down {} executor: {}", name, e.getMessage());
+        executor.shutdownNow();
     }
 }
+
 /**
  * Cancels all outstanding orders currently tracked by this OrderManagement instance.
  */
