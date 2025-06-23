@@ -2193,12 +2193,6 @@ public class MarketMaker implements IOrderManager {
                     }
                 }
                 
-                // Final cleanup of data structures
-                activeQuotes.clear();
-                trackedInstruments.clear();
-                orderIdToReqIdMap.clear();
-                instrumentUpdateCounters.clear();
-                
                 if (LOGGER.isInfoEnabled()) {
                     LOGGER.info("Async shutdown phase 2 complete");
                 }
