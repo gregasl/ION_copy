@@ -52,6 +52,7 @@ import com.iontrading.mkv.enums.MkvPlatformEvent;
 import com.iontrading.mkv.enums.MkvShutdownMode;
 import com.iontrading.mkv.events.MkvPlatformListener;
 import com.iontrading.mkv.MkvComponent;
+import com.iontrading.mkv.exceptions.*;
 
 import redis.clients.jedis.Jedis;
 import redis.clients.jedis.JedisPubSub;
@@ -176,6 +177,9 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
 
   // Market maker instance for automated market making
   private MarketMaker marketMaker;
+  
+  // order repository instance for managing market orders
+  private final OrderRepository orderRepository;
   
   // Market maker configuration
   private MarketMakerConfig marketMakerConfig;
@@ -430,6 +434,7 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
         configureLogging(false, null);
 
         this.bondEligibilityListener = bondEligibilityListener;
+        this.orderRepository = OrderRepository.getInstance();
 
         applicationId = "Java_Order_Manager"; 
         LOGGER.info("Application ID: {}", applicationId);
@@ -1551,8 +1556,6 @@ private void processOrderUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolea
         String statusKey = STATUS_KEY_PREFIX + activityKey + ":" + Id;
 
         // Safely retrieve previous active status with type checking
-        Object prevActiveObj = orderActiveStatusMap.get(statusKey);
-        boolean previouslyActive = prevActiveObj instanceof Boolean ? (Boolean)prevActiveObj : false;
         boolean currentlyActive = "Yes".equals(active);
         orderActiveStatusMap.put(statusKey, currentlyActive);
 
@@ -2397,33 +2400,17 @@ private void setupPatternSubscriptionMonitor() {
     public void cancelAllOrders() {
         LOGGER.info("Cancelling all outstanding orders");
 
-    // Create a copy of the orders map to avoid concurrent modification
-    Collection<MarketOrder> orderCollection = orderRepository.getAllOrders();
-    Map<Integer, MarketOrder> ordersCopy = new HashMap<>();
-    for (MarketOrder order : orderCollection) {
-        ordersCopy.put(order.getMyReqId(), order);
-    }
-    for (MarketOrder order : ordersCopy.values()) {
-        // Skip cancel requests
-        if ("Cancel".equals(order.getVerb())) {
-            continue;
+        // Create a copy of the orders map to avoid concurrent modification
+        Collection<MarketOrder> orderCollection = orderRepository.getAllOrders();
+        Map<Integer, MarketOrder> ordersCopy = new HashMap<>();
+        for (MarketOrder order : orderCollection) {
+            ordersCopy.put(order.getMyReqId(), order);
         }
-        
-        // Get necessary info for the cancel request
-        String orderId = order.getOrderId();
-        String marketSource = order.getMarketSource();
-        
-        // Check if the order is in a valid state for cancellation
-        if (orderId == null || orderId.isEmpty()) {
-            LOGGER.warn("Order ID is null or empty for order: {}", order);
-            continue;
-        }
-
-        // Only try to cancel if we have an order ID
-        if (orderId != null && !orderId.isEmpty()) {
-            String traderId = getTraderForVenue(marketSource);
-
-            LOGGER.info("Cancelling order: reqId={}, orderId={}", order.getMyReqId(), orderId);
+        for (MarketOrder order : ordersCopy.values()) {
+            // Skip cancel requests
+            if ("Cancel".equals(order.getVerb())) {
+                continue;
+            }
             
             // Get necessary info for the cancel request
             String orderId = order.getOrderId();
@@ -2440,32 +2427,42 @@ private void setupPatternSubscriptionMonitor() {
                 String traderId = getTraderForVenue(marketSource);
 
                 LOGGER.info("Cancelling order: reqId={}, orderId={}", order.getMyReqId(), orderId);
-                
-                // Issue the cancel request
-                MarketOrder cancelOrder = MarketOrder.orderCancel(
-                    marketSource, 
-                    traderId, 
-                    orderId, 
-                    this
-                );
-                
-                if (cancelOrder != null) {
-                    // Track the cancel request
-                    removeOrder(order.getMyReqId());
+               
+                // Check if the order is in a valid state for cancellation
+                if (orderId == null || orderId.isEmpty()) {
+                    LOGGER.warn("Order ID is null or empty for order: {}", order);
+                    continue;
+                }
+
+                // Only try to cancel if we have an order ID
+                if (orderId != null && !orderId.isEmpty()) {
+                    LOGGER.info("Cancelling order: reqId={}, orderId={}", order.getMyReqId(), orderId);
                     
-                    // Log to machine-readable format
-                    ApplicationLogging.logOrderUpdate(
-                        "AUTO_CANCEL", 
-                        order.getMyReqId(),
-                        order.getOrderId(),
-                        "Order cancelled by system shutdown"
+                    // Issue the cancel request
+                    MarketOrder cancelOrder = MarketOrder.orderCancel(
+                        marketSource, 
+                        traderId, 
+                        orderId, 
+                        this
                     );
+                    
+                    if (cancelOrder != null) {
+                        // Track the cancel request
+                        removeOrder(order.getMyReqId());
+                        
+                        // Log to machine-readable format
+                        ApplicationLogging.logOrderUpdate(
+                            "AUTO_CANCEL", 
+                            order.getMyReqId(),
+                            order.getOrderId(),
+                            "Order cancelled by system shutdown"
+                        );
+                    }
                 }
             }
+            LOGGER.info("All outstanding orders cancelled");
         }
-        LOGGER.info("All outstanding orders cancelled");
     }
-
     /**
      * Updates the market maker configuration
      * 
