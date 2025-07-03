@@ -433,7 +433,7 @@ public void onResult(MkvFunctionCallEvent mkvFunctionCallEvent, MkvSupply mkvSup
             }
         } else {
             if (LOGGER.isWarnEnabled()) {
-                LOGGER.warn("Could not find -Id in result string: reqId={}", myReqId);
+                LOGGER.warn("Could not find -Id in result string: reqId={}, resultString={}", myReqId, resultString);
             }
         }
     } catch (Exception e) {
@@ -442,6 +442,15 @@ public void onResult(MkvFunctionCallEvent mkvFunctionCallEvent, MkvSupply mkvSup
         }
     }
 }
+
+  /**
+   * Gets the timestamp when this order was created.
+   * 
+   * @return The creation timestamp in milliseconds since epoch
+   */
+  public long getCreationTimestamp() {
+      return creationTimestamp;
+  }
 
   /**
    * @return The instrument ID for this order

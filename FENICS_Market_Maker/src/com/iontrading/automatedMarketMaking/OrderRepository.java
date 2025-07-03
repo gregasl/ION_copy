@@ -873,4 +873,111 @@ public boolean getOrderStatus(String orderId) {
     public void clearInstrumentUpdateCounters() {
         instrumentUpdateCounters.clear();
     }
+
+    /**
+     * Detects if there are multiple active orders on the same side of the market
+     * for a specific instrument.
+     * 
+     * @param instrumentId The instrument ID to check
+     * @param side Order side to check ("Buy" or "Sell")
+     * @return List of active order IDs on the specified side, empty if none found
+     */
+    public List<String> getActiveOrdersForSide(String instrumentId, String side) {
+        if (instrumentId == null || side == null) {
+            return Collections.emptyList();
+        }
+        
+        List<String> activeOrders = new ArrayList<>();
+        
+        lock.readLock().lock();
+        try {
+            // First check the ActiveQuote for this instrument
+            ActiveQuote quote = quotesByInstrument.get(instrumentId);
+            if (quote != null) {
+                // Add the order from the quote if it's active
+                if ("Buy".equals(side) && quote.isBidActive()) {
+                    MarketOrder bidOrder = quote.getBidOrder();
+                    if (bidOrder != null && bidOrder.getOrderId() != null) {
+                        activeOrders.add(bidOrder.getOrderId());
+                    }
+                } else if ("Sell".equals(side) && quote.isAskActive()) {
+                    MarketOrder askOrder = quote.getAskOrder();
+                    if (askOrder != null && askOrder.getOrderId() != null) {
+                        activeOrders.add(askOrder.getOrderId());
+                    }
+                }
+            }
+            
+            // Then check all orders to find any that match the instrument and side
+            // but aren't in the quote (which would indicate multiple orders)
+            for (MarketOrder order : ordersByReqId.values()) {
+                if (order != null && 
+                    instrumentId.equals(order.getInstrId()) && 
+                    side.equals(order.getVerb())) {
+                
+                    String orderId = order.getOrderId();
+                
+                    // Only include active orders that aren't already in our list
+                    if (orderId != null && !activeOrders.contains(orderId) && 
+                        orderStatus.getOrDefault(orderId, false)) {
+                        activeOrders.add(orderId);
+                    }
+                }
+            }
+        
+            return activeOrders;
+        } finally {
+            lock.readLock().unlock();
+        }
+    }
+
+    /**
+     * Checks if there are multiple active orders for a given instrument side.
+     * This is a convenience method that uses getActiveOrdersForSide internally.
+     * 
+     * @param instrumentId The instrument ID to check
+     * @param side Order side to check ("Buy" or "Sell")
+     * @return true if multiple active orders exist, false otherwise
+     */
+    public boolean hasMultipleActiveOrdersForSide(String instrumentId, String side) {
+        return getActiveOrdersForSide(instrumentId, side).size() > 1;
+    }
+
+    /**
+     * Detects any instruments with multiple active orders on the same side.
+     * 
+     * @return Map where keys are instrument IDs and values are maps of sides to lists of order IDs
+     */
+    public Map<String, Map<String, List<String>>> detectMultipleActiveOrders() {
+        Map<String, Map<String, List<String>>> result = new HashMap<>();
+    
+        lock.readLock().lock();
+        try {
+            // Check all tracked instruments
+            for (String instrumentId : trackedInstruments) {
+                List<String> buyOrders = getActiveOrdersForSide(instrumentId, "Buy");
+                List<String> sellOrders = getActiveOrdersForSide(instrumentId, "Sell");
+            
+                if (buyOrders.size() > 1 || sellOrders.size() > 1) {
+                    Map<String, List<String>> sidesToOrders = new HashMap<>();
+                
+                    if (buyOrders.size() > 1) {
+                        sidesToOrders.put("Buy", buyOrders);
+                    }
+                
+                    if (sellOrders.size() > 1) {
+                        sidesToOrders.put("Sell", sellOrders);
+                    }
+                
+                    if (!sidesToOrders.isEmpty()) {
+                        result.put(instrumentId, sidesToOrders);
+                    }
+                }
+            }
+        
+            return result;
+        } finally {
+            lock.readLock().unlock();
+        }
+    }
 }

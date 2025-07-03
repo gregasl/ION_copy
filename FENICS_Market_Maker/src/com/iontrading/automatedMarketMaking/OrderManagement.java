@@ -239,11 +239,8 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
   private redis.clients.jedis.JedisPool jedisPool;
   private boolean isRedisConnected = false;
   
-  private static final double MAX_PRICE_DEVIATION = 0.05; // 5 bps max price deviation for hedging orders
-
   private final Map<String, Object> orderActiveStatusMap = new ConcurrentHashMap<>();
   private static final String STATUS_KEY_PREFIX = "status:";
-  private static final String TRACKING_KEY_PREFIX = "track:";
 
   private final AtomicInteger readyToStop = new AtomicInteger(2);
   private boolean asyncShutdownInProgress = false;
@@ -460,6 +457,8 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
 
         initializeSignalHandlers();
 
+        initializeOrderExpirationChecker();
+
     }
 
     /**
@@ -627,6 +626,20 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
         Runtime.getRuntime().addShutdownHook(ctrlCHandler);
         
         LOGGER.info("Signal handlers initialized");
+    }
+
+    private void initializeOrderExpirationChecker() {
+        LOGGER.info("Initializing order expiration checker");
+        
+        // Schedule the order expiration task to run every 5 seconds
+        orderExpirationScheduler.scheduleAtFixedRate(() -> {
+            try {
+                LOGGER.debug("Checking for expired orders");
+                monitorActiveOrders();
+            } catch (Exception e) {
+                LOGGER.error("Error checking for expired orders: {}", e.getMessage(), e);
+            }
+        }, 0, 10, TimeUnit.SECONDS);
     }
 
     // Add this method to complete market maker initialization after MKV is ready
@@ -1569,6 +1582,8 @@ private void processOrderUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolea
             return;
         }
         boolean wasOrderActive = orderRepository.getOrderStatus(orderId);
+        LOGGER.info("Order status for {}: currentlyActive={}, wasOrderActive={}", 
+            orderId, currentlyActive, wasOrderActive);
         orderRepository.setOrderStatus(orderId, currentlyActive);
         
         if (currentlyActive && !isEligible) {
@@ -1576,35 +1591,20 @@ private void processOrderUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolea
             MarketOrder cancelOrder = MarketOrder.orderCancel(
                         src, traderId, origId, this);
             orderRepository.updateOrderStatus(Id, VerbStr, !currentlyActive);
+            LOGGER.info("Order {} is not eligible for trading, cancelling order: {}", 
+                origId, cancelOrder.getOrderId());
         }
 
-        if (currentlyActive) {
-            // Check for duplicates
-            String[] duplicateInfo = orderRepository.checkForDuplicate(Id, VerbStr, orderId, time);
-            if (duplicateInfo != null) {
-                // We have a duplicate - cancel the older order
-                String duplicateOrderId = duplicateInfo[0];
-                String traderId = duplicateInfo[1];
-                String venue = duplicateInfo[2];
-                
-                LOGGER.info("Found duplicate order for {}/{}: cancelling order ID={}", 
-                    Id, VerbStr, duplicateOrderId);
-                    
-                if (traderId != null && venue != null) {
-                    MarketOrder cancelOrder = MarketOrder.orderCancel(
-                        venue, traderId, duplicateOrderId, this);
-                        
-                    if (cancelOrder != null) {
-                        LOGGER.info("Successfully issued cancel for duplicate order: {}", 
-                            duplicateOrderId);
-                    } else {
-                        LOGGER.warn("Failed to issue cancel for duplicate order: {}", 
-                            duplicateOrderId);
-                    }
-                }
-            }
+        orderRepository.setOrderStatus(orderId, currentlyActive);
+        
+        Map<String, Map<String, List<String>>> multipleOrders = checkForMultipleActiveOrders(Id);
+        if (!multipleOrders.isEmpty()) {
+            LOGGER.warn("Multiple active orders detected after processing order update for {}/{}", 
+                Id, VerbStr);
+            // Cancel oldest orders so only newest order is remaining per side
+            cancelOldestOrders(multipleOrders);
         }
-
+        
         ActiveQuote quote = orderRepository.getQuote(Id);
 
         // Update order status in ActiveQuote
@@ -1616,15 +1616,15 @@ private void processOrderUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolea
             }
         }
         
-        // Update order object if we have it
-        MarketOrder order = orderRepository.getOrderByOrderId(orderId);
-        if (order != null) {
-            order.setActive(currentlyActive);
-            // If filled, update the quote
-            if (qtyFill > 0) {
-                quote.recordFill(orderId, qtyFill);
-            }
-        }
+        // // Update order object if we have it
+        // MarketOrder order = orderRepository.getOrderByOrderId(orderId);
+        // if (order != null) {
+        //     order.setActive(currentlyActive);
+        //     // If filled, update the quote
+        //     if (qtyFill > 0) {
+        //         quote.recordFill(orderId, qtyFill);
+        //     }
+        // }
         
         // If the order is now inactive, update OrderRepository
         if (!currentlyActive) {
@@ -1826,7 +1826,6 @@ public void orderDead(MarketOrder order) {
     return order;
 }
 
-
   /**
    * Handles notification of a best price update.
    * Implementation of IOrderManager.best()
@@ -1861,6 +1860,15 @@ public void orderDead(MarketOrder order) {
                                     GCBestManager.getInstance().getRegGCRate(),
                                     GCBestManager.getInstance().getCashGCBest(),
                                     GCBestManager.getInstance().getRegGCBest());
+
+                    // Map<String, Map<String, List<String>>> multipleOrders = checkForMultipleActiveOrders(best.getId());
+                    // if (!multipleOrders.isEmpty()) {
+                    //     LOGGER.warn("Multiple active orders detected after processing order update for {}/{}", 
+                    //         best.getId());
+                    //     // Cancel oldest orders so only newest order is remaining per side
+                    //     cancelOldestOrders(multipleOrders);
+                    // }
+
                 } catch (Exception e) {
                     LOGGER.error("Error forwarding best price to market maker: {}", e.getMessage(), e);
                 }
@@ -1892,6 +1900,162 @@ public void orderDead(MarketOrder order) {
       MkvChainAction action) {
 
   }
+
+private void monitorActiveOrders() {
+    try {
+        // Full system check periodically
+        Map<String, Map<String, List<String>>> multipleOrders = checkForMultipleActiveOrders(null);
+        
+        if (!multipleOrders.isEmpty()) {
+            LOGGER.warn("Active order monitoring detected issues with {} instruments", 
+                multipleOrders.size());
+            
+            // Here you could implement automatic resolution logic
+            // For example, keep the newest order and cancel older ones
+            cancelOldestOrders(multipleOrders);
+        } else {
+            LOGGER.debug("Active order monitoring: No multiple active orders detected");
+        }
+    } catch (Exception e) {
+        LOGGER.error("Error in active order monitoring: {}", e.getMessage(), e);
+    }
+}
+
+/**
+ * Resolves multiple active orders by cancelling all but the newest order
+ * for each instrument/side combination.
+ * 
+ * @param multipleOrders Map of instruments to sides to order lists
+ */
+private void cancelOldestOrders(Map<String, Map<String, List<String>>> multipleOrders) {
+    try {
+        for (Map.Entry<String, Map<String, List<String>>> entry : multipleOrders.entrySet()) {
+            String instrumentId = entry.getKey();
+            Map<String, List<String>> sides = entry.getValue();
+            
+            for (Map.Entry<String, List<String>> sideEntry : sides.entrySet()) {
+                String side = sideEntry.getKey();
+                List<String> orderIds = sideEntry.getValue();
+                
+                if (orderIds.size() <= 1) {
+                    continue;
+                }
+                
+                LOGGER.info("Resolving multiple active orders for {}/{}", instrumentId, side);
+                
+                // Sort orders by creation time (newest first)
+                List<MarketOrder> orders = new ArrayList<>();
+                for (String orderId : orderIds) {
+                    MarketOrder order = orderRepository.getOrderByOrderId(orderId);
+                    if (order != null) {
+                        orders.add(order);
+                    }
+                }
+                
+                orders.sort((a, b) -> Long.compare(b.getCreationTimestamp(), a.getCreationTimestamp()));
+                
+                // Keep the newest order, cancel all others
+                if (!orders.isEmpty()) {
+                    MarketOrder newestOrder = orders.get(0);
+                    LOGGER.info("Keeping newest order: {}", newestOrder.getOrderId());
+                    
+                    // Cancel all other orders
+                    for (int i = 1; i < orders.size(); i++) {
+                        MarketOrder orderToCancel = orders.get(i);
+                        LOGGER.info("Cancelling duplicate order: {} (age: {} ms)", 
+                            orderToCancel.getOrderId(), 
+                            System.currentTimeMillis() - orderToCancel.getCreationTimestamp());
+                            
+                        String marketSource = orderToCancel.getMarketSource();
+                        String traderId = getTraderForVenue(marketSource);
+                        String orderId = orderToCancel.getOrderId();
+                        
+                        if (marketSource != null && traderId != null && orderId != null) {
+                            MarketOrder.orderCancel(marketSource, traderId, orderId, this);
+                        }
+                    }
+                }
+            }
+        }
+    } catch (Exception e) {
+        LOGGER.error("Error resolving multiple active orders: {}", e.getMessage(), e);
+    }
+}
+
+/**
+ * Checks for multiple active orders on the same side of the market
+ * and logs any found.
+ * 
+ * @param instrumentId Optional instrument ID to check, or null to check all tracked instruments
+ * @return Map of instruments with multiple active orders
+ */
+public Map<String, Map<String, List<String>>> checkForMultipleActiveOrders(String instrumentId) {
+    try {
+        Map<String, Map<String, List<String>>> multipleOrders;
+        
+        if (instrumentId != null) {
+            // Check specific instrument
+            multipleOrders = new HashMap<>();
+            List<String> buyOrders = orderRepository.getActiveOrdersForSide(instrumentId, "Buy");
+            List<String> sellOrders = orderRepository.getActiveOrdersForSide(instrumentId, "Sell");
+            
+            if (buyOrders.size() > 1 || sellOrders.size() > 1) {
+                Map<String, List<String>> sidesToOrders = new HashMap<>();
+                
+                if (buyOrders.size() > 1) {
+                    sidesToOrders.put("Buy", buyOrders);
+                }
+                
+                if (sellOrders.size() > 1) {
+                    sidesToOrders.put("Sell", sellOrders);
+                }
+                
+                if (!sidesToOrders.isEmpty()) {
+                    multipleOrders.put(instrumentId, sidesToOrders);
+                }
+            }
+        } else {
+            // Check all tracked instruments
+            multipleOrders = orderRepository.detectMultipleActiveOrders();
+        }
+        
+        // Log any issues found
+        if (!multipleOrders.isEmpty()) {
+            LOGGER.warn("Detected multiple active orders on the same side for {} instruments", 
+                multipleOrders.size());
+                
+            for (Map.Entry<String, Map<String, List<String>>> entry : multipleOrders.entrySet()) {
+                String instrId = entry.getKey();
+                Map<String, List<String>> sides = entry.getValue();
+                
+                for (Map.Entry<String, List<String>> sideEntry : sides.entrySet()) {
+                    String side = sideEntry.getKey();
+                    List<String> orderIds = sideEntry.getValue();
+                    
+                    LOGGER.warn("Instrument {} has {} active {} orders: {}", 
+                        instrId, orderIds.size(), side, String.join(", ", orderIds));
+                        
+                    // Add order details for each order
+                    for (String orderId : orderIds) {
+                        MarketOrder order = orderRepository.getOrderByOrderId(orderId);
+                        if (order != null) {
+                            LOGGER.warn("  - OrderId: {}, ReqId: {}, MarketSource: {}, Age: {} ms", 
+                                orderId, 
+                                order.getMyReqId(),
+                                order.getMarketSource(),
+                                System.currentTimeMillis() - order.getCreationTimestamp());
+                        }
+                    }
+                }
+            }
+        }
+        
+        return multipleOrders;
+    } catch (Exception e) {
+        LOGGER.error("Error checking for multiple active orders: {}", e.getMessage(), e);
+        return Collections.emptyMap();
+    }
+}
 
 private void initializeHeartbeat() {
     heartbeatScheduler.scheduleAtFixedRate(() -> {
@@ -2048,81 +2212,6 @@ private void setupPatternSubscriptionMonitor() {
     }, 15, 30, TimeUnit.SECONDS);  // Check sooner initially (15 sec), then every 30 sec
   }
 
-  /**
-   * Checks for and cancels any orders that have been in the market for too long.
-   */
-  private void checkForExpiredOrders() {
-    // Skip if we're already shutting down
-    if (isShuttingDown) {
-        return;
-    }
-    
-    try {
-        // Create a copy of the orders map to avoid concurrent modification
-        Collection<MarketOrder> orderCollection = orderRepository.getAllOrders();
-        Map<Integer, MarketOrder> ordersCopy = new HashMap<>();
-        for (MarketOrder order : orderCollection) {
-            ordersCopy.put(order.getMyReqId(), order);
-        }        int expiredCount = 0;
-        LOGGER.info("Checking for expired orders - currently tracking {} orders", ordersCopy.size());
-
-        for (MarketOrder order : ordersCopy.values()) {
-            // Skip cancel requests
-            if ("Cancel".equals(order.getVerb())) {
-                continue;
-            }
-            
-            // Check if the order is expired
-            if (order.isExpired()) {
-                // Get necessary info for the cancel request
-                String orderId = order.getOrderId();
-                String marketSource = order.getMarketSource();
-
-                // Check if the order is in a valid state for cancellation
-                if (orderId == null || orderId.isEmpty()) {
-                    LOGGER.warn("Order ID is null or empty for order: {}", order);
-                    continue;
-                }
-
-                // Only try to cancel if we have an order ID
-                if (orderId != null && !orderId.isEmpty()) {
-                    String traderId = getTraderForVenue(marketSource);
-
-                    LOGGER.info("Auto-cancelling expired order: reqId={}, orderId={}, age={} seconds",
-                        order.getMyReqId(), orderId, (order.getAgeMillis() / 1000));
-
-                    // Issue the cancel request
-                    MarketOrder cancelOrder = MarketOrder.orderCancel(
-                        marketSource,
-                        traderId,
-                        orderId,
-                        this
-                    );
-                    
-                    if (cancelOrder != null) {
-                        // Track the cancel request
-                        removeOrder(order.getMyReqId());
-                        expiredCount++;
-                        
-                        // Log to machine-readable format
-                        ApplicationLogging.logOrderUpdate(
-                            "AUTO_CANCEL", 
-                            order.getMyReqId(),
-                            order.getOrderId(),
-                            "Order expired after " + (order.getAgeMillis() / 1000) + " seconds"
-                        );
-                    }
-                }
-            }
-        }
-        
-        if (expiredCount > 0) {
-            LOGGER.info("Auto-cancelled {} expired orders", expiredCount);
-        }
-    } catch (Exception e) {
-        LOGGER.error("Error checking for expired orders: {}", e.getMessage(), e);
-    }
-}
 
     /**
      * Initiates shutdown process for the application.

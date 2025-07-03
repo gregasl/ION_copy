@@ -1337,7 +1337,7 @@ public class MarketMaker implements IOrderManager {
                 if (decision.hasBid) {
                     // Check if we need to update bid
                     double currentBidPrice = existingQuote.getBidPrice();
-                    boolean updateBid = (!hasActiveBid || ((currentBidPrice != decision.bidPrice) && (existingQuote.getBidAge() > 250)));
+                    boolean updateBid = (!hasActiveBid || ((currentBidPrice != decision.bidPrice) && (existingQuote.getBidAge() > 1500)));
                     LOGGER.info("processMarketUpdate: Current bid price for {}: {}, update required: {}", 
                         Id, currentBidPrice, updateBid);
                     if (updateBid) {
@@ -1377,7 +1377,7 @@ public class MarketMaker implements IOrderManager {
                 if (decision.hasAsk) {
                     // Check if we need to update ask
                     double currentAskPrice = existingQuote.getAskPrice();
-                    boolean updateAsk = (!hasActiveAsk || ((currentAskPrice != decision.askPrice) && (existingQuote.getAskAge() > 250)));
+                    boolean updateAsk = (!hasActiveAsk || ((currentAskPrice != decision.askPrice) && (existingQuote.getAskAge() > 1500)));
                     LOGGER.info("processMarketUpdate: Current ask price for {}: {}, update required: {}", 
                         Id, currentAskPrice, updateAsk);    
                     if (updateAsk) {
@@ -1667,6 +1667,23 @@ public class MarketMaker implements IOrderManager {
                     }
                 } else {
                     // Already tracking this instrument
+                    ActiveQuote existingQuote = orderRepository.getQuote(Id);
+                    if (existingQuote != null) {
+                        LOGGER.debug("makeMarketsForEligibleBonds: Found existing quote for Id={}", Id);
+                    }
+                    if(existingQuote.isBidActive()) {
+                        // Existing quote is still active, skip update
+                        LOGGER.debug("makeMarketsForEligibleBonds: Existing quote for Id={} is still active, skipping update", Id);
+                        marketsSkipped++;
+                        continue;
+                    } else {
+                        int result = tryCreateOrUpdateMarkets(Id);
+                        if (result > 0) {
+                            marketsCreated++;
+                        } else {
+                            marketsSkipped++;
+                        }
+                    }
                     marketsUpdated++;
                 }
             }
@@ -1771,20 +1788,13 @@ public class MarketMaker implements IOrderManager {
                     }
                 }
             } else {
-                // Check if any existing orders are dead and need replacement
-                MarketOrder bidOrder = existingQuote.getBidOrder();
-                MarketOrder askOrder = existingQuote.getAskOrder();
-                
-                boolean bidActive = (bidOrder != null && !bidOrder.isDead());
-                boolean askActive = (askOrder != null && !askOrder.isDead());
-                
                 // Only update sides that need attention
-                if (!bidActive && decision.hasBid) {
+                if (!existingQuote.isBidActive() && decision.hasBid) {
                     placeOrder(Id, nativeInstrument, "Buy", decision.bidPrice, decision.bidSource);
                     orderRepository.trackInstrument(Id);
                 }
                 
-                if (!askActive && decision.hasAsk) {
+                if (!existingQuote.isAskActive() && decision.hasAsk) {
                     placeOrder(Id, nativeInstrument, "Sell", decision.askPrice, decision.askSource);
                     orderRepository.trackInstrument(Id);
                 }
@@ -2344,6 +2354,14 @@ public class MarketMaker implements IOrderManager {
                 if (LOGGER.isInfoEnabled()) {
                     LOGGER.info("Order placed successfully: reqId={}", order.getMyReqId());
                 }
+
+                if (order.getErrStr() != null && !order.getErrStr().isEmpty()) {
+                    if (LOGGER.isErrorEnabled()) {
+                        LOGGER.error("Error placing order: {}", order.getErrStr());
+                    }
+                    return; // Exit early if there was an error
+                }
+
                 // Update the appropriate quote
                 ActiveQuote quote = orderRepository.getQuote(Id);
 
