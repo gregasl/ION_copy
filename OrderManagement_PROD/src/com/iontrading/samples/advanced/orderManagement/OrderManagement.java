@@ -1634,9 +1634,9 @@ private void handleResumeCommand(Map<String, Object> controlMessage) {
             if (((ask-bid) * orderBidSize) - ((cash_gc - ask) * minsizeDiff) / orderAskSize < -0.005) {
                 // Trade is not close enough to breakeven
                 if (LOGGER.isInfoEnabled()) {
-                    LOGGER.info("ID: {} - Skipping trade as not close enough to breakeven: Details: [{}], {}, ask={}, bid={}, " +
+                    LOGGER.info("ID: {} - Skipping trade as not close enough to breakeven: Details: {}, ask={}, askSrc={}, bid={}, bidSrc={} " +
                         "orderBidSize={}, cash_gc={}, ask={}, minsizeDiff={}, orderAskSize={}",
-                        id, isCash ? "CASH" : "REG", ask, bid, orderBidSize, cash_gc, ask, minsizeDiff, orderAskSize);
+                        id, isCash ? "CASH" : "REG", ask, askSrc, bid, bidSrc, orderBidSize, cash_gc, ask, minsizeDiff, orderAskSize);
                 }
                 return;
             }
@@ -1644,9 +1644,9 @@ private void handleResumeCommand(Map<String, Object> controlMessage) {
             if (((ask-bid) * orderBidSize) - ((reg_gc - ask) * minsizeDiff) / orderAskSize > 0.005) {
                 // Trade is not close enough to breakeven
                 if (LOGGER.isInfoEnabled()) {
-                    LOGGER.info("ID: {} - Skipping trade as not close enough to breakeven: Details: [{}], {}, ask={}, bid={}, " +
+                    LOGGER.info("ID: {} - Skipping trade as not close enough to breakeven: Details: {}, ask={}, askSrc={}, bid={}, bidSrc={} " +
                         "orderBidSize={}, reg_gc={}, ask={}, minsizeDiff={}, orderAskSize={}",
-                        id, isCash ? "CASH" : "REG", ask, bid, orderBidSize, reg_gc, ask, minsizeDiff, orderAskSize);
+                        id, isCash ? "CASH" : "REG", ask, askSrc, bid, bidSrc, orderBidSize, reg_gc, ask, minsizeDiff, orderAskSize);
                 }
                 return;
             }
@@ -1690,7 +1690,7 @@ private void handleResumeCommand(Map<String, Object> controlMessage) {
 	        LOGGER.info("ID: {} - Skipping trade: Details: [{}] ask={} ({}), bid={} ({}), " +
   		        "sizeDiff={}, minSizeDiff={}, spread={}, " +
   		        "askSize={}/{}, bidSize={}/{}, multiplier={}, adjustment={}",
-  		        id, reason, securityType,
+  		        id, reason, 
   		        ask, askSrc, bid, bidSrc,
   		        sizeDiff, minsizeDiff, spread,
   		        orderAskSize, orderAskSizeTotal,
@@ -1744,7 +1744,7 @@ private void handleResumeCommand(Map<String, Object> controlMessage) {
    // Add null checks
       if (askVenueInstrument == null || bidVenueInstrument == null) {
           if (LOGGER.isWarnEnabled()) {
-              LOGGER.warn("Missing instrument mapping for {}, ask source: {}, bid source: {}", id, askSrc, bidSrc);
+              LOGGER.warn("Missing instrument mapping for {}, ask source: {} ({}), bid source: {} ({})", id, askSrc, askVenueInstrument, bidSrc, bidVenueInstrument);
           }
           return; // Skip this opportunity
       }

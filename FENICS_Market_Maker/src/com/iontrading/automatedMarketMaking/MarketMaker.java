@@ -1350,8 +1350,8 @@ public class MarketMaker implements IOrderManager {
                             LOGGER.info("No existing bid order to cancel for {}", Id);
                         }
                         //placing new order
-                        LOGGER.info("Placing new bid order for {}: price={}, source={}", 
-                            Id, decision.bidPrice, decision.bidSource);
+                        LOGGER.info("Placing new bid order for {}: price={}, source={}, bidSize={}", 
+                            Id, decision.bidPrice, decision.bidSource, best.getBidSize());
                         if (best.getBidSize()>0) {
                             placeOrder(Id, nativeInstrument, "Buy", decision.bidPrice, decision.bidSource);
                         }
@@ -1362,7 +1362,7 @@ public class MarketMaker implements IOrderManager {
                         }
                     }
                 } else if (hasActiveBid && !decision.hasBid) {
-                    // Cancel bid if we have no valid price
+                    // Cancel bid if we have no valid pricing reference
                     LOGGER.info("Cancelling existing bid order for {} - no valid pricing reference", Id);
                     MarketOrder existingBidOrder = existingQuote.getBidOrder();
                     if (existingBidOrder != null) {
@@ -1389,8 +1389,8 @@ public class MarketMaker implements IOrderManager {
                         } else {
                             LOGGER.info("No existing ask order to cancel for {}", Id);
                         }
-                        LOGGER.info("Placing new ask order for {}: price={}, source={}", 
-                            Id, decision.askPrice, decision.askSource);
+                        LOGGER.info("Placing new ask order for {}: price={}, source={}, askSize={}", 
+                            Id, decision.askPrice, decision.askSource, best.getAskSize());
                         if (best.getAskSize()>0) {
                             placeOrder(Id, nativeInstrument, "Sell", decision.askPrice, decision.askSource);
                         }

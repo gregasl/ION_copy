@@ -579,8 +579,16 @@ private void updateBestFromMap(Best best, Map<String, Object> recordData) {
         best.setAsk(getDoubleValue(recordData, "Ask" + askLevel, 0.0));
         best.setBid(getDoubleValue(recordData, "Bid" + bidLevel, 0.0));
 
+        LOGGER.debug(id + " - Set ask price: " + best.getAsk() + 
+            ", bid price: " + best.getBid() + 
+            " (ask level: " + askLevel + ", bid level: " + bidLevel + ")");
+
         best.setAskSrcCheck(getStringValue(recordData, "AskAttribute" + askLevel, ""));
         best.setBidSrcCheck(getStringValue(recordData, "BidAttribute" + bidLevel, ""));
+
+        LOGGER.debug(id + " - Set ask source check: " + best.getAskSrcCheck() + 
+            ", bid source check: " + best.getBidSrcCheck() + 
+            " (ask level: " + askLevel + ", bid level: " + bidLevel + ")");
 
         // Set source fields
         best.setAskSrc(getStringValue(recordData, "AskSrc" + askLevel, ""));
@@ -590,18 +598,38 @@ private void updateBestFromMap(Best best, Map<String, Object> recordData) {
         best.setAskStatus(askStatus);
         best.setBidStatus(bidStatus);
 
+        LOGGER.debug(id + " - Set bid status: " + best.getBidStatus() + 
+            " (ask level: " + askLevel + ", bid level: " + bidLevel + ")");
+
         // Set AON flags using the status bitmasks
         best.setAskIsAON(askStatus);
         best.setBidIsAON(bidStatus);
 
+        LOGGER.debug(id + " - Set ask is AON: " + best.getAskIsAON() + 
+            ", bid is AON: " + best.getBidIsAON() + 
+            " (ask level: " + askLevel + ", bid level: " + bidLevel + ")");
+
         best.setAskSrcCheck(getStringValue(recordData, "AskAttribute" + askLevel, ""));
         best.setBidSrcCheck(getStringValue(recordData, "BidAttribute" + bidLevel, ""));
         
+        LOGGER.debug(id + " - Set ask source check: " + best.getAskSrc() + 
+            ", bid source check: " + best.getBidSrc() + 
+            " (ask level: " + askLevel + ", bid level: " + bidLevel + ")");
+
         // Set size fields
         best.setAskSize(getDoubleValue(recordData, "AskSize" + askLevel, 0.0));
         best.setBidSize(getDoubleValue(recordData, "BidSize" + bidLevel, 0.0));
+
+        LOGGER.debug(id + " - Set bid size: " + best.getBidSize() + 
+            ", ask size: " + best.getAskSize() +
+            " (ask level: " + askLevel + ", bid level: " + bidLevel + ")");
+
         best.setAskSizeMin(getDoubleValue(recordData, "AskSize" + askLevel + "_Min", 0.0));
         best.setBidSizeMin(getDoubleValue(recordData, "BidSize" + bidLevel + "_Min", 0.0));
+
+        LOGGER.debug(id + " - Set ask size min: " + best.getAskSizeMin() + 
+            ", bid size min: " + best.getBidSizeMin() + 
+            " (ask level: " + askLevel + ", bid level: " + bidLevel + ")");
 
         // Set last fields
         best.setLastTradePrice(getDoubleValue(recordData, "TrdValueLast", 0.0));
@@ -638,7 +666,7 @@ private void updateBestFromMap(Best best, Map<String, Object> recordData) {
 
     private boolean isAON(int status) {
         // Directly use the AON bit-checking logic instead of creating an object
-        return (status & Best.PRICE_AON) == Best.PRICE_AON;
+        return (status & Best.PRICE_AON) != 0;
     }
 
     /**
@@ -707,7 +735,6 @@ private void updateBestFromMap(Best best, Map<String, Object> recordData) {
         } catch (Exception e) {
             LOGGER.warn("Error converting field {} value: {}", field, value);
         }
-
         return defaultValue;
     }
 
