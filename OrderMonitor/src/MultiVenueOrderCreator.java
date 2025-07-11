@@ -338,55 +338,14 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
         
         LOGGER.info("Configuration:");
         LOGGER.info("  System User: {}", SYSTEM_USER);
-        LOGGER.info("  Available Venues:");
         for (Map.Entry<String, VenueConfig> entry : VENUE_CONFIGS.entrySet()) {
-            LOGGER.info("    {} -> Trader: {}", entry.getKey(), entry.getValue().traderId);
+            LOGGER.info("  {} -> Trader: {}", entry.getKey(), entry.getValue().traderId);
         }
         LOGGER.info("  Target Instruments: {}", Arrays.toString(TEST_INSTRUMENTS));
         LOGGER.info("  Order Parameters: {} {} @ {}", ORDER_VERB, ORDER_QUANTITY, DEFAULT_ORDER_PRICE);
         LOGGER.info("");
         
-        // Venue selection
-        Scanner scanner = new Scanner(System.in);
-        LOGGER.info("Venue Selection:");
-        LOGGER.info("  1. BTEC_REPO_US (Trader: TEST2)");
-        LOGGER.info("  2. DEALERWEB_REPO (Trader: asldevtrd1)");
-        LOGGER.info("  3. FENICS_USREPO (Trader: frosasl1)");
-        LOGGER.info("  4. Auto-select based on availability");
-        LOGGER.info("Enter choice (1-4) [default: 4]: ");
-        
         VenueConfig selectedVenue = null;
-        try {
-            // Handle user input with timeout
-            final String[] userChoice = {""};
-            Thread inputThread = new Thread(() -> {
-                try {
-                    userChoice[0] = scanner.nextLine();
-                } catch (Exception e) {
-                    // Ignore input errors
-                }
-            });
-            inputThread.setDaemon(true);
-            inputThread.start();
-            inputThread.join(5000); // 5 second timeout
-            
-            switch (userChoice[0].trim()) {
-                case "1":
-                    selectedVenue = VENUE_CONFIGS.get("BTEC_REPO_US");
-                    break;
-                case "2":
-                    selectedVenue = VENUE_CONFIGS.get("DEALERWEB_REPO");
-                    break;
-                case "3":
-                    selectedVenue = VENUE_CONFIGS.get("FENICS_USREPO");
-                    break;
-                default:
-                    LOGGER.info("Using automatic venue selection...");
-                    break;
-            }
-        } catch (Exception e) {
-            LOGGER.debug("Input handling exception: ", e);
-        }
         
         try {
             // Initialize and start MKV platform
@@ -422,8 +381,6 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
             mainInstance.loginCheckLatch.await(5, TimeUnit.SECONDS);
             
             // Display venue status summary
-            LOGGER.info("");
-            LOGGER.info("Venue Status Summary:");
             for (String venue : VENUE_PRIORITY) {
                 Boolean isActive = venueStatus.get(venue);
                 LOGGER.info("  {}: {}", venue, 
@@ -442,13 +399,11 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
                 }
             }
             
-            LOGGER.info("");
             LOGGER.info("Selected Venue: {} with Trader: {}", 
                 activeVenueConfig.marketSource, activeVenueConfig.traderId);
             
             // Initialize DepthListener
             LOGGER.info("");
-            LOGGER.info("Loading instrument data...");
 
             // Suppress console output during initialization
             PrintStream originalOut = System.out;
@@ -494,7 +449,6 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
                 depthListener != null ? depthListener.getInstrumentCount() : "Unknown");
             
             // Find instrument mapping
-            LOGGER.info("");
             LOGGER.info("Searching for instrument mapping on {}...", activeVenueConfig.marketSource);
             String nativeId = null;
             String selectedCusip = null;
@@ -545,22 +499,12 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
             dynamicOrderPrice = calculateDynamicPrice(nativeId, selectedCusip);
             LOGGER.info("");
             LOGGER.info("Calculated order price: {}", String.format("%.4f", dynamicOrderPrice));
-            
-            // Create order
-            LOGGER.info("");
-            LOGGER.info("Creating order with following parameters:");
-            LOGGER.info("  Venue: {}", activeVenueConfig.marketSource);
-            LOGGER.info("  Instrument: {}", selectedCusip);
-            LOGGER.info("  Native ID: {}", nativeId);
-            LOGGER.info("  Trader: {}", activeVenueConfig.traderId);
-            LOGGER.info("  Price: {}", String.format("%.4f", dynamicOrderPrice));
-            LOGGER.info("  Quantity: {}", ORDER_QUANTITY);
+    
             
             MultiVenueOrderCreator orderCreator = createOrder(nativeId, selectedCusip);
             
             if (orderCreator != null) {
                 LOGGER.info("Order request sent successfully");
-                LOGGER.info("Monitoring for response...");
                 
                 // Monitor for response
                 boolean responseReceived = false;
@@ -584,62 +528,44 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
                 }
                 
                 // Display final order status
-                LOGGER.info("");
+
                 LOGGER.info("Order Status Summary:");
                 logOrderStatus();
                 
-                // Handle order cancellation
+                // Automatic order cancellation
                 LOGGER.info("");
-                LOGGER.info("Press Enter within 5 seconds to cancel the order...");
+                LOGGER.info("Automatically canceling order in 5 seconds...");
                 try {
-                    long startTime = System.currentTimeMillis();
-                    final boolean[] shouldCancel = {false};
+                    Thread.sleep(5000); // Wait 5 seconds before auto-cancel
                     
-                    Thread inputThread = new Thread(() -> {
-                        try {
-                            System.in.read();
-                            synchronized (MultiVenueOrderCreator.class) {
-                                shouldCancel[0] = true;
-                                MultiVenueOrderCreator.class.notify();
-                            }
-                        } catch (Exception e) {
-                            // Ignore input exceptions
-                        }
-                    });
-                    inputThread.setDaemon(true);
-                    inputThread.start();
-                    
-                    synchronized (MultiVenueOrderCreator.class) {
-                        try {
-                            MultiVenueOrderCreator.class.wait(5000);
-                        } catch (InterruptedException e) {
-                            Thread.currentThread().interrupt();
-                        }
-                    }
-                    
-                    if (shouldCancel[0] && System.currentTimeMillis() - startTime < 5000) {
-                        LOGGER.info("Cancellation requested");
+                    OrderDetails currentOrder = orderTracking.get(String.valueOf(reqId));
+                    if (currentOrder != null && currentOrder.orderId != null && 
+                        !currentOrder.orderId.startsWith("PENDING") && 
+                        !"FAILED".equals(currentOrder.status)) {
                         
-                        OrderDetails currentOrder = orderTracking.get(String.valueOf(reqId));
-                        if (currentOrder != null && currentOrder.orderId != null && 
-                            !currentOrder.orderId.startsWith("PENDING") && 
-                            !"FAILED".equals(currentOrder.status)) {
-                            
-                            cancelOrder(currentOrder.orderId, currentOrder.venue);
-                            Thread.sleep(2000);
-                            
-                            LOGGER.info("");
-                            LOGGER.info("Final Status After Cancellation:");
-                            logOrderStatus();
+                        boolean cancelSuccess = cancelOrder(currentOrder.orderId, currentOrder.venue);
+                        
+                        if (cancelSuccess) {
+                            LOGGER.info("Order cancellation request sent successfully");
                         } else {
-                            LOGGER.info("Cannot cancel - order not in valid state");
+                            LOGGER.warn("Order cancellation request failed");
                         }
+                        
+                        // Wait for cancellation confirmation
+                        Thread.sleep(2000);
+                        
+                        LOGGER.info("Status After Automatic Cancellation:");
+                        logOrderStatus();
                     } else {
-                        LOGGER.info("Cancellation timeout - Order remains active");
+                        LOGGER.warn("Cannot cancel - order not in valid state for cancellation");
+                        if (currentOrder != null) {
+                            LOGGER.warn("Order status: {}, Order ID: {}", 
+                                currentOrder.status, currentOrder.orderId);
+                        }
                     }
                     
                 } catch (Exception e) {
-                    LOGGER.error("Error in cancellation process: ", e);
+                    LOGGER.error("Error in automatic cancellation process: ", e);
                 }
             }
             
@@ -647,9 +573,9 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
             LOGGER.error("Application error: ", e);
         } finally {
             LOGGER.info("");
-            LOGGER.info("Shutting down application...");
             Mkv.stop();
             LOGGER.info("Shutdown complete");
+            System.exit(0);
         }
     }
     

@@ -1,6 +1,5 @@
 # Java compiled files
 **/*.class
-**/*.jar
 **/*.war
 **/*.ear
 **/*.nar
