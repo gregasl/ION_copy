@@ -1,0 +1,4 @@
+OrderMonitor/LOGS/
+OrderMonitor/MkvDB/
+OrderMonitor/target/
+**/*.class
