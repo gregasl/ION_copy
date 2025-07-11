@@ -1,4 +1,55 @@
+# Java compiled files
+**/*.class
+**/*.jar
+**/*.war
+**/*.ear
+**/*.nar
+
+# Logs and temporary files
+**/LOGS/
+**/*.log
+**/*.tmp
+**/*.temp
+
+# Build directories
+**/target/
+**/build/
+**/out/
+
+# Database files
+**/MkvDB/
+**/*.db
+**/*.sqlite
+**/*.mvt
+
+# IDE files
+.vscode/
+.idea/
+**/*.iml
+**/*.iws
+**/*.ipr
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Large files (anything over 50MB)
+**/*.7z.001
+**/*.zip
+**/*.rar
+**/*.tar.gz
+
+# Specific project directories
 OrderMonitor/LOGS/
 OrderMonitor/MkvDB/
 OrderMonitor/target/
-**/*.class
+ION_jmkv-main/marketDataSubscriberPROD.7z.001
+ION_jmkv-main/marketDataSubscriberUAT.7z.001
+ION_jmkv-main/OrderManagement_crossing.7z.001
+ION_jmkv-main/OrderManagement_crossingwGC.7z.001
+ION_jmkv-main/OrderManagement1and2.001
