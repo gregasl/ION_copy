@@ -26,22 +26,16 @@ import java.util.Scanner;
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.LoggerContext;
 
-import redis.clients.jedis.Jedis;
-import redis.clients.jedis.JedisPubSub;
-import redis.clients.jedis.JedisPool;
-import redis.clients.jedis.JedisPoolConfig;
-import org.json.JSONObject;
-
 /**
  * Supported venues:
  * - FENICS_USREPO
  * - BTEC_REPO_US
  * - DEALERWEB_REPO
  */
-public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatformListener, MkvRecordListener {
-    
-    private static final Logger LOGGER = LoggerFactory.getLogger(MultiVenueOrderCreator.class);
-    
+public class JavaSingleOrder implements MkvFunctionCallListener, MkvPlatformListener, MkvRecordListener {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(JavaSingleOrder.class);
+
     // Venue configuration class
     private static class VenueConfig {
         final String marketSource;
@@ -87,7 +81,7 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
     private static final String APPLICATION_ID = "automatedMarketMaking";
     
     // Order configuration
-    private static final String[] TEST_INSTRUMENTS = {"912797PQ4"};
+    private static final String[] TEST_INSTRUMENTS = {"912797RH2"};
     private static final String ORDER_VERB = "Buy";
     private static final double ORDER_QUANTITY = 100.0;
     private static final double DEFAULT_ORDER_PRICE = 4.0;
@@ -112,14 +106,6 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
     
     // Components
     private static DepthListener depthListener;
-    
-    // Redis
-    private static RedisMessageBridge redisMessageBridge;
-    private static final String REDIS_HOST = "cacheuat";
-    private static final int REDIS_PORT = 6379;
-    private static final String MARKET_DATA_CHANNEL = "market_data";
-    private static final String ORDER_COMMAND_CHANNEL = "order_commands";
-    private static final String ORDER_RESPONSE_CHANNEL = "order_responses";
     
     // Order tracking
     private static final Map<String, OrderDetails> orderTracking = new ConcurrentHashMap<>();
@@ -161,10 +147,10 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
      * 
      * @param reqId Request ID for this instance
      */
-    public MultiVenueOrderCreator(int reqId) {
+    public JavaSingleOrder(int reqId) {
         this.myReqId = reqId;
         this.creationTimestamp = System.currentTimeMillis();
-        LOGGER.debug("MultiVenueOrderCreator initialized - ReqId: {}", reqId);
+        LOGGER.debug("JavaSingleOrder initialized - ReqId: {}", reqId);
     }
     
     /**
@@ -214,7 +200,6 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
             Boolean isActive = venueStatus.get(venue);
             if (Boolean.TRUE.equals(isActive)) {
                 VenueConfig config = VENUE_CONFIGS.get(venue);
-                LOGGER.info("Selected active venue: {} (Trader: {})", venue, config.traderId);
                 return config;
             }
         }
@@ -324,18 +309,25 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
             loggerContext.getLogger("DepthListener").setLevel(Level.WARN);
             loggerContext.getLogger("Instrument").setLevel(Level.WARN);
             loggerContext.getLogger("com.iontrading.mkv").setLevel(Level.WARN);
-            loggerContext.getLogger("MkvConnection").setLevel(Level.WARN);
+            loggerContext.getLogger("MkvConnection").setLevel(Level.DEBUG);  // Enable MkvConnection logs for market data
             loggerContext.getLogger("com.iontrading.automatedMarketMaking.DepthListener").setLevel(Level.WARN);
             loggerContext.getLogger("com.iontrading.automatedMarketMaking.Instrument").setLevel(Level.WARN);
             
-            // Set as Best
-            loggerContext.getLogger("Best").setLevel(Level.WARN);
-            loggerContext.getLogger("com.iontrading.automatedMarketMaking.Best").setLevel(Level.WARN);
-            loggerContext.getLogger("GCBest").setLevel(Level.WARN);
-            loggerContext.getLogger("com.iontrading.automatedMarketMaking.GCBest").setLevel(Level.WARN);
+            // Market data and repository loggers - set to DEBUG to show detailed updates
+            loggerContext.getLogger("Best").setLevel(Level.ERROR);
+            loggerContext.getLogger("com.iontrading.automatedMarketMaking.Best").setLevel(Level.ERROR);
+            loggerContext.getLogger("GCBest").setLevel(Level.DEBUG);
+            loggerContext.getLogger("com.iontrading.automatedMarketMaking.GCBest").setLevel(Level.DEBUG);
+            loggerContext.getLogger("GCBestManager").setLevel(Level.DEBUG);
+            loggerContext.getLogger("OrderRepository").setLevel(Level.ERROR);
+            
+            // Additional market data loggers
+            loggerContext.getLogger("com.iontrading.mkv.GCBestManager").setLevel(Level.DEBUG);
+            loggerContext.getLogger("com.iontrading.mkv.Best").setLevel(Level.ERROR);
+            loggerContext.getLogger("com.iontrading.mkv.GCBest").setLevel(Level.DEBUG);
             
             // Keep main application at INFO level
-            loggerContext.getLogger("MultiVenueOrderCreator").setLevel(Level.INFO);
+            loggerContext.getLogger("JavaSingleOrder").setLevel(Level.INFO);
             loggerContext.getLogger("FENICSOrderCreatorFixed").setLevel(Level.INFO);
             
             LOGGER.debug("Logging levels configured successfully");
@@ -366,34 +358,8 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
         
         try {
             // Initialize and start MKV platform
-            MultiVenueOrderCreator mainInstance = new MultiVenueOrderCreator(0);
-            
-            // Close and clean
-            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                LOGGER.info("Shutdown signal received, cleaning up...");
-                if (redisMessageBridge != null) {
-                    try {
-                        redisMessageBridge.stop();
-                        LOGGER.info("Redis Bridge Stopped");
-                    } catch (Exception e) {
-                        LOGGER.error("Error stopping Redis Bridge: ", e);
-                    }
-                }
+            JavaSingleOrder mainInstance = new JavaSingleOrder(0);
 
-                // Stop MKV platform
-                try {
-                    Mkv.stop();
-                    LOGGER.info("MKV Platform stopped");
-                } catch (Exception e) {
-                    LOGGER.error("Error stopping MKV Platform: ", e);
-                }
-                
-                LOGGER.info("Shutdown complete");
-            }));
-            
-            // Initialize Redis message bridge
-            initializeRedisBridge();
-            
             LOGGER.info("Starting MKV Platform...");
             MkvQoS qos = new MkvQoS();
             if (args.length > 0) {
@@ -492,8 +458,8 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
                         Map<String, Object> health = depthListener.getHealthStatus();
                         Boolean isReceivingData = (Boolean) health.get("isReceivingData");
                         if (Boolean.FALSE.equals(isReceivingData)) {
-                            System.out.println("\nWaiting for market data...");
-                            System.out.print("Loading: ");
+                            System.out.println("\nNote: Market closed - limited data available");
+                            System.out.print("Initializing: ");
                         }
                     }
                 }
@@ -508,10 +474,8 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
             
             LOGGER.info("Instrument data loaded successfully - Total instruments: {}", 
                 depthListener != null ? depthListener.getInstrumentCount() : "Unknown");
-            
-            
+            LOGGER.info("");
             // Find instrument mapping
-            // LOGGER.info("Searching for instrument mapping on {}...", activeVenueConfig.marketSource);
             String nativeId = null;
             String selectedCusip = null;
             
@@ -530,7 +494,6 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
             
             // Try with suffixes if direct mapping not found
             if (nativeId == null) {
-                // LOGGER.info("Direct mapping not found, trying with suffixes...");
                 String[] suffixes = {"_C_Fixed", "_REG_Fixed"};
                 
                 for (String cusip : TEST_INSTRUMENTS) {
@@ -551,66 +514,88 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
             }
             
             if (nativeId == null) {
-                LOGGER.warn("No venue-specific mapping found, using direct CUSIP");
+                LOGGER.warn("No venue-specific mapping found for {} on {}", 
+                    TEST_INSTRUMENTS[0], activeVenueConfig.marketSource);
+                LOGGER.info("Using direct CUSIP as fallback");
                 selectedCusip = TEST_INSTRUMENTS[0];
                 nativeId = selectedCusip;
-                LOGGER.info("Using instrument ID: {}", nativeId);
             }
             
-            // 计算默认价格（仅用于显示，不自动下单）
-            dynamicOrderPrice = calculateDynamicPrice(nativeId, selectedCusip);
-            LOGGER.info("");
-            LOGGER.info("Default order price calculated: {}", String.format("%.4f", dynamicOrderPrice));
-            LOGGER.info("Instrument mapping ready: {} -> {}", selectedCusip, nativeId);
-            
-            // Redis集成模式：只监听Redis消息，不自动下单
-            LOGGER.info("");
-            LOGGER.info("=== Redis Trading Bridge Active ===");
-            LOGGER.info("System ready to receive trading commands from Redis");
-            LOGGER.info("Monitoring channels: order_commands, heartbeat");
-            LOGGER.info("Supported instruments: {}", Arrays.toString(TEST_INSTRUMENTS));
-            LOGGER.info("Default venue: {} (Trader: {})", activeVenueConfig.marketSource, activeVenueConfig.traderId);
-            LOGGER.info("Press Ctrl+C to shutdown");
-            LOGGER.info("");
-            
-            try {
-                while (true) {
-                    Thread.sleep(10000); 
-                    if (redisMessageBridge != null) {
-                        boolean redisHealthy = redisMessageBridge.testConnection();
-                        if (!redisHealthy) {
-                            LOGGER.warn("Redis connection lost, attempting to reconnect...");
-                            try {
-                                redisMessageBridge.stop();
-                                Thread.sleep(2000);
-                                initializeRedisBridge();
-                            } catch (Exception e) {
-                                LOGGER.error("Redis reconnection failed: ", e);
-                            }
-                        }
+            // Calculate dynamic price
+            dynamicOrderPrice = calculateDynamicPrice(selectedCusip);
+            LOGGER.info("Order price set: {} ({})", String.format("%.4f", dynamicOrderPrice), 
+                "Buy".equals(ORDER_VERB) ? "Buy" : "Sell");
+
+
+            JavaSingleOrder orderCreator = createOrder(nativeId, selectedCusip);
+
+            if (orderCreator != null) {
+    
+                // Monitor for response
+                boolean responseReceived = false;
+                for (int i = 0; i < 10; i++) {
+                    Thread.sleep(1000);
+                    
+                    OrderDetails details = orderTracking.get(String.valueOf(reqId));
+                    if (details != null && !details.status.equals("PENDING")) {
+                        responseReceived = true;
+                        break;
+                    }
+                    
+                    if (i % 3 == 2) {
+                        System.out.print(".");
                     }
                 }
-            } catch (InterruptedException e) {
-                LOGGER.info("Application interrupted, shutting down...");
-                Thread.currentThread().interrupt();
+                
+                if (!responseReceived) {
+                    LOGGER.warn("No response received within 10 seconds");
+                }
+                
+                // Display final order status
+                logOrderStatus();
+                
+                // Automatic order cancellation
+                LOGGER.info("Automatically canceling order in 10 seconds...");
+                try {
+                    Thread.sleep(10000); // Wait 10 seconds before auto-cancel
+                    
+                    OrderDetails currentOrder = orderTracking.get(String.valueOf(reqId));
+                    if (currentOrder != null && currentOrder.orderId != null && 
+                        !currentOrder.orderId.startsWith("PENDING") && 
+                        !"FAILED".equals(currentOrder.status)) {
+                        
+                        boolean cancelSuccess = cancelOrder(currentOrder.orderId, currentOrder.venue);
+                        
+                        if (cancelSuccess) {
+                            // Success logged in cancelOrder method
+                        } else {
+                            LOGGER.warn("Order cancellation request failed");
+                        }
+                        
+                        // Wait for cancellation confirmation
+                        Thread.sleep(2000);
+                        
+                        logOrderStatus();
+                    } else {
+                        LOGGER.warn("Cannot cancel - order not in valid state for cancellation");
+                        if (currentOrder != null) {
+                            LOGGER.warn("Order status: {}, Order ID: {}", 
+                                currentOrder.status, currentOrder.orderId);
+                        }
+                    }
+                    
+                } catch (Exception e) {
+                    LOGGER.error("Error in automatic cancellation process: ", e);
+                }
             }
             
         } catch (Exception e) {
             LOGGER.error("Application error: ", e);
-            
-            // Clean up resources
-            if (redisMessageBridge != null) {
-                try {
-                    redisMessageBridge.stop();
-                    LOGGER.info("Redis message bridge stopped");
-                } catch (Exception ex) {
-                    LOGGER.error("Failed to stop Redis message bridge: ", ex);
-                }
-            }
-            
+        } finally {
+            LOGGER.info("");
             Mkv.stop();
-            LOGGER.info("Application terminated due to error");
-            System.exit(1);
+            LOGGER.info("Shutdown complete");
+            System.exit(0);
         }
     }
     
@@ -651,7 +636,7 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
                             if (published && mkvObject.getName().equals(LOGIN_PATTERN) &&
                                 mkvObject.getMkvObjectType() == MkvObjectType.PATTERN) {
                                 try {
-                                    ((MkvPattern) mkvObject).subscribe(LOGIN_FIELDS, MultiVenueOrderCreator.this);
+                                    ((MkvPattern) mkvObject).subscribe(LOGIN_FIELDS, JavaSingleOrder.this);
                                     LOGGER.debug("Successfully subscribed to login pattern");
                                 } catch (Exception e) {
                                     LOGGER.error("Error subscribing to pattern: ", e);
@@ -696,12 +681,6 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
                     LOGGER.debug("{} status for venue {}: {}", SYSTEM_USER, src, status);
                     
                     venueStatus.put(src, "On".equals(status));
-                    
-                    if ("On".equals(status)) {
-                        OrderRepository.getInstance().addVenueActive(src, true);
-                    } else {
-                        OrderRepository.getInstance().addVenueActive(src, false);
-                    }
                 }
             }
         } catch (Exception e) {
@@ -712,32 +691,19 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
     /**
      * Calculate dynamic price for the order
      * 
-     * @param nativeId Native instrument ID
      * @param cusip CUSIP identifier
      * @return Calculated price
      */
-    private static double calculateDynamicPrice(String nativeId, String cusip) {
-        LOGGER.debug("Calculating dynamic price for instrument: {}", cusip);
+    private static double calculateDynamicPrice(String cusip) {
+        LOGGER.debug("Setting price for instrument: {}", cusip);
         
-        try {
-            double basePrice = DEFAULT_ORDER_PRICE;
-            
-            if ("Buy".equals(ORDER_VERB)) {
-                double adjustedPrice = 4.38;
-                LOGGER.info("Using adjusted buy price: {}", String.format("%.2f", adjustedPrice));
-                return Math.round(adjustedPrice * 100.0) / 100.0; // 确保2位小数
-            } else {
-                double adjustedPrice = 4.42;
-                LOGGER.info("Using adjusted sell price: {}", String.format("%.2f", adjustedPrice));
-                return Math.round(adjustedPrice * 100.0) / 100.0; // 确保2位小数
-            }
-            
-        } catch (Exception e) {
-            LOGGER.error("Error calculating dynamic price: ", e);
+        if ("Buy".equals(ORDER_VERB)) {
+            double adjustedPrice = 4.38;
+            return Math.round(adjustedPrice * 100.0) / 100.0; 
+        } else {
+            double adjustedPrice = 4.42;
+            return Math.round(adjustedPrice * 100.0) / 100.0;
         }
-        // Fallback to default price if calculation fails
-        LOGGER.info("Using default price: {}", DEFAULT_ORDER_PRICE);
-        return DEFAULT_ORDER_PRICE;
     }
     
     /**
@@ -745,19 +711,16 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
      * 
      * @param instrumentId Instrument identifier
      * @param originalCusip Original CUSIP
-     * @return MultiVenueOrderCreator instance or null if failed
+     * @return JavaSingleOrder instance or null if failed
      */
-    public static MultiVenueOrderCreator createOrder(String instrumentId, String originalCusip) {
+    public static JavaSingleOrder createOrder(String instrumentId, String originalCusip) {
         reqId++;
         
-        LOGGER.info("");
-        LOGGER.info("--------------------------------------------------------");
-        LOGGER.info("Venue: {}", activeVenueConfig.marketSource);
-        LOGGER.info("Trader: {}", activeVenueConfig.traderId);
-        LOGGER.info("Instrument: {}", instrumentId);
-        LOGGER.info("Quantity: {}", ORDER_QUANTITY);
-        LOGGER.info("Price: {}", String.format("%.4f", dynamicOrderPrice));
-        LOGGER.info("--------------------------------------------------------");
+        LOGGER.info("Creating Order:");
+        LOGGER.info("  Venue: {} | Trader: {} | Instrument: {}", 
+            activeVenueConfig.marketSource, activeVenueConfig.traderId, instrumentId);
+        LOGGER.info("  Type: {} {} @ {} | TIF: {}", 
+            ORDER_VERB, ORDER_QUANTITY, String.format("%.4f", dynamicOrderPrice), TIME_IN_FORCE);
         
         MkvPublishManager pm = Mkv.getInstance().getPublishManager();
         String functionName = activeVenueConfig.getOrderFunction();
@@ -783,14 +746,14 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
      * @param fn MkvFunction for order creation
      * @param instrumentId Instrument identifier
      * @param originalCusip Original CUSIP
-     * @return MultiVenueOrderCreator instance or null if failed
+     * @return JavaSingleOrder instance or null if failed
      */
-    private static MultiVenueOrderCreator createOrderWithFunction(MkvFunction fn, 
+    private static JavaSingleOrder createOrderWithFunction(MkvFunction fn, 
             String instrumentId, String originalCusip) {
         try {
             String freeText = MarketDef.getFreeText(String.valueOf(reqId), APPLICATION_ID);
             
-            MultiVenueOrderCreator order = new MultiVenueOrderCreator(reqId);
+            JavaSingleOrder order = new JavaSingleOrder(reqId);
             
             OrderDetails details = new OrderDetails("PENDING_" + reqId, reqId, 
                 originalCusip, activeVenueConfig.marketSource);
@@ -878,28 +841,12 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
                     if (extractedOrderId != null) {
                         details.orderId = extractedOrderId;
                     }
-                    
-                    // 发布订单成功响应到Redis
-                    publishOrderResponseToRedis(
-                        extractedOrderId != null ? extractedOrderId : "PENDING_" + myReqId,
-                        "SUBMITTED", 
-                        "Order submitted successfully", 
-                        details.venue
-                    );
                 }
             } else {
                 OrderDetails details = orderTracking.get(String.valueOf(myReqId));
                 if (details != null) {
                     details.status = "FAILED";
                     details.errorMsg = result;
-                    
-                    // 发布订单失败响应到Redis
-                    publishOrderResponseToRedis(
-                        "FAILED_" + myReqId,
-                        "FAILED", 
-                        result, 
-                        details.venue
-                    );
                 }
                 
                 if (result.contains("101") || result.contains("not logged in")) {
@@ -975,349 +922,6 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
             LOGGER.info("Connected to component: {}", component);
             isConnected = true;
             connectionLatch.countDown();
-        }
-    }
-    
-    // Redis integration
-    private static JedisPool jedisPool;
-    private static final String REDIS_CHANNEL = "order_updates";
-    
-    /**
-     * Initialize Redis connection pool
-     */
-    private static void initRedis() {
-        try {
-            JedisPoolConfig poolConfig = new JedisPoolConfig();
-            poolConfig.setMaxTotal(128);
-            poolConfig.setMaxIdle(128);
-            poolConfig.setMinIdle(16);
-            poolConfig.setTestOnBorrow(true);
-            poolConfig.setTestOnReturn(true);
-            poolConfig.setTestWhileIdle(true);
-            poolConfig.setBlockWhenExhausted(true);
-            poolConfig.setMaxWaitMillis(10000);
-
-            jedisPool = new JedisPool(poolConfig, "cacheuat", 6379, 10000, null);
-            LOGGER.info("Redis connection pool initialized");
-
-            // Start message subscription thread
-            new Thread(MultiVenueOrderCreator::subscribeToOrderUpdates).start();
-            
-        } catch (Exception e) {
-            LOGGER.error("Error initializing Redis: ", e);
-        }
-    }
-    
-    /**
-     * Subscribe to order update messages
-     */
-    private static void subscribeToOrderUpdates() {
-        Jedis jedis = null;
-        try {
-            jedis = jedisPool.getResource();
-            jedis.subscribe(new JedisPubSub() {
-                @Override
-                public void onMessage(String channel, String message) {
-                    handleOrderUpdateMessage(message);
-                }
-            }, REDIS_CHANNEL);
-            
-        } catch (Exception e) {
-            LOGGER.error("Error in Redis subscription: ", e);
-        } finally {
-            if (jedis != null) {
-                jedis.close();
-            }
-        }
-    }
-    
-    /**
-     * Handle order update messages
-     *
-     * @param message Message content
-     */
-    private static void handleOrderUpdateMessage(String message) {
-        LOGGER.info("Received order update message: {}", message);
-        
-        try {
-            // Parse JSON message
-            JSONObject jsonMessage = new JSONObject(message);
-            String orderId = jsonMessage.getString("orderId");
-            String status = jsonMessage.getString("status");
-            String errorMsg = jsonMessage.has("errorMsg") ? jsonMessage.getString("errorMsg") : "";
-
-            // Update order status
-            updateOrderStatus(orderId, status);
-
-            // Log detailed information
-            LOGGER.info("Order update - ID: {} | Status: {} | Error: {}", orderId, status, errorMsg);
-            
-        } catch (Exception e) {
-            LOGGER.error("Error handling order update message: ", e);
-        }
-    }
-    
-    /**
-     * Initialize Redis message bridge
-     */
-    private static void initializeRedisBridge() {
-        try {
-            redisMessageBridge = new RedisMessageBridge(REDIS_HOST, REDIS_PORT);
-
-            // Test Redis connection
-            if (redisMessageBridge.testConnection()) {
-                LOGGER.info("Redis connection successful");
-                redisMessageBridge.start();
-
-                // Start heartbeat service
-                Thread heartbeatThread = new Thread(() -> {
-                    while (true) {
-                        try {
-                            Thread.sleep(30000); // 30秒心跳
-                            redisMessageBridge.publishHeartbeat();
-                        } catch (InterruptedException e) {
-                            Thread.currentThread().interrupt();
-                            break;
-                        } catch (Exception e) {
-                            LOGGER.error("Heartbeat publishing failed: ", e);
-                        }
-                    }
-                });
-                heartbeatThread.setDaemon(true);
-                heartbeatThread.start();
-                
-            } else {
-                LOGGER.warn("Redis connection failed, running in standalone mode");
-                redisMessageBridge = null;
-            }
-        } catch (Exception e) {
-            LOGGER.error("Redis bridge initialization failed: ", e);
-            redisMessageBridge = null;
-        }
-    }
-    
-    /**
-     * Publish market data to Redis (if available)
-     */
-    private static void publishMarketDataToRedis(String instrument, double bidPrice, double askPrice) {
-        if (redisMessageBridge != null) {
-            try {
-                redisMessageBridge.publishMarketData(instrument, bidPrice, askPrice, 
-                    100.0, 100.0, System.currentTimeMillis());
-            } catch (Exception e) {
-                LOGGER.debug("Failed to publish market data to Redis: ", e);
-            }
-        }
-    }
-    
-    /**
-     * Publish order response to Redis (if available)
-     */
-    private static void publishOrderResponseToRedis(String orderId, String status, String message, String venue) {
-        if (redisMessageBridge != null) {
-            try {
-                redisMessageBridge.publishOrderResponse(orderId, status, message, venue, 
-                    System.currentTimeMillis());
-            } catch (Exception e) {
-                LOGGER.debug("Failed to publish order response to Redis: ", e);
-            }
-        }
-    }
-    
-    /**
-     * Create order from Redis message
-     *
-     * @param cusip CUSIP identifier from Redis
-     * @param side Order side (Buy/Sell)
-     * @param quantity Order quantity
-     * @param price Order price
-     * @param venue Target venue
-     * @return true if order creation was successful
-     */
-    public static boolean createOrderFromRedis(String cusip, String side, double quantity, double price, String venue) {
-        if (depthListener == null) {
-            LOGGER.error("DepthListener not initialized, cannot create order from Redis");
-            return false;
-        }
-        
-        try {
-            // Find instrument mapping
-            String nativeId = findInstrumentMapping(cusip, venue);
-            if (nativeId == null) {
-                LOGGER.error("No instrument mapping found for CUSIP: {} on venue: {}", cusip, venue);
-                return false;
-            }
-            
-            // Set order parameters
-            String originalOrderVerb = ORDER_VERB;
-            double originalOrderQuantity = ORDER_QUANTITY;
-            double originalDynamicPrice = dynamicOrderPrice;
-            
-            // Temporarily update global variables (this could be improved by using parameters)
-            // ORDER_VERB = side; // 这是final变量，不能修改
-            // ORDER_QUANTITY = quantity; // 这是final变量，不能修改
-            dynamicOrderPrice = price;
-            
-            LOGGER.info("Creating Redis order: {} {} {} @ {} -> instrument: {}", 
-                side, quantity, cusip, price, nativeId);
-            
-            // Create order - need to use parameterized version
-            MultiVenueOrderCreator orderCreator = createParameterizedOrder(nativeId, cusip, side, quantity, price);
-            
-            // Restore original price
-            dynamicOrderPrice = originalDynamicPrice;
-            
-            return orderCreator != null;
-            
-        } catch (Exception e) {
-            LOGGER.error("Error creating order from Redis: ", e);
-            return false;
-        }
-    }
-    
-    /**
-     * Search for instrument mapping based on CUSIP
-     * 
-     * @param cusip CUSIP identifier
-     * @param venue Target venue (optional)
-     * @return Native instrument ID or null if not found
-     */
-    private static String findInstrumentMapping(String cusip, String venue) {
-        try {
-            // Use current active venue or specified venue
-            VenueConfig targetVenue = activeVenueConfig;
-            if (venue != null && !venue.equals("AUTO") && VENUE_CONFIGS.containsKey(venue)) {
-                targetVenue = VENUE_CONFIGS.get(venue);
-            }
-            
-            if (targetVenue == null) {
-                LOGGER.error("No target venue available for mapping");
-                return null;
-            }
-
-            // Try direct mapping
-            String result = depthListener.getInstrumentFieldBySourceString(
-                cusip, targetVenue.marketSource, false);
-            
-            if (result != null) {
-                LOGGER.info("Found direct mapping: {} -> {} on {}", cusip, result, targetVenue.marketSource);
-                return result;
-            }
-
-            // Try mapping with suffix
-            String[] suffixes = {"_C_Fixed", "_REG_Fixed"};
-            for (String suffix : suffixes) {
-                String testId = cusip + suffix;
-                result = depthListener.getInstrumentFieldBySourceString(
-                    testId, targetVenue.marketSource, false);
-                
-                if (result != null) {
-                    LOGGER.info("Found mapping with suffix: {} -> {} on {}", testId, result, targetVenue.marketSource);
-                    return result;
-                }
-            }
-            
-            LOGGER.warn("No mapping found for CUSIP: {} on venue: {}", cusip, targetVenue.marketSource);
-            return null;
-            
-        } catch (Exception e) {
-            LOGGER.error("Error finding instrument mapping: ", e);
-            return null;
-        }
-    }
-    
-    /**
-     * Create parameterized order
-     * 
-     * @param instrumentId Instrument identifier
-     * @param originalCusip Original CUSIP
-     * @param side Order side
-     * @param quantity Order quantity
-     * @param price Order price
-     * @return MultiVenueOrderCreator instance or null if failed
-     */
-    private static MultiVenueOrderCreator createParameterizedOrder(String instrumentId, String originalCusip, 
-            String side, double quantity, double price) {
-        reqId++;
-        
-        LOGGER.info("");
-        LOGGER.info("--------------------------------------------------------");
-        LOGGER.info("Redis Order Creation");
-        LOGGER.info("Venue: {}", activeVenueConfig.marketSource);
-        LOGGER.info("Trader: {}", activeVenueConfig.traderId);
-        LOGGER.info("Instrument: {}", instrumentId);
-        LOGGER.info("Side: {}", side);
-        LOGGER.info("Quantity: {}", quantity);
-        LOGGER.info("Price: {}", String.format("%.4f", price));
-        LOGGER.info("--------------------------------------------------------");
-        
-        MkvPublishManager pm = Mkv.getInstance().getPublishManager();
-        String functionName = activeVenueConfig.getOrderFunction();
-        
-        try {
-            MkvFunction fn = pm.getMkvFunction(functionName);
-            
-            if (fn != null) {
-                return createOrderWithParameterizedFunction(fn, instrumentId, originalCusip, side, quantity, price);
-            } else {
-                LOGGER.error("Order function not found: {}", functionName);
-                return null;
-            }
-        } catch (Exception e) {
-            LOGGER.error("Error creating parameterized order: ", e);
-            return null;
-        }
-    }
-    
-    /**
-     * Create order using parameterized function
-     * 
-     * @param fn MkvFunction for order creation
-     * @param instrumentId Instrument identifier
-     * @param originalCusip Original CUSIP
-     * @param side Order side
-     * @param quantity Order quantity
-     * @param price Order price
-     * @return MultiVenueOrderCreator instance or null if failed
-     */
-    private static MultiVenueOrderCreator createOrderWithParameterizedFunction(MkvFunction fn, 
-            String instrumentId, String originalCusip, String side, double quantity, double price) {
-        try {
-            String freeText = MarketDef.getFreeText(String.valueOf(reqId), APPLICATION_ID);
-            
-            MultiVenueOrderCreator order = new MultiVenueOrderCreator(reqId);
-            
-            OrderDetails details = new OrderDetails("PENDING_" + reqId, reqId, 
-                originalCusip, activeVenueConfig.marketSource);
-            orderTracking.put(String.valueOf(reqId), details);
-            
-            MkvSupply args = MkvSupplyFactory.create(new Object[] {
-                activeVenueConfig.traderId,        // Trader ID
-                instrumentId,                       // Instrument
-                side,                              // Verb (使用参数)
-                Double.valueOf(price),             // Price (使用参数)
-                Double.valueOf(quantity),          // QtyShown (使用参数)
-                Double.valueOf(quantity),          // QtyTot (使用参数)
-                ORDER_TYPE,                         // Type
-                TIME_IN_FORCE,                      // TimeInForce
-                Integer.valueOf(0),                 // IsSoft
-                Integer.valueOf(0),                 // Attribute
-                "",                                 // CustomerInfo
-                freeText,                           // FreeText
-                Integer.valueOf(0),                 // StopCond
-                "",                                 // StopId
-                Double.valueOf(0)                   // StopPrice
-            });
-            
-            fn.call(args, order);
-            LOGGER.debug("Parameterized order function called on {} with trader {}", 
-                activeVenueConfig.marketSource, activeVenueConfig.traderId);
-            
-            return order;
-            
-        } catch (Exception e) {
-            LOGGER.error("Error creating parameterized order: ", e);
-            return null;
         }
     }
 }
