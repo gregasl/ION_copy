@@ -49,7 +49,7 @@ public class RedisMessageBridge {
         
         this.jedisPool = new JedisPool(poolConfig, host, port);
 
-        LOGGER.info("Redis Message Bridge initialized - {}:{}", host, port);
+        LOGGER.info("Redis Bridge: {}:{}", host, port);
     }
     
     /**
@@ -57,7 +57,6 @@ public class RedisMessageBridge {
      */
     public void start() {
         running = true;
-        LOGGER.info("Redis Message Bridge started");
         
         // Start the order command listener
         startOrderCommandListener();
@@ -159,8 +158,36 @@ public class RedisMessageBridge {
         public void onMessage(String channel, String message) {
             try {
                 LOGGER.info("Received order command: {}", message);
+                LOGGER.debug("Message length: {}, first 10 chars: '{}'", 
+                    message.length(), 
+                    message.length() > 10 ? message.substring(0, 10) : message);
+                LOGGER.info("Order received from Redis channel: {}", channel);
 
-                JSONObject command = new JSONObject(message);
+                // Clean and validate the JSON message
+                String cleanedMessage = message.trim();
+                
+                // Remove surrounding quotes if present
+                if (cleanedMessage.startsWith("'") && cleanedMessage.endsWith("'")) {
+                    cleanedMessage = cleanedMessage.substring(1, cleanedMessage.length() - 1);
+                    LOGGER.debug("Removed single quotes from message");
+                }
+                if (cleanedMessage.startsWith("\"") && cleanedMessage.endsWith("\"")) {
+                    cleanedMessage = cleanedMessage.substring(1, cleanedMessage.length() - 1);
+                    LOGGER.debug("Removed double quotes from message");
+                }
+                
+                // Validate JSON format
+                if (!cleanedMessage.startsWith("{") || !cleanedMessage.endsWith("}")) {
+                    LOGGER.error("Invalid JSON format received: '{}' (length: {})", 
+                        cleanedMessage, cleanedMessage.length());
+                    LOGGER.error("First char: '{}' (ASCII: {}), Last char: '{}' (ASCII: {})",
+                        cleanedMessage.charAt(0), (int)cleanedMessage.charAt(0),
+                        cleanedMessage.charAt(cleanedMessage.length()-1), 
+                        (int)cleanedMessage.charAt(cleanedMessage.length()-1));
+                    return;
+                }
+
+                JSONObject command = new JSONObject(cleanedMessage);
                 String type = command.getString("type");
                 
                 if ("create_order".equals(type)) {
@@ -178,7 +205,7 @@ public class RedisMessageBridge {
         
         @Override
         public void onSubscribe(String channel, int subscribedChannels) {
-            LOGGER.info("Subscription successful: {} (Active subscriptions: {})", channel, subscribedChannels);
+            LOGGER.info("Listening: {} ({})", channel, subscribedChannels);
         }
         
         @Override
@@ -195,14 +222,56 @@ public class RedisMessageBridge {
             String instrument = command.getString("instrument");
             String side = command.getString("side");
             double quantity = command.getDouble("quantity");
-            double price = command.getDouble("price");
+            
+            // 价格处理 - 支持 AUTO 字符串和数值
+            Double price = null;
+            boolean useAutoPrice = false;
+            
+            if (command.has("price")) {
+                Object priceObj = command.get("price");
+                if (priceObj instanceof String) {
+                    String priceStr = (String) priceObj;
+                    if ("AUTO".equalsIgnoreCase(priceStr)) {
+                        useAutoPrice = true;
+                        LOGGER.info("Price set to AUTO - will calculate dynamic price");
+                    } else {
+                        try {
+                            price = Double.parseDouble(priceStr);
+                        } catch (NumberFormatException e) {
+                            LOGGER.warn("Invalid price string '{}', using AUTO mode", priceStr);
+                            useAutoPrice = true;
+                        }
+                    }
+                } else if (priceObj instanceof Number) {
+                    price = ((Number) priceObj).doubleValue();
+                    if (price <= 0) {
+                        LOGGER.info("Price is {} (<=0), switching to AUTO mode", price);
+                        useAutoPrice = true;
+                        price = null;
+                    }
+                } else {
+                    LOGGER.warn("Invalid price type, using AUTO mode");
+                    useAutoPrice = true;
+                }
+            } else {
+                LOGGER.info("No price specified, using AUTO mode");
+                useAutoPrice = true;
+            }
+            
             String venue = command.has("venue") ? command.getString("venue") : "AUTO";
             
-            LOGGER.info("Handle create order command: {} {} {} @ {} on {}", 
-                side, quantity, instrument, price, venue);
+            // 日志输出
+            if (useAutoPrice) {
+                LOGGER.info("Creating order with AUTO price: {} {} {} on {}", 
+                    side, quantity, instrument, venue);
+            } else {
+                LOGGER.info("Creating order with fixed price: {} {} {} @ {} on {}", 
+                    side, quantity, instrument, String.format("%.2f", price), venue);
+            }
             
-            // Call MultiVenueOrderCreator to create real order
-            boolean success = createRealOrder(instrument, side, quantity, price, venue);
+            // 调用订单创建 - 传递 null 表示自动价格
+            boolean success = createRealOrder(instrument, side, quantity, 
+                useAutoPrice ? null : price, venue);
             
             if (success) {
                 publishOrderResponse("ORDER_" + System.currentTimeMillis(), 
@@ -225,20 +294,32 @@ public class RedisMessageBridge {
     /**
      * Create real order - Integrated into MultiVenueOrderCreator
      */
-    private boolean createRealOrder(String instrument, String side, double quantity, double price, String venue) {
+    private boolean createRealOrder(String instrument, String side, double quantity, Double price, String venue) {
         try {
-            boolean success = MultiVenueOrderCreator.createOrderFromRedis(instrument, side, quantity, price, venue);
+            // 确定最终价格 - 如果price为null，传递 -1 给系统表示自动计算
+            double finalPrice = (price != null) ? price : -1.0;
+            
+            if (price == null) {
+                LOGGER.info("Redis order created with AUTO price: {} {} {} on {}", 
+                    side, quantity, instrument, venue);
+            } else {
+                LOGGER.info("Redis order created with fixed price: {} {} {} @ {} on {}", 
+                    side, quantity, instrument, price, venue);
+            }
+            
+            // 调用 MultiVenueOrderCreator 的静态方法创建订单
+            boolean success = MultiVenueOrderCreator.createOrderFromRedis(instrument, side, quantity, finalPrice, venue);
             
             if (success) {
-                LOGGER.info("Redis order created successfully: {} {} {} @ {} on {}", side, quantity, instrument, price, venue);
+                LOGGER.info("Order submitted to venue successfully");
             } else {
-                LOGGER.error("Redis order creation failed: {} {} {} @ {} on {}", side, quantity, instrument, price, venue);
+                LOGGER.error("Order submission to venue failed");
             }
             
             return success;
             
         } catch (Exception e) {
-            LOGGER.error("Failed to create order: ", e);
+            LOGGER.error("Error creating real order: ", e);
             return false;
         }
     }
@@ -272,8 +353,12 @@ public class RedisMessageBridge {
     public boolean testConnection() {
         try (Jedis jedis = jedisPool.getResource()) {
             String response = jedis.ping();
-            LOGGER.info("Redis connection test: {}", response);
-            return "PONG".equals(response);
+            // 只在测试失败时输出日志，成功时不输出
+            boolean isConnected = "PONG".equals(response);
+            if (!isConnected) {
+                LOGGER.warn("Redis connection test failed: {}", response);
+            }
+            return isConnected;
         } catch (Exception e) {
             LOGGER.error("Failed to test Redis connection: ", e);
             return false;

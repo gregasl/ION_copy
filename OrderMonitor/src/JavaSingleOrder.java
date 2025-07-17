@@ -81,7 +81,7 @@ public class JavaSingleOrder implements MkvFunctionCallListener, MkvPlatformList
     private static final String APPLICATION_ID = "automatedMarketMaking";
     
     // Order configuration
-    private static final String[] TEST_INSTRUMENTS = {"912797RH2"};
+    private static final String[] TEST_INSTRUMENTS = {"912797RJ8"};
     private static final String ORDER_VERB = "Buy";
     private static final double ORDER_QUANTITY = 100.0;
     private static final double DEFAULT_ORDER_PRICE = 4.0;

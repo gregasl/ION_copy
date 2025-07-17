@@ -1,3 +1,21 @@
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Iterator;
+import java.util.Map;
+import java.util.Set;
+import java.util.Properties;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.Date;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -9,16 +27,8 @@ import com.iontrading.mkv.helper.MkvSupplyFactory;
 import com.iontrading.mkv.qos.MkvQoS;
 import com.iontrading.mkv.exceptions.MkvException;
 
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.Map;
-import java.util.HashMap;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.Set;
-import java.util.HashSet;
-import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.io.PrintStream;
 import java.io.OutputStream;
@@ -112,6 +122,7 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
     
     // Components
     private static DepthListener depthListener;
+    private static EnhancedOrderManager orderManager;
     
     // Redis
     private static RedisMessageBridge redisMessageBridge;
@@ -157,20 +168,13 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
     }
     
     /**
-     * Constructor
-     * 
-     * @param reqId Request ID for this instance
+     * Enhanced order manager implementation with price caching
      */
-    public MultiVenueOrderCreator(int reqId) {
-        this.myReqId = reqId;
-        this.creationTimestamp = System.currentTimeMillis();
-        LOGGER.debug("MultiVenueOrderCreator initialized - ReqId: {}", reqId);
-    }
-    
-    /**
-     * Simple order manager implementation for DepthListener
-     */
-    private static class SimpleOrderManager implements IOrderManager {
+    private static class EnhancedOrderManager implements IOrderManager {
+        // 缓存最佳价格，key 为 instrument ID
+        private final ConcurrentHashMap<String, Best> bestPriceCache = new ConcurrentHashMap<>();
+        private final ConcurrentHashMap<String, Long> priceUpdateTime = new ConcurrentHashMap<>();
+        
         @Override
         public void orderDead(MarketOrder order) {
             LOGGER.info("Order terminated: {}", order.getOrderId());
@@ -179,13 +183,28 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
         @Override
         public MarketOrder addOrder(String MarketSource, String TraderId, String instrId, 
                 String verb, double qty, double price, String type, String tif) {
-            LOGGER.debug("Add order called - not implemented in simple manager");
+            LOGGER.debug("Add order called - not implemented in enhanced manager");
             return null;
         }
         
         @Override
         public void best(Best best, double cash_gc, double reg_gc, GCBest gcBestCash, GCBest gcBestREG) {
-            // Simple implementation
+            // 缓存最佳价格
+            if (best != null && best.getId() != null) {
+                String instrumentId = best.getId();
+                bestPriceCache.put(instrumentId, best);
+                priceUpdateTime.put(instrumentId, System.currentTimeMillis());
+                
+                // 记录价格更新（减少日志噪音，只在价格变化时记录）
+                Best oldBest = bestPriceCache.get(instrumentId);
+                if (oldBest == null || 
+                    oldBest.getBid() != best.getBid() || 
+                    oldBest.getAsk() != best.getAsk()) {
+                    LOGGER.debug("Price update for {}: Bid={} @ {}, Ask={} @ {}", 
+                        instrumentId, best.getBid(), best.getBidSize(), 
+                        best.getAsk(), best.getAskSize());
+                }
+            }
         }
         
         @Override
@@ -202,6 +221,71 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
         public String getApplicationId() {
             return APPLICATION_ID;
         }
+        
+        /**
+         * 获取缓存的最佳价格
+         */
+        public Best getBestPrice(String instrumentId) {
+            // 直接查找
+            Best best = bestPriceCache.get(instrumentId);
+            if (best != null) {
+                return best;
+            }
+            
+            // 尝试模糊匹配
+            for (Map.Entry<String, Best> entry : bestPriceCache.entrySet()) {
+                if (entry.getKey().contains(instrumentId) || instrumentId.contains(entry.getKey())) {
+                    return entry.getValue();
+                }
+            }
+            
+            return null;
+        }
+        
+        /**
+         * 获取所有包含指定 CUSIP 的价格
+         */
+        public Map<String, Best> getAllPricesForCusip(String cusip) {
+            Map<String, Best> results = new HashMap<>();
+            
+            for (Map.Entry<String, Best> entry : bestPriceCache.entrySet()) {
+                String key = entry.getKey();
+                if (key.contains(cusip)) {
+                    results.put(key, entry.getValue());
+                }
+            }
+            
+            return results;
+        }
+        
+        /**
+         * 获取价格更新时间
+         */
+        public long getPriceUpdateTime(String instrumentId) {
+            Long time = priceUpdateTime.get(instrumentId);
+            return time != null ? time : 0L;
+        }
+        
+        /**
+         * 价格是否过期（超过30秒）
+         */
+        public boolean isPriceStale(String instrumentId) {
+            long updateTime = getPriceUpdateTime(instrumentId);
+            if (updateTime == 0) return true;
+
+            return (System.currentTimeMillis() - updateTime) > 100000; // 100秒
+        }
+    }
+    
+    /**
+     * Constructor
+     * 
+     * @param reqId Request ID for this instance
+     */
+    public MultiVenueOrderCreator(int reqId) {
+        this.myReqId = reqId;
+        this.creationTimestamp = System.currentTimeMillis();
+        LOGGER.debug("MultiVenueOrderCreator initialized - ReqId: {}", reqId);
     }
     
     /**
@@ -214,13 +298,248 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
             Boolean isActive = venueStatus.get(venue);
             if (Boolean.TRUE.equals(isActive)) {
                 VenueConfig config = VENUE_CONFIGS.get(venue);
-                LOGGER.info("Selected active venue: {} (Trader: {})", venue, config.traderId);
                 return config;
             }
         }
         
         LOGGER.warn("No active venues found, defaulting to: {}", VENUE_PRIORITY[0]);
         return VENUE_CONFIGS.get(VENUE_PRIORITY[0]);
+    }
+    
+    /**
+     * 自动选择最佳价格的场所 - 基于老板的逻辑
+     * 
+     * @param cusip CUSIP标识符
+     * @param side 订单方向 (Buy/Sell)
+     * @return 最佳场所配置，如果没有找到则返回null
+     */
+    private static VenueConfig selectBestVenueForPrice(String cusip, String side) {
+        LOGGER.info("Analyzing venues for best {} price for {}", side, cusip);
+        
+        VenueConfig bestVenue = null;
+        double bestPrice = 0.0;
+        String bestPriceSource = "";
+        Map<String, VenueAnalysis> venueAnalysis = new HashMap<>();
+        
+        // 分析每个可用场所
+        for (String venueName : VENUE_PRIORITY) {
+            VenueConfig venue = VENUE_CONFIGS.get(venueName);
+            Boolean isActive = venueStatus.get(venueName);
+            
+            VenueAnalysis analysis = analyzeVenuePrice(cusip, side, venue, isActive);
+            venueAnalysis.put(venueName, analysis);
+            
+            // 选择最佳价格 - 只考虑活跃且有效价格的场所
+            if (Boolean.TRUE.equals(isActive) && analysis.hasValidPrice && !analysis.isStale) {
+                if (bestVenue == null || isPriceBetter(analysis.targetPrice, bestPrice, side)) {
+                    bestVenue = venue;
+                    bestPrice = analysis.targetPrice;
+                    bestPriceSource = analysis.priceSource;
+                    LOGGER.info("New best venue: {} with {} price: {} (from {})", 
+                        venueName, side, bestPrice, bestPriceSource);
+                }
+            }
+        }
+        
+        // 输出分析结果摘要
+        LOGGER.info("=== VENUE SELECTION SUMMARY ===");
+        for (Map.Entry<String, VenueAnalysis> entry : venueAnalysis.entrySet()) {
+            VenueAnalysis analysis = entry.getValue();
+            String status = analysis.isActive ? 
+                (analysis.hasValidPrice && !analysis.isStale ? 
+                    String.format("Price: %.2f (Spread: %.4f)", analysis.targetPrice, analysis.spread) : 
+                    "No valid price") :
+                "Inactive";
+            LOGGER.info("  {} | {} | {}", entry.getKey(), 
+                analysis.isActive && analysis.hasValidPrice && !analysis.isStale ? "✓" : "✗", status);
+        }
+        
+        if (bestVenue != null) {
+            LOGGER.info("Selected Best Venue: {} | {} Price: {} | Source: {}", 
+                bestVenue.marketSource, side, bestPrice, bestPriceSource);
+        } else {
+            LOGGER.warn("No venue found with valid pricing for {} {}", side, cusip);
+            // 回退到当前活跃场所
+            bestVenue = selectBestVenue();
+            if (bestVenue != null) {
+                LOGGER.info("Falling back to current best venue: {}", bestVenue.marketSource);
+            }
+        }
+        LOGGER.info("=== END VENUE SELECTION ===");
+        
+        return bestVenue;
+    }
+    
+    /**
+     * 场所价格分析结果
+     */
+    private static class VenueAnalysis {
+        final String venueName;
+        final boolean hasValidPrice;
+        final double targetPrice;
+        final double bidPrice;
+        final double askPrice;
+        final double spread;
+        final String priceSource;
+        final String instrumentKey;
+        final boolean isStale;
+        final boolean isActive;
+        
+        VenueAnalysis(String venueName, boolean hasValidPrice, double targetPrice, 
+                      double bidPrice, double askPrice, String priceSource, 
+                      String instrumentKey, boolean isStale, boolean isActive) {
+            this.venueName = venueName;
+            this.hasValidPrice = hasValidPrice;
+            this.targetPrice = targetPrice;
+            this.bidPrice = bidPrice;
+            this.askPrice = askPrice;
+            this.spread = (askPrice > 0 && bidPrice > 0) ? (askPrice - bidPrice) : 0.0;
+            this.priceSource = priceSource;
+            this.instrumentKey = instrumentKey;
+            this.isStale = isStale;
+            this.isActive = isActive;
+        }
+    }
+    
+    /**
+     * 分析特定场所的价格情况
+     * 
+     * @param cusip CUSIP标识符
+     * @param side 订单方向
+     * @param venue 场所配置
+     * @param isActive 场所是否活跃
+     * @return 场所分析结果
+     */
+    private static VenueAnalysis analyzeVenuePrice(String cusip, String side, VenueConfig venue, Boolean isActive) {
+        boolean venueActive = Boolean.TRUE.equals(isActive);
+        
+        if (!venueActive) {
+            return new VenueAnalysis(venue.marketSource, false, 0.0, 0.0, 0.0, 
+                "Venue inactive", "", false, false);
+        }
+        
+        try {
+            // 查找该场所的instrument映射
+            String nativeId = findInstrumentMapping(cusip, venue.marketSource);
+            if (nativeId == null) {
+                return new VenueAnalysis(venue.marketSource, false, 0.0, 0.0, 0.0, 
+                    "No mapping", "", false, true);
+            }
+            
+            // 查找价格数据
+            Best bestPrice = null;
+            String usedKey = null;
+            
+            // 1. 尝试nativeId
+            bestPrice = orderManager.getBestPrice(nativeId);
+            if (bestPrice != null) {
+                usedKey = nativeId;
+            }
+            
+            // 2. 尝试CUSIP + 后缀
+            if (bestPrice == null) {
+                String[] suffixes = {"_C_Fixed", "_REG_Fixed"};
+                for (String suffix : suffixes) {
+                    String keyToTry = cusip + suffix;
+                    bestPrice = orderManager.getBestPrice(keyToTry);
+                    if (bestPrice != null) {
+                        usedKey = keyToTry;
+                        break;
+                    }
+                }
+            }
+            
+            if (bestPrice == null) {
+                return new VenueAnalysis(venue.marketSource, false, 0.0, 0.0, 0.0, 
+                    "No price data", usedKey, false, true);
+            }
+            
+            // 检查价格是否过期
+            boolean isStale = orderManager.isPriceStale(usedKey);
+            
+            // 获取价格来源
+            String priceSource = getPriceSource(bestPrice, side);
+            
+            // 计算目标价格 - 基于老板的策略
+            double targetPrice = 0.0;
+            boolean hasValidPrice = false;
+            
+            if ("Buy".equalsIgnoreCase(side)) {
+                if (bestPrice.getAsk() > 0) {
+                    targetPrice = bestPrice.getAsk() - 0.01; // 买单：略低于ask
+                    hasValidPrice = true;
+                } else if (bestPrice.getBid() > 0) {
+                    // 如果没有ask，使用bid作为基准
+                    targetPrice = bestPrice.getBid();
+                    hasValidPrice = true;
+                }
+            } else { // Sell
+                if (bestPrice.getBid() > 0) {
+                    targetPrice = bestPrice.getBid() + 0.01; // 卖单：略高于bid
+                    hasValidPrice = true;
+                } else if (bestPrice.getAsk() > 0) {
+                    // 如果没有bid，使用ask作为基准
+                    targetPrice = bestPrice.getAsk();
+                    hasValidPrice = true;
+                }
+            }
+            
+            return new VenueAnalysis(venue.marketSource, hasValidPrice, 
+                targetPrice, bestPrice.getBid(), bestPrice.getAsk(), 
+                priceSource, usedKey, isStale, true);
+            
+        } catch (Exception e) {
+            LOGGER.error("Error analyzing venue {}: ", venue.marketSource, e);
+            return new VenueAnalysis(venue.marketSource, false, 0.0, 0.0, 0.0, 
+                "Error", "", false, true);
+        }
+    }
+    
+    /**
+     * 获取价格来源信息
+     * 
+     * @param bestPrice Best价格对象
+     * @param side 订单方向
+     * @return 价格来源字符串
+     */
+    private static String getPriceSource(Best bestPrice, String side) {
+        try {
+            Class<?> bestClass = bestPrice.getClass();
+            
+            if ("Buy".equalsIgnoreCase(side)) {
+                // 买单关注Ask来源
+                java.lang.reflect.Method getAskSrc = bestClass.getMethod("getAskSrc");
+                String askSource = (String) getAskSrc.invoke(bestPrice);
+                return askSource != null && !askSource.isEmpty() ? askSource : "Unknown";
+            } else {
+                // 卖单关注Bid来源
+                java.lang.reflect.Method getBidSrc = bestClass.getMethod("getBidSrc");
+                String bidSource = (String) getBidSrc.invoke(bestPrice);
+                return bidSource != null && !bidSource.isEmpty() ? bidSource : "Unknown";
+            }
+        } catch (Exception e) {
+            return "Unknown";
+        }
+    }
+    
+    /**
+     * 判断价格是否更优 - 基于老板的策略
+     * 
+     * @param newPrice 新价格
+     * @param currentBest 当前最佳价格
+     * @param side 订单方向
+     * @return true如果新价格更优
+     */
+    private static boolean isPriceBetter(double newPrice, double currentBest, String side) {
+        if (currentBest == 0.0) return true; // 第一个有效价格
+        
+        if ("Buy".equalsIgnoreCase(side)) {
+            // 买单：价格越低越好（节省成本）
+            return newPrice < currentBest;
+        } else {
+            // 卖单：价格越高越好（增加收益）
+            return newPrice > currentBest;
+        }
     }
     
     /**
@@ -334,6 +653,14 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
             loggerContext.getLogger("GCBest").setLevel(Level.WARN);
             loggerContext.getLogger("com.iontrading.automatedMarketMaking.GCBest").setLevel(Level.WARN);
             
+            // Set GCBestManager to INFO for concise updates
+            loggerContext.getLogger("GCBestManager").setLevel(Level.INFO);
+            loggerContext.getLogger("com.iontrading.automatedMarketMaking.GCBestManager").setLevel(Level.INFO);
+            
+            // Suppress OrderRepository shutdown statistics
+            loggerContext.getLogger("OrderRepository").setLevel(Level.WARN);
+            loggerContext.getLogger("com.iontrading.automatedMarketMaking.OrderRepository").setLevel(Level.WARN);
+            
             // Keep main application at INFO level
             loggerContext.getLogger("MultiVenueOrderCreator").setLevel(Level.INFO);
             loggerContext.getLogger("FENICSOrderCreatorFixed").setLevel(Level.INFO);
@@ -358,11 +685,10 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
         for (Map.Entry<String, VenueConfig> entry : VENUE_CONFIGS.entrySet()) {
             LOGGER.info("  {} -> Trader: {}", entry.getKey(), entry.getValue().traderId);
         }
-        LOGGER.info("  Target Instruments: {}", Arrays.toString(TEST_INSTRUMENTS));
-        LOGGER.info("  Order Parameters: {} {} @ {}", ORDER_VERB, ORDER_QUANTITY, DEFAULT_ORDER_PRICE);
         LOGGER.info("");
         
         VenueConfig selectedVenue = null;
+        int updateCounter = 0;
         
         try {
             // Initialize and start MKV platform
@@ -370,7 +696,7 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
             
             // Close and clean
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                LOGGER.info("Shutdown signal received, cleaning up...");
+                LOGGER.info("Shutdown signal received:");
                 if (redisMessageBridge != null) {
                     try {
                         redisMessageBridge.stop();
@@ -394,7 +720,6 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
             // Initialize Redis message bridge
             initializeRedisBridge();
             
-            LOGGER.info("Starting MKV Platform...");
             MkvQoS qos = new MkvQoS();
             if (args.length > 0) {
                 qos.setArgs(args);
@@ -459,9 +784,9 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
                 System.setOut(nullStream);
                 System.setErr(nullStream);
                 
-                // Initialize DepthListener
-                SimpleOrderManager simpleOrderManager = new SimpleOrderManager();
-                depthListener = new DepthListener(simpleOrderManager);
+                // Initialize EnhancedOrderManager
+                orderManager = new EnhancedOrderManager();
+                depthListener = new DepthListener(orderManager);
                 
                 // Subscribe to instruments
                 MkvPattern instrumentPattern = pm.getMkvPattern(INSTRUMENT_PATTERN);
@@ -509,73 +834,14 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
             LOGGER.info("Instrument data loaded successfully - Total instruments: {}", 
                 depthListener != null ? depthListener.getInstrumentCount() : "Unknown");
             
-            
-            // Find instrument mapping
-            // LOGGER.info("Searching for instrument mapping on {}...", activeVenueConfig.marketSource);
-            String nativeId = null;
-            String selectedCusip = null;
-            
-            // Try direct mapping first
-            for (String testInstrument : TEST_INSTRUMENTS) {
-                String result = depthListener.getInstrumentFieldBySourceString(
-                    testInstrument, activeVenueConfig.marketSource, false);
-                
-                if (result != null) {
-                    LOGGER.info("Found direct mapping: {} -> {}", testInstrument, result);
-                    selectedCusip = testInstrument;
-                    nativeId = result;
-                    break;
-                }
-            }
-            
-            // Try with suffixes if direct mapping not found
-            if (nativeId == null) {
-                // LOGGER.info("Direct mapping not found, trying with suffixes...");
-                String[] suffixes = {"_C_Fixed", "_REG_Fixed"};
-                
-                for (String cusip : TEST_INSTRUMENTS) {
-                    for (String suffix : suffixes) {
-                        String testId = cusip + suffix;
-                        String result = depthListener.getInstrumentFieldBySourceString(
-                            testId, activeVenueConfig.marketSource, false);
-                        
-                        if (result != null) {
-                            LOGGER.info("Found mapping with suffix: {} -> {}", testId, result);
-                            selectedCusip = testId;
-                            nativeId = result;
-                            break;
-                        }
-                    }
-                    if (nativeId != null) break;
-                }
-            }
-            
-            if (nativeId == null) {
-                LOGGER.warn("No venue-specific mapping found, using direct CUSIP");
-                selectedCusip = TEST_INSTRUMENTS[0];
-                nativeId = selectedCusip;
-                LOGGER.info("Using instrument ID: {}", nativeId);
-            }
-            
-            // 计算默认价格（仅用于显示，不自动下单）
-            dynamicOrderPrice = calculateDynamicPrice(nativeId, selectedCusip);
-            LOGGER.info("");
-            LOGGER.info("Default order price calculated: {}", String.format("%.4f", dynamicOrderPrice));
-            LOGGER.info("Instrument mapping ready: {} -> {}", selectedCusip, nativeId);
-            
-            // Redis集成模式：只监听Redis消息，不自动下单
-            LOGGER.info("");
-            LOGGER.info("=== Redis Trading Bridge Active ===");
-            LOGGER.info("System ready to receive trading commands from Redis");
-            LOGGER.info("Monitoring channels: order_commands, heartbeat");
-            LOGGER.info("Supported instruments: {}", Arrays.toString(TEST_INSTRUMENTS));
-            LOGGER.info("Default venue: {} (Trader: {})", activeVenueConfig.marketSource, activeVenueConfig.traderId);
-            LOGGER.info("Press Ctrl+C to shutdown");
-            LOGGER.info("");
+            LOGGER.info("Redis bridge ready - waiting for order commands...");
             
             try {
                 while (true) {
-                    Thread.sleep(10000); 
+                    Thread.sleep(30000); // 改为30秒检查一次
+                    updateCounter++;
+                    
+                    // 监控 Redis 连接（但不输出测试成功的日志）
                     if (redisMessageBridge != null) {
                         boolean redisHealthy = redisMessageBridge.testConnection();
                         if (!redisHealthy) {
@@ -586,6 +852,33 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
                                 initializeRedisBridge();
                             } catch (Exception e) {
                                 LOGGER.error("Redis reconnection failed: ", e);
+                            }
+                        }
+                    }
+                    
+                    // 每10分钟输出一次价格缓存状态（仅在有新价格时）
+                    if (orderManager != null && updateCounter % 20 == 0) { 
+                        Map<String, Best> cachedPrices = orderManager.getAllPricesForCusip(TEST_INSTRUMENTS[0]);
+                        if (!cachedPrices.isEmpty()) {
+                            // 检查是否有非过期的价格
+                            boolean hasCurrentPrices = false;
+                            for (Map.Entry<String, Best> entry : cachedPrices.entrySet()) {
+                                if (!orderManager.isPriceStale(entry.getKey())) {
+                                    hasCurrentPrices = true;
+                                    break;
+                                }
+                            }
+                            
+                            if (hasCurrentPrices) {
+                                LOGGER.info("Active prices available for {}: {} entries", TEST_INSTRUMENTS[0], cachedPrices.size());
+                                for (Map.Entry<String, Best> entry : cachedPrices.entrySet()) {
+                                    Best best = entry.getValue();
+                                    boolean isStale = orderManager.isPriceStale(entry.getKey());
+                                    if (!isStale && (best.getBid() > 0 || best.getAsk() > 0)) {
+                                        LOGGER.info("  {} - Bid: {}, Ask: {} [FRESH]",
+                                            entry.getKey(), best.getBid(), best.getAsk());
+                                    }
+                                }
                             }
                         }
                     }
@@ -710,34 +1003,130 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
     }
     
     /**
-     * Calculate dynamic price for the order
-     * 
-     * @param nativeId Native instrument ID
-     * @param cusip CUSIP identifier
-     * @return Calculated price
+     * 根据缓存的市场数据计算动态价格
      */
-    private static double calculateDynamicPrice(String nativeId, String cusip) {
-        LOGGER.debug("Calculating dynamic price for instrument: {}", cusip);
+    private static double calculateDynamicPriceFromCache(String nativeId, String cusip, 
+            String side, Double requestedPrice) {
+        LOGGER.debug("Calculating dynamic price for {} {} (native: {})", side, cusip, nativeId);
         
         try {
-            double basePrice = DEFAULT_ORDER_PRICE;
-            
-            if ("Buy".equals(ORDER_VERB)) {
-                double adjustedPrice = 4.38;
-                LOGGER.info("Using adjusted buy price: {}", String.format("%.2f", adjustedPrice));
-                return Math.round(adjustedPrice * 100.0) / 100.0; // 确保2位小数
-            } else {
-                double adjustedPrice = 4.42;
-                LOGGER.info("Using adjusted sell price: {}", String.format("%.2f", adjustedPrice));
-                return Math.round(adjustedPrice * 100.0) / 100.0; // 确保2位小数
+            if (orderManager == null) {
+                LOGGER.warn("OrderManager not available, using default price");
+                return DEFAULT_ORDER_PRICE;
             }
             
+            Best bestPrice = null;
+            String usedKey = null;
+            
+            // 1. 首先尝试 nativeId（这个是从 instrument mapping 来的正确 ID）
+            if (nativeId != null && !nativeId.isEmpty()) {
+                bestPrice = orderManager.getBestPrice(nativeId);
+                if (bestPrice != null) {
+                    usedKey = nativeId;
+                    LOGGER.info("Found price with nativeId: {}", nativeId);
+                }
+            }
+            
+            // 2. 如果没找到，尝试添加后缀
+            if (bestPrice == null) {
+                String[] suffixes = {"_C_Fixed", "_REG_Fixed"};
+                for (String suffix : suffixes) {
+                    String keyToTry = cusip + suffix;
+                    bestPrice = orderManager.getBestPrice(keyToTry);
+                    if (bestPrice != null) {
+                        usedKey = keyToTry;
+                        LOGGER.info("Found price with suffix: {}", keyToTry);
+                        break;
+                    }
+                }
+            }
+            
+            // 3. 如果还没找到，搜索缓存中包含该 CUSIP 的所有键
+            if (bestPrice == null) {
+                Map<String, Best> allPrices = orderManager.getAllPricesForCusip("");
+                LOGGER.info("Searching {} cached keys for matches containing '{}'", allPrices.size(), cusip);
+                
+                for (String key : allPrices.keySet()) {
+                    if (key.contains(cusip)) {
+                        LOGGER.info("Found cached key containing '{}': {}", cusip, key);
+                        if (bestPrice == null) {
+                            bestPrice = allPrices.get(key);
+                            usedKey = key;
+                            LOGGER.info("Using first match: {}", key);
+                        }
+                    }
+                }
+            }
+            
+            if (bestPrice == null) {
+                LOGGER.warn("No market data found for CUSIP: {} - using default price", cusip);
+                return DEFAULT_ORDER_PRICE;
+            }
+            
+            // 简化版的市场数据显示
+            String bidSource = getPriceSourceReflection(bestPrice, "getBidSrc");
+            String askSource = getPriceSourceReflection(bestPrice, "getAskSrc");
+            
+            // 简洁的市场数据输出
+            LOGGER.info("Market Data | {} | Bid: {} @ {} ({}) | Ask: {} @ {} ({})", 
+                usedKey,
+                bestPrice.getBid(), bestPrice.getBidSize(), bidSource,
+                bestPrice.getAsk(), bestPrice.getAskSize(), askSource);
+            
+            // 检查价格是否过期
+            boolean isStale = orderManager.isPriceStale(usedKey);
+            if (isStale) {
+                LOGGER.warn("Price data is STALE (>100s old) - use with caution");
+            }
+            
+            // 计算价格逻辑...
+            double calculatedPrice;
+            if ("Buy".equalsIgnoreCase(side)) {
+                double askPrice = bestPrice.getAsk();
+                if (askPrice > 0) {
+                    calculatedPrice = askPrice - 0.01;
+                    LOGGER.info("Buy strategy: Ask {} - 0.01 = {}", askPrice, calculatedPrice);
+                } else {
+                    calculatedPrice = DEFAULT_ORDER_PRICE;
+                    LOGGER.info("No valid Ask price, using default: {}", calculatedPrice);
+                }
+            } else { // Sell
+                double bidPrice = bestPrice.getBid();
+                if (bidPrice > 0) {
+                    calculatedPrice = bidPrice + 0.01;
+                    LOGGER.info("Sell strategy: Bid {} + 0.01 = {}", bidPrice, calculatedPrice);
+                } else {
+                    calculatedPrice = DEFAULT_ORDER_PRICE;
+                    LOGGER.info("No valid Bid price, using default: {}", calculatedPrice);
+                }
+            }
+            
+            // 确保价格精度为 2 位小数
+            calculatedPrice = Math.round(calculatedPrice * 100.0) / 100.0;
+            
+            LOGGER.info("Final {} price for {}: {} (Source: {})", 
+                side, cusip, calculatedPrice, usedKey);
+            
+            return calculatedPrice;
+            
         } catch (Exception e) {
-            LOGGER.error("Error calculating dynamic price: ", e);
+            LOGGER.error("Error calculating dynamic price from cache: ", e);
+            return DEFAULT_ORDER_PRICE;
         }
-        // Fallback to default price if calculation fails
-        LOGGER.info("Using default price: {}", DEFAULT_ORDER_PRICE);
-        return DEFAULT_ORDER_PRICE;
+    }
+    
+    /**
+     * 辅助方法：使用反射获取价格来源
+     */
+    private static String getPriceSourceReflection(Best bestPrice, String methodName) {
+        try {
+            Class<?> bestClass = bestPrice.getClass();
+            java.lang.reflect.Method method = bestClass.getMethod(methodName);
+            String source = (String) method.invoke(bestPrice);
+            return source != null && !source.isEmpty() ? source : "Unknown";
+        } catch (Exception e) {
+            return "Unknown";
+        }
     }
     
     /**
@@ -965,14 +1354,14 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
     public void onComponent(com.iontrading.mkv.MkvComponent component, boolean registered) {
         String name = component.getName();
         if (VENUE_CONFIGS.containsKey(name) || name.equals("ROUTER_US") || name.equals("VMO_REPO_US")) {
-            LOGGER.info("Component {} {}", name, registered ? "registered" : "unregistered");
+            LOGGER.info("{} {}", name, registered ? "registered" : "unregistered");
         }
     }
     
     @Override
     public void onConnect(String component, boolean connected) {
         if (connected && (component.equals("ROUTER_US") || component.contains("ROUTER"))) {
-            LOGGER.info("Connected to component: {}", component);
+            LOGGER.info("Connected to {}", component);
             isConnected = true;
             connectionLatch.countDown();
         }
@@ -1066,7 +1455,6 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
 
             // Test Redis connection
             if (redisMessageBridge.testConnection()) {
-                LOGGER.info("Redis connection successful");
                 redisMessageBridge.start();
 
                 // Start heartbeat service
@@ -1125,14 +1513,7 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
     }
     
     /**
-     * Create order from Redis message
-     *
-     * @param cusip CUSIP identifier from Redis
-     * @param side Order side (Buy/Sell)
-     * @param quantity Order quantity
-     * @param price Order price
-     * @param venue Target venue
-     * @return true if order creation was successful
+     * Create order from Redis message - 支持灵活的价格和场所选择
      */
     public static boolean createOrderFromRedis(String cusip, String side, double quantity, double price, String venue) {
         if (depthListener == null) {
@@ -1141,33 +1522,90 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
         }
         
         try {
-            // Find instrument mapping
-            String nativeId = findInstrumentMapping(cusip, venue);
-            if (nativeId == null) {
-                LOGGER.error("No instrument mapping found for CUSIP: {} on venue: {}", cusip, venue);
+            VenueConfig targetVenue;
+            boolean useUserPrice = (price > 0); // 用户是否指定了价格
+            boolean useAutoVenue = (venue == null || venue.equals("AUTO") || venue.equals("BEST_PRICE"));
+            
+            // ========== 场所选择逻辑 ==========
+            if (useAutoVenue) {
+                LOGGER.info("Auto-selecting best venue for {} {} {}", side, quantity, cusip);
+                targetVenue = selectBestVenueForPrice(cusip, side);
+                
+                if (targetVenue == null) {
+                    LOGGER.error("No suitable venue found for {} {}", side, cusip);
+                    // 回退到当前活跃场所
+                    targetVenue = activeVenueConfig;
+                    if (targetVenue == null) {
+                        LOGGER.error("No active venue available");
+                        return false;
+                    }
+                    LOGGER.warn("Falling back to current active venue: {}", targetVenue.marketSource);
+                }
+            } else if (VENUE_CONFIGS.containsKey(venue)) {
+                // 使用用户指定的场所
+                targetVenue = VENUE_CONFIGS.get(venue);
+                LOGGER.info("Using user-specified venue: {}", venue);
+            } else {
+                LOGGER.error("Unknown venue specified: {}", venue);
                 return false;
             }
             
-            // Set order parameters
-            String originalOrderVerb = ORDER_VERB;
-            double originalOrderQuantity = ORDER_QUANTITY;
-            double originalDynamicPrice = dynamicOrderPrice;
+            // 临时更新activeVenueConfig
+            VenueConfig originalVenue = activeVenueConfig;
+            activeVenueConfig = targetVenue;
             
-            // Temporarily update global variables (this could be improved by using parameters)
-            // ORDER_VERB = side; // 这是final变量，不能修改
-            // ORDER_QUANTITY = quantity; // 这是final变量，不能修改
-            dynamicOrderPrice = price;
-            
-            LOGGER.info("Creating Redis order: {} {} {} @ {} -> instrument: {}", 
-                side, quantity, cusip, price, nativeId);
-            
-            // Create order - need to use parameterized version
-            MultiVenueOrderCreator orderCreator = createParameterizedOrder(nativeId, cusip, side, quantity, price);
-            
-            // Restore original price
-            dynamicOrderPrice = originalDynamicPrice;
-            
-            return orderCreator != null;
+            try {
+                // 查找instrument映射
+                String nativeId = findInstrumentMapping(cusip, targetVenue.marketSource);
+                if (nativeId == null) {
+                    LOGGER.error("No instrument mapping found for CUSIP: {} on venue: {}", 
+                        cusip, targetVenue.marketSource);
+                    return false;
+                }
+                
+                // ========== 价格选择逻辑 ==========
+                double finalPrice;
+                
+                if (useUserPrice) {
+                    // 用户指定了价格，直接使用
+                    finalPrice = price;
+                    LOGGER.info("Using user-specified price: {}", finalPrice);
+                } else {
+                    // 用户没有指定价格，使用动态市场价格
+                    LOGGER.info("User did not specify price, calculating dynamic price from market data");
+                    finalPrice = calculateDynamicPriceFromCache(nativeId, cusip, side, null);
+                    
+                    // 如果无法获取市场价格，使用默认价格
+                    if (finalPrice == DEFAULT_ORDER_PRICE) {
+                        LOGGER.warn("Could not determine market price, using default: {}", DEFAULT_ORDER_PRICE);
+                    }
+                }
+                
+                // 价格决策总结
+                String priceStrategy = useUserPrice ? 
+                    String.format("User-specified: %.2f", price) : 
+                    "Market-based (AUTO)";
+                String venueStrategy = useAutoVenue ? 
+                    "Auto-selected" : 
+                    "User-specified";
+                    
+                LOGGER.info("Order Strategy Summary:");
+                LOGGER.info("  Price: {} -> Final: {}", priceStrategy, finalPrice);
+                LOGGER.info("  Venue: {} -> Final: {}", venueStrategy, targetVenue.marketSource);
+                
+                LOGGER.info("Creating Redis order: {} {} {} @ {} -> instrument: {} on {}", 
+                    side, quantity, cusip, finalPrice, nativeId, targetVenue.marketSource);
+                
+                // 创建订单
+                MultiVenueOrderCreator orderCreator = createParameterizedOrder(
+                    nativeId, cusip, side, quantity, finalPrice);
+                
+                return orderCreator != null;
+                
+            } finally {
+                // 恢复原来的activeVenueConfig
+                activeVenueConfig = originalVenue;
+            }
             
         } catch (Exception e) {
             LOGGER.error("Error creating order from Redis: ", e);
@@ -1195,20 +1633,11 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
                 return null;
             }
 
-            // Try direct mapping
-            String result = depthListener.getInstrumentFieldBySourceString(
-                cusip, targetVenue.marketSource, false);
-            
-            if (result != null) {
-                LOGGER.info("Found direct mapping: {} -> {} on {}", cusip, result, targetVenue.marketSource);
-                return result;
-            }
-
             // Try mapping with suffix
             String[] suffixes = {"_C_Fixed", "_REG_Fixed"};
             for (String suffix : suffixes) {
                 String testId = cusip + suffix;
-                result = depthListener.getInstrumentFieldBySourceString(
+                String result = depthListener.getInstrumentFieldBySourceString(
                     testId, targetVenue.marketSource, false);
                 
                 if (result != null) {
@@ -1240,15 +1669,29 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
             String side, double quantity, double price) {
         reqId++;
         
+        // 确保价格有效
+        if (price <= 0) {
+            LOGGER.warn("Invalid price {} received, calculating dynamic price", price);
+            price = calculateDynamicPriceFromCache(instrumentId, originalCusip, side, null);
+        }
+        
+        // 最终价格验证
+        if (price <= 0) {
+            LOGGER.error("Final price is still invalid: {}, using default", price);
+            price = DEFAULT_ORDER_PRICE;
+        }
+        
+        // 确保价格精度
+        price = Math.round(price * 100.0) / 100.0;
+        
         LOGGER.info("");
         LOGGER.info("--------------------------------------------------------");
-        LOGGER.info("Redis Order Creation");
         LOGGER.info("Venue: {}", activeVenueConfig.marketSource);
         LOGGER.info("Trader: {}", activeVenueConfig.traderId);
         LOGGER.info("Instrument: {}", instrumentId);
         LOGGER.info("Side: {}", side);
         LOGGER.info("Quantity: {}", quantity);
-        LOGGER.info("Price: {}", String.format("%.4f", price));
+        LOGGER.info("Price: {}", String.format("%.2f", price));
         LOGGER.info("--------------------------------------------------------");
         
         MkvPublishManager pm = Mkv.getInstance().getPublishManager();
