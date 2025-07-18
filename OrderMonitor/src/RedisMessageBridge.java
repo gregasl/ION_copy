@@ -157,11 +157,11 @@ public class RedisMessageBridge {
         @Override
         public void onMessage(String channel, String message) {
             try {
-                LOGGER.info("Received order command: {}", message);
+                LOGGER.debug("Received order command: {}", message);
                 LOGGER.debug("Message length: {}, first 10 chars: '{}'", 
                     message.length(), 
                     message.length() > 10 ? message.substring(0, 10) : message);
-                LOGGER.info("Order received from Redis channel: {}", channel);
+                LOGGER.debug("Order received from Redis channel: {}", channel);
 
                 // Clean and validate the JSON message
                 String cleanedMessage = message.trim();
@@ -233,7 +233,7 @@ public class RedisMessageBridge {
                     String priceStr = (String) priceObj;
                     if ("AUTO".equalsIgnoreCase(priceStr)) {
                         useAutoPrice = true;
-                        LOGGER.info("Price set to AUTO - will calculate dynamic price");
+                        LOGGER.debug("Price set to AUTO - will calculate dynamic price");
                     } else {
                         try {
                             price = Double.parseDouble(priceStr);
@@ -262,10 +262,10 @@ public class RedisMessageBridge {
             
             // 日志输出
             if (useAutoPrice) {
-                LOGGER.info("Creating order with AUTO price: {} {} {} on {}", 
+                LOGGER.debug("Creating order with AUTO price: {} {} {} on {}", 
                     side, quantity, instrument, venue);
             } else {
-                LOGGER.info("Creating order with fixed price: {} {} {} @ {} on {}", 
+                LOGGER.debug("Creating order with fixed price: {} {} {} @ {} on {}", 
                     side, quantity, instrument, String.format("%.2f", price), venue);
             }
             
@@ -300,10 +300,10 @@ public class RedisMessageBridge {
             double finalPrice = (price != null) ? price : -1.0;
             
             if (price == null) {
-                LOGGER.info("Redis order created with AUTO price: {} {} {} on {}", 
+                LOGGER.debug("Redis order created with AUTO price: {} {} {} on {}", 
                     side, quantity, instrument, venue);
             } else {
-                LOGGER.info("Redis order created with fixed price: {} {} {} @ {} on {}", 
+                LOGGER.debug("Redis order created with fixed price: {} {} {} @ {} on {}", 
                     side, quantity, instrument, price, venue);
             }
             
