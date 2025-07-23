@@ -33,6 +33,19 @@ public class RedisMessageBridge {
     private volatile boolean running = false;
     
     /**
+     * Order creation result class
+     */
+    private static class OrderCreationResult {
+        final boolean success;
+        final String errorMessage;
+        
+        OrderCreationResult(boolean success, String errorMessage) {
+            this.success = success;
+            this.errorMessage = errorMessage;
+        }
+    }
+    
+    /**
      * Constructor
      */
     public RedisMessageBridge(String host, int port) {
@@ -58,7 +71,7 @@ public class RedisMessageBridge {
         
         // Start the order command listener
         startOrderCommandListener();
-        LOGGER.info("Redis bridge ready - {}:{} on {}", redisHost, redisPort, ORDER_COMMAND_CHANNEL);
+        LOGGER.info("{}:{} on {}", redisHost, redisPort, ORDER_COMMAND_CHANNEL);
     }
     
     /**
@@ -110,12 +123,6 @@ public class RedisMessageBridge {
             response.put("timestamp", timestamp);
             
             jedis.publish(ORDER_RESPONSE_CHANNEL, response.toString());
-            
-            // Only log important status updates
-            // if ("SUBMITTED".equals(status) || "FILLED".equals(status) || 
-            //     "CANCELLED".equals(status) || "FAILED".equals(status)) {
-            //     LOGGER.info("Order response published: {} -> {}", orderId, status);
-            // }
 
         } catch (Exception e) {
             LOGGER.error("Failed to publish order response: ", e);
@@ -220,20 +227,25 @@ public class RedisMessageBridge {
             LOGGER.info("Order command received: {} {} {} @ {} on {}", 
                 side, quantity, instrument, price, venue);
             
+            // 详细的验证和错误信息
+            String errorDetail = null;
+            
             // 验证价格
             if (price <= 0) {
-                throw new IllegalArgumentException("Price must be positive");
+                errorDetail = "Price must be positive, received: " + price;
+                throw new IllegalArgumentException(errorDetail);
             }
             
             // 验证场地
             if (venue == null || venue.trim().isEmpty()) {
-                throw new IllegalArgumentException("Venue must be specified");
+                errorDetail = "Venue must be specified";
+                throw new IllegalArgumentException(errorDetail);
             }
             
-            // 创建订单
-            boolean success = createRealOrder(instrument, side, quantity, price, venue);
+            // 创建订单并获取详细结果
+            OrderCreationResult result = createRealOrderWithDetails(instrument, side, quantity, price, venue);
             
-            if (success) {
+            if (result.success) {
                 // 临时订单ID
                 String tempOrderId = "REDIS_" + System.currentTimeMillis();
                 publishOrderResponse(tempOrderId, 
@@ -241,37 +253,59 @@ public class RedisMessageBridge {
                     venue, 
                     System.currentTimeMillis());
             } else {
+                // 发送详细的失败信息
                 publishOrderResponse("ERROR_" + System.currentTimeMillis(), 
-                    "FAILED", "Order creation failed", 
+                    "FAILED", 
+                    result.errorMessage,  // 使用详细的错误信息
                     venue,
                     System.currentTimeMillis());
             }
         } catch (Exception e) {
             LOGGER.error("Failed to process create order command: ", e);
+            String detailedError = e.getMessage() != null ? e.getMessage() : "Unknown error";
             publishOrderResponse("ERROR_" + System.currentTimeMillis(),
-                "FAILED", "Order creation failed: " + e.getMessage(), "UNKNOWN",
+                "FAILED", 
+                "Order creation failed: " + detailedError, 
+                "UNKNOWN",
                 System.currentTimeMillis());
         }
     }
     
     /**
-     * Create real order 直接用价格
+     * Create real order with detailed error information
      */
-    private boolean createRealOrder(String instrument, String side, double quantity, double price, String venue) {
+    private OrderCreationResult createRealOrderWithDetails(String instrument, String side, 
+                                                           double quantity, double price, String venue) {
         try {
-            // 直接调用 MultiVenueOrderCreator指定的价格
+            // 首先检查场地是否活跃
+            Boolean venueActive = MultiVenueOrderCreator.venueStatus.get(venue);
+            if (!Boolean.TRUE.equals(venueActive)) {
+                return new OrderCreationResult(false, 
+                    String.format("Venue %s is not active (trader not logged in)", venue));
+            }
+            
+            // 移除重复的映射检查 - 让 MultiVenueOrderCreator 自己处理
+            // String nativeId = MultiVenueOrderCreator.findInstrumentMapping(instrument, venue);
+            // if (nativeId == null) {
+            //     return new OrderCreationResult(false, 
+            //         String.format("No instrument mapping found for CUSIP %s on venue %s", instrument, venue));
+            // }
+            
+            // 调用实际的订单创建
             boolean success = MultiVenueOrderCreator.createOrderFromRedis(
                 instrument, side, quantity, price, venue);
             
             if (!success) {
-                LOGGER.error("Order submission to venue failed");
+                return new OrderCreationResult(false, 
+                    "Order submission failed - check logs for details");
             }
             
-            return success;
+            return new OrderCreationResult(true, null);
             
         } catch (Exception e) {
             LOGGER.error("Error creating order: ", e);
-            return false;
+            return new OrderCreationResult(false, 
+                "Order creation error: " + e.getMessage());
         }
     }
     
@@ -300,7 +334,7 @@ public class RedisMessageBridge {
                     System.currentTimeMillis());
             } else {
                 publishOrderResponse(orderId, "CANCEL_FAILED", 
-                    "Cancel request failed", 
+                    "Cancel request failed - check order ID and venue", 
                     venue, 
                     System.currentTimeMillis());
             }
@@ -310,25 +344,25 @@ public class RedisMessageBridge {
         } catch (Exception e) {
             LOGGER.error("Failed to process cancel order command: ", e);
             publishOrderResponse("ERROR_" + System.currentTimeMillis(), 
-                "FAILED", "Order cancellation failed: " + e.getMessage(), "UNKNOWN",
-                System.currentTimeMillis());
-        }
-    }
-    
-    /**
-     * Test Redis connection - silent when successful
-     */
-    public boolean testConnection() {
-        try (Jedis jedis = jedisPool.getResource()) {
-            String response = jedis.ping();
-            boolean isConnected = "PONG".equals(response);
-            if (!isConnected) {
-                LOGGER.warn("Redis connection test failed: {}", response);
-            }
-            return isConnected;
-        } catch (Exception e) {
-            LOGGER.error("Failed to test Redis connection: ", e);
-            return false;
-        }
-    }
+"FAILED", "Order cancellation failed: " + e.getMessage(), "UNKNOWN",
+               System.currentTimeMillis());
+       }
+   }
+   
+   /**
+    * Test Redis connection - silent when successful
+    */
+   public boolean testConnection() {
+       try (Jedis jedis = jedisPool.getResource()) {
+           String response = jedis.ping();
+           boolean isConnected = "PONG".equals(response);
+           if (!isConnected) {
+               LOGGER.warn("Redis connection test failed: {}", response);
+           }
+           return isConnected;
+       } catch (Exception e) {
+           LOGGER.error("Failed to test Redis connection: ", e);
+           return false;
+       }
+   }
 }

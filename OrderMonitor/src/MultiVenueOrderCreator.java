@@ -87,7 +87,9 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
     
     // Active venue configuration
     private static VenueConfig activeVenueConfig = null;
-    private static final Map<String, Boolean> venueStatus = new ConcurrentHashMap<>();
+    
+    // 将 venueStatus 设为 public，以便 RedisMessageBridge 可以访问
+    public static final Map<String, Boolean> venueStatus = new ConcurrentHashMap<>();
     
     // System configuration
     private static final String SYSTEM_USER = "evan_gerhard";
@@ -177,38 +179,6 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
     }
     
     /**
-     * Unified pricing model - core pricing logic 不再使用自动价格计算
-     */
-    /*
-    public static class UnifiedPricingModel {
-        
-        private static final double MIN_SPREAD = 0.02;
-        private static final double SPREAD_ADJUSTMENT = 0.01;
-        
-        public static class PricingResult {
-            public final double bidPrice;
-            public final double askPrice;
-            public final boolean hasBid;
-            public final boolean hasAsk;
-            public final String bidSource;
-            public final String askSource;
-            public final String priceQuality;
-            
-            public PricingResult(double bidPrice, double askPrice, boolean hasBid, boolean hasAsk,
-                               String bidSource, String askSource, String priceQuality) {
-                this.bidPrice = bidPrice;
-                this.askPrice = askPrice;
-                this.hasBid = hasBid;
-                this.hasAsk = hasAsk;
-                this.bidSource = bidSource;
-                this.askSource = askSource;
-                this.priceQuality = priceQuality;
-            }
-        }
-    }
-    */
-    
-    /**
      * Enhanced order manager with clean logging
      */
     private static class EnhancedOrderManager implements IOrderManager {
@@ -217,8 +187,6 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
         
         private final ConcurrentHashMap<String, GCBest> gcCashCache = new ConcurrentHashMap<>();
         private final ConcurrentHashMap<String, GCBest> gcRegCache = new ConcurrentHashMap<>();
-        
-        // private final ConcurrentHashMap<String, UnifiedPricingModel.PricingResult> lastPricingResults = new ConcurrentHashMap<>();
         
         private static final Set<String> TARGET_VENUES = new HashSet<>(Arrays.asList(
             "FENICS_USREPO", "BTEC_REPO_US", "DEALERWEB_REPO"
@@ -250,26 +218,6 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
                 if (gcBestREG != null) {
                     gcRegCache.put(instrumentId, gcBestREG);
                 }
-                
-                // 价格计算和日志
-                /*
-                if (hasActiveOrderForInstrument(instrumentId)) {
-                    UnifiedPricingModel.PricingResult pricing = 
-                        UnifiedPricingModel.calculateUnifiedPrices(best, gcBestCash, gcBestREG, TARGET_VENUES, instrumentId);
-                    
-                    UnifiedPricingModel.PricingResult lastPricing = lastPricingResults.get(instrumentId);
-                    
-                    if (lastPricing == null || hasSignificantPriceChange(pricing, lastPricing)) {
-                        lastPricingResults.put(instrumentId, pricing);
-                        
-                        LOGGER.info("[{}] Bid:{} Ask:{} Quality:{}", 
-                            instrumentId,
-                            pricing.hasBid ? String.format("%.2f", pricing.bidPrice) : "---",
-                            pricing.hasAsk ? String.format("%.2f", pricing.askPrice) : "---",
-                            pricing.priceQuality);
-                    }
-                }
-                */
             }
         }
         
@@ -291,16 +239,6 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
             
             return false;
         }
-        
-        /*
-        private boolean hasSignificantPriceChange(UnifiedPricingModel.PricingResult p1, 
-                                                  UnifiedPricingModel.PricingResult p2) {
-            double bidDiff = Math.abs(p1.bidPrice - p2.bidPrice);
-            double askDiff = Math.abs(p1.askPrice - p2.askPrice);
-            
-            return bidDiff > 0.01 || askDiff > 0.01 || !p1.priceQuality.equals(p2.priceQuality);
-        }
-        */
         
         @Override
         public void mapOrderIdToReqId(String orderId, int reqId) {
@@ -332,20 +270,6 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
             return null;
         }
         
-        /*
-        public UnifiedPricingModel.PricingResult getUnifiedPrice(String instrumentId) {
-            Best best = getBestPrice(instrumentId);
-            if (best == null) {
-                return new UnifiedPricingModel.PricingResult(0, 0, false, false, "", "", "NONE");
-            }
-            
-            GCBest gcCash = gcCashCache.get(instrumentId);
-            GCBest gcReg = gcRegCache.get(instrumentId);
-            
-            return UnifiedPricingModel.calculateUnifiedPrices(best, gcCash, gcReg, TARGET_VENUES, instrumentId);
-        }
-        */
-        
         public Map<String, Best> getAllPricesForCusip(String cusip) {
             Map<String, Best> results = new HashMap<>();
             
@@ -370,12 +294,6 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
 
             return (System.currentTimeMillis() - updateTime) > 100000; // 100 seconds
         }
-        
-        /*
-        public Map<String, UnifiedPricingModel.PricingResult> getAllCachedPricingResults() {
-            return new HashMap<>(lastPricingResults);
-        }
-        */
     }
     
     public MultiVenueOrderCreator(int reqId) {
@@ -396,85 +314,6 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
         
         return VENUE_CONFIGS.values().iterator().next();
     }
-    
-    /**
-     * 掉根据价格选择最佳场地的方法
-     */
-    /*
-    private static VenueConfig selectBestVenueForPrice(String cusip, String side) {
-        VenueConfig bestVenue = null;
-        double bestPrice = 0.0;
-        String bestPriceSource = "";
-        
-        for (Map.Entry<String, VenueConfig> entry : VENUE_CONFIGS.entrySet()) {
-            String venueName = entry.getKey();
-            VenueConfig venue = entry.getValue();
-            Boolean isActive = venueStatus.get(venueName);
-            
-            VenueAnalysis analysis = analyzeVenuePrice(cusip, side, venue, isActive);
-            
-            if (Boolean.TRUE.equals(isActive) && analysis.hasValidPrice && !analysis.isStale) {
-                if (bestVenue == null || isPriceBetter(analysis.targetPrice, bestPrice, side)) {
-                    bestVenue = venue;
-                    bestPrice = analysis.targetPrice;
-                    bestPriceSource = analysis.priceSource;
-                }
-            }
-        }
-        
-        return bestVenue;
-    }
-    */
-    
-    /**
-     * 场地分析相关的class和方法
-     */
-    /*
-    private static class VenueAnalysis {
-        final String venueName;
-        final boolean hasValidPrice;
-        final double targetPrice;
-        final double bidPrice;
-        final double askPrice;
-        final double spread;
-        final String priceSource;
-        final String instrumentKey;
-        final boolean isStale;
-        final boolean isActive;
-        
-        VenueAnalysis(String venueName, boolean hasValidPrice, double targetPrice, 
-                      double bidPrice, double askPrice, String priceSource, 
-                      String instrumentKey, boolean isStale, boolean isActive) {
-            this.venueName = venueName;
-            this.hasValidPrice = hasValidPrice;
-            this.targetPrice = targetPrice;
-            this.bidPrice = bidPrice;
-            this.askPrice = askPrice;
-            this.spread = (askPrice > 0 && bidPrice > 0) ? (askPrice - bidPrice) : 0.0;
-            this.priceSource = priceSource;
-            this.instrumentKey = instrumentKey;
-            this.isStale = isStale;
-            this.isActive = isActive;
-        }
-    }
-    
-    private static VenueAnalysis analyzeVenuePrice(String cusip, String side, VenueConfig venue, Boolean isActive) {
-    }
-    
-    private static boolean isPriceBetter(double newPrice, double currentBest, String side) {
-        if (currentBest == 0.0) return true;
-        
-        if ("Buy".equalsIgnoreCase(side)) {
-            return newPrice < currentBest;
-        } else {
-            return newPrice > currentBest;
-        }
-    }
-    
-    private static double calculateDynamicPriceWithUnifiedModel(String nativeId, String cusip, 
-            String side, Double requestedPrice) {
-    }
-    */
     
     private static String getPriceSourceReflection(Best bestPrice, String methodName) {
         try {
@@ -644,7 +483,6 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
             
             // Unified pricing model - WARN
             loggerContext.getLogger("UnifiedPricingModel").setLevel(Level.WARN);
-            // loggerContext.getLogger(UnifiedPricingModel.class).setLevel(Level.WARN);
             
             // MKV platform - WARN
             loggerContext.getLogger("com.iontrading.mkv").setLevel(Level.WARN);
@@ -687,7 +525,7 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
         LOGGER.info("========== SYSTEM STARTUP ==========");
         
         // Build configuration string in one line
-        StringBuilder configInfo = new StringBuilder("Configuration: ");
+        StringBuilder configInfo = new StringBuilder("Venue: ");
         boolean first = true;
         for (Map.Entry<String, VenueConfig> entry : VENUE_CONFIGS.entrySet()) {
             if (!first) {
@@ -799,8 +637,6 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
             
             LOGGER.info("Market data loaded: {} instruments", 
                 depthListener != null ? depthListener.getInstrumentCount() : "Unknown");
-
-
 
             LOGGER.info("========== SYSTEM READY ==========");
             try {
@@ -955,74 +791,81 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
    /**
     * 从 Redis 创建订单
     */
-   public static boolean createOrderFromRedis(String cusip, String side, double quantity, double price, String venue) {
-       if (depthListener == null) {
-           LOGGER.error("DepthListener not initialized, cannot create order from Redis");
-           return false;
-       }
-       
-       // 验证必需参数
-       if (venue == null || venue.trim().isEmpty()) {
-           LOGGER.error("Venue is required but not provided");
-           return false;
-       }
-       
-       if (price <= 0) {
-           LOGGER.error("Price must be positive, received: {}", price);
-           return false;
-       }
-       
-       // 添加到活跃订单监控
-       activeOrderCusips.add(cusip);   
-       try {
-           // 验证场地是否存在
-           if (!VENUE_CONFIGS.containsKey(venue)) {
-               LOGGER.error("Unknown venue specified: {}", venue);
-               return false;
-           }
-           
-           VenueConfig targetVenue = VENUE_CONFIGS.get(venue);
-           LOGGER.info("Using specified venue: {}", venue);
-           
-           // 保存原始场地配置
-           VenueConfig originalVenue = activeVenueConfig;
-           activeVenueConfig = targetVenue;
-           
-           try {
-               // 查找对应的原生instrument ID
-               String nativeId = findInstrumentMapping(cusip, venue);
-               if (nativeId == null) {
-                   LOGGER.error("No instrument mapping found for CUSIP: {} on venue: {}", 
-                       cusip, venue);
-                   
-                   // 提供诊断信息
-                   LOGGER.info("Running diagnostic for mapping failure...");
-                   diagnoseInstrumentMappings(cusip);
-                   
-                   return false;
-               }
-               
-               // 直接使用用户提供的价格
-               double finalPrice = Math.round(price * 100.0) / 100.0;
-               
-               // 创建订单
-               MultiVenueOrderCreator orderCreator = createParameterizedOrder(
-                   nativeId, cusip, side, quantity, finalPrice);
-               
-               return orderCreator != null;
-               
-           } finally {
-               // 恢复原始场地配置
-               activeVenueConfig = originalVenue;
-           }
-           
-       } catch (Exception e) {
-           LOGGER.error("Error creating order from Redis: ", e);
-           return false;
-       }
-   }
+    public static boolean createOrderFromRedis(String cusip, String side, double quantity, double price, String venue) {
+        if (depthListener == null) {
+            LOGGER.error("DepthListener not initialized, cannot create order from Redis");
+            return false;
+        }
+        
+        // 验证必需参数
+        if (venue == null || venue.trim().isEmpty()) {
+            LOGGER.error("Venue is required but not provided");
+            return false;
+        }
+        
+        if (price <= 0) {
+            LOGGER.error("Price must be positive, received: {}", price);
+            return false;
+        }
+        
+        try {
+            // 验证场地是否存在
+            if (!VENUE_CONFIGS.containsKey(venue)) {
+                LOGGER.error("Unknown venue specified: {}", venue);
+                return false;
+            }
+            
+            VenueConfig targetVenue = VENUE_CONFIGS.get(venue);
+            
+            // 保存原始场地配置
+            VenueConfig originalVenue = activeVenueConfig;
+            activeVenueConfig = targetVenue;
+            
+            try {
+                // 查找对应的原生instrument ID
+                String nativeId = findInstrumentMapping(cusip, venue);
+                if (nativeId == null) {
+                    LOGGER.error("No instrument mapping found for CUSIP: {} on venue: {}", 
+                        cusip, venue);
+                    
+                    // 提供诊断信息
+                    LOGGER.info("Running diagnostic for mapping failure...");
+                    diagnoseInstrumentMappings(cusip);
+                    
+                    return false;  // 映射失败，不添加到监控
+                }
+                
+                // 直接使用用户提供的价格
+                double finalPrice = Math.round(price * 100.0) / 100.0;
+                
+                // 创建订单
+                MultiVenueOrderCreator orderCreator = createParameterizedOrder(
+                    nativeId, cusip, side, quantity, finalPrice);
+                
+                // 只有在订单创建成功后才添加到活跃监控
+                if (orderCreator != null) {
+                    activeOrderCusips.add(cusip);
+                    return true;
+                } else {
+                    LOGGER.error("Failed to create order for CUSIP: {}", cusip);
+                    return false;
+                }
+                
+            } finally {
+                // 恢复原始场地配置
+                activeVenueConfig = originalVenue;
+            }
+            
+        } catch (Exception e) {
+            LOGGER.error("Error creating order from Redis: ", e);
+            return false;
+        }
+    }
    
-   private static String findInstrumentMapping(String cusip, String venue) {
+   /**
+    * 将 findInstrumentMapping 设为 public static 以便 RedisMessageBridge 访问
+    */
+   public static String findInstrumentMapping(String cusip, String venue) {
        try {
            // 直接使用传入的venue参数获取配置
            if (venue == null || venue.trim().isEmpty()) {
@@ -1057,7 +900,7 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
                    if (result != null) {
                        LOGGER.info("Found instrument mapping: {} -> {} for venue {}", 
                            instrumentId, result, venue);
-                       return result;
+                       return result;  // 找到第一个有效映射就立即返回，避免重复日志
                    }
                }
            }
@@ -1253,18 +1096,28 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
                    details.status = "FAILED";
                    details.errorMsg = result;
                    
+                   // 从活跃监控中移除失败的CUSIP
+                   activeOrderCusips.remove(details.cusip);
+                   LOGGER.info("Removed {} from active monitoring due to order failure", details.cusip);
+                   printActiveMonitoring();
+                   
+                   // 提取详细的错误信息
+                   String detailedError = extractDetailedError(result);
+                   
                    publishOrderResponseToRedis(
                        "FAILED_" + myReqId,
                        "FAILED", 
-                       result, 
-                       details.venue  // 使用 OrderDetails 中存储的 venue
+                       detailedError,  // 使用详细错误
+                       details.venue
                    );
                }
                
                if (result.contains("101") || result.contains("not logged in")) {
-                   LOGGER.error("Error 101: User not logged in to venue");
+                   LOGGER.error("Error 101: User not logged in to venue {}", activeVenueConfig.marketSource);
                } else if (result.contains("Price Exceeds Current Price Band")) {
                    LOGGER.error("Price Band Error: Order price outside allowed range");
+               } else if (result.contains("Invalid Instrument")) {
+                   LOGGER.error("Invalid Instrument: CUSIP may not be valid for this venue");
                } else {
                    LOGGER.error("Order submission failed: {}", result);
                }
@@ -1272,6 +1125,28 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
            
        } catch (Exception e) {
            LOGGER.error("Error processing order response: ", e);
+       }
+   }
+   
+   /**
+    * 提取详细的错误信息
+    */
+   private String extractDetailedError(String result) {
+       if (result.contains("101") || result.contains("not logged in")) {
+           return "Trader not logged in to venue " + (activeVenueConfig != null ? activeVenueConfig.marketSource : "UNKNOWN");
+       } else if (result.contains("Price Exceeds Current Price Band")) {
+           return "Price outside allowed range for this instrument";
+       } else if (result.contains("Invalid Instrument")) {
+           return "Invalid instrument ID or CUSIP for this venue";
+       } else if (result.contains("Insufficient")) {
+           return "Insufficient inventory or credit";
+       } else {
+           // 尝试提取具体的错误信息
+           int errorStart = result.indexOf("Error:");
+           if (errorStart != -1) {
+               return result.substring(errorStart);
+           }
+           return "Order failed: " + result;
        }
    }
    
@@ -1301,6 +1176,19 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
        if (details != null) {
            details.status = "ERROR";
            details.errorMsg = String.format("Code %d: %s", errCode, errStr);
+           
+           // 从活跃监控中移除错误的CUSIP
+           activeOrderCusips.remove(details.cusip);
+           LOGGER.info("Removed {} from active monitoring due to order error", details.cusip);
+           printActiveMonitoring();
+           
+           // 发送详细的错误信息到Redis
+           publishOrderResponseToRedis(
+               "ERROR_" + myReqId,
+               "ERROR", 
+               String.format("MKV Error - Code %d: %s", errCode, errStr),
+               details.venue
+           );
        }
    }
    
