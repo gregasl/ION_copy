@@ -177,6 +177,47 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
             this(orderId, reqId, instrumentId, venue, instrumentId);
         }
     }
+
+    /**
+     * 订单创建结果类 - 包含成功状态、错误信息和订单ID
+     */
+    public static class OrderCreationResult {
+        private final boolean success;
+        private final String errorMessage;
+        private final String orderId;
+        private final String venue;
+        
+        // 成功的构造函数
+        private OrderCreationResult(boolean success, String orderId, String venue) {
+            this.success = success;
+            this.errorMessage = null;
+            this.orderId = orderId;
+            this.venue = venue;
+        }
+        
+        // 失败的构造函数
+        private OrderCreationResult(String errorMessage, String venue) {
+            this.success = false;
+            this.errorMessage = errorMessage;
+            this.orderId = null;
+            this.venue = venue != null ? venue : "UNKNOWN";
+        }
+        
+        // 静态工厂方法
+        public static OrderCreationResult success(String orderId, String venue) {
+            return new OrderCreationResult(true, orderId, venue);
+        }
+        
+        public static OrderCreationResult failure(String errorMessage, String venue) {
+            return new OrderCreationResult(errorMessage, venue);
+        }
+        
+        // Getters
+        public boolean isSuccess() { return success; }
+        public String getErrorMessage() { return errorMessage; }
+        public String getOrderId() { return orderId; }
+        public String getVenue() { return venue; }
+    }
     
     /**
      * Enhanced order manager with clean logging
@@ -363,13 +404,25 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
                 public void onResult(MkvFunctionCallEvent event, MkvSupply supply) {
                     try {
                         String result = supply.getString(supply.firstIndex());
-                        LOGGER.info("Cancel response: {}", result);
                         
                         if (result.contains("OK")) {
-                            LOGGER.info("Order {} cancelled successfully", orderId);
+                            // 提取响应代码（如 "0:OK"）
+                            String responseCode = extractResponseCode(result);
+                            LOGGER.info("Order {} cancelled ({})", orderId, responseCode);
                             updateOrderStatus(orderId, "CANCELLED");
                         } else {
-                            LOGGER.error("Cancel request failed: {}", result);
+                            // 对于错误，提取完整的错误代码和描述
+                            String errorCodeWithDesc = extractErrorCodeWithDescription(result);
+                            LOGGER.error("Order {} cancel failed ({})", orderId, errorCodeWithDesc);
+                            
+                            // 提取错误描述用于 Redis 响应
+                            String errorDesc = extractErrorDescription(result);
+                            publishOrderResponseToRedis(
+                                orderId,
+                                "CANCEL_FAILED", 
+                                "Cancel failed: " + errorDesc,
+                                config.marketSource
+                            );
                         }
                     } catch (Exception e) {
                         LOGGER.error("Error processing cancel response: ", e);
@@ -399,7 +452,100 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
             return false;
         }
     }
+
+    // 添加新方法：提取错误代码和描述的组合
+    /**
+     * 提取错误代码和描述的组合
+     * 例如: "-1:Order not found" -> "-1:Order not found"
+     * 但会清理和规范化描述部分
+     */
+    private static String extractErrorCodeWithDescription(String result) {
+        if (result == null || result.isEmpty()) {
+            return "UNKNOWN:Unknown error";
+        }
+        
+        // 查找错误代码模式 (如 "-1:", "-105:" 等)
+        java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("^(-?\\d+):");
+        java.util.regex.Matcher matcher = pattern.matcher(result);
+        
+        if (matcher.find()) {
+            String errorCode = matcher.group(1);
+            String remaining = result.substring(matcher.end()).trim();
+            
+            // 清理描述，移除 "-Result" 等标记
+            String description = cleanErrorDescription(remaining);
+            
+            // 规范化常见错误描述
+            description = normalizeErrorDescription(description);
+            
+            return errorCode + ":" + description;
+        }
+        
+        // 如果无法解析，返回原始内容（限制长度）
+        return result.length() > 50 ? result.substring(0, 50) + "..." : result;
+    }
+
+    // 添加新方法：仅提取错误描述
+    /**
+     * 仅提取错误描述部分
+     */
+    private static String extractErrorDescription(String result) {
+        if (result == null || result.isEmpty()) {
+            return "Unknown error";
+        }
+        
+        // 查找冒号
+        int colonIndex = result.indexOf(":");
+        if (colonIndex > 0 && colonIndex < result.length() - 1) {
+            String description = result.substring(colonIndex + 1).trim();
+            return cleanErrorDescription(description);
+        }
+        
+        return result;
+    }
+
+    // 辅助方法：清理错误描述
+    private static String cleanErrorDescription(String description) {
+        if (description == null) return "";
+        
+        // 移除 "-Result" 标记
+        int resultIndex = description.indexOf("-Result");
+        if (resultIndex > 0) {
+            description = description.substring(0, resultIndex).trim();
+        }
+        
+        // 移除其他可能的标记
+        description = description.replaceAll("\\s*-\\s*$", ""); // 移除末尾的 "-"
+        
+        return description.trim();
+    }
+
+    // 辅助方法：规范化错误描述
+    private static String normalizeErrorDescription(String description) {
+        if (description == null || description.isEmpty()) {
+            return "Unknown error";
+        }
+        
+        // 规范化常见错误消息
+        String normalized = description.toLowerCase();
+        
+        if (normalized.contains("order") && normalized.contains("not") && normalized.contains("found")) {
+            return "Order not found";
+        } else if (normalized.contains("already") && normalized.contains("filled")) {
+            return "Order already filled";
+        } else if (normalized.contains("already") && normalized.contains("cancelled")) {
+            return "Order already cancelled";
+        } else if (normalized.contains("cannot") && normalized.contains("cancel")) {
+            return "Cannot cancel order";
+        } else if (normalized.contains("invalid") && normalized.contains("status")) {
+            return "Invalid order status";
+        }
+        
+        // 如果不是常见错误，返回原始描述（首字母大写）
+        return description.substring(0, 1).toUpperCase() + description.substring(1);
+    }
     
+
     private static void updateOrderStatus(String orderId, String status) {
         for (OrderDetails details : orderTracking.values()) {
             if (orderId.equals(details.orderId)) {
@@ -788,31 +934,45 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
        return null;
     }
    
-   /**
-    * 从 Redis 创建订单
-    */
-    public static boolean createOrderFromRedis(String cusip, String side, double quantity, double price, String venue) {
+    /**
+     * 从 Redis 创建订单 - 返回详细的结果对象
+     */
+    public static OrderCreationResult createOrderFromRedis(String cusip, String side, 
+            double quantity, double price, String venue) {
+        
+        // 系统检查
         if (depthListener == null) {
             LOGGER.error("DepthListener not initialized, cannot create order from Redis");
-            return false;
+            return OrderCreationResult.failure(
+                "System not ready - DepthListener not initialized", venue);
         }
         
-        // 验证必需参数
+        // 参数验证
         if (venue == null || venue.trim().isEmpty()) {
             LOGGER.error("Venue is required but not provided");
-            return false;
+            return OrderCreationResult.failure("Venue parameter is required", null);
         }
         
         if (price <= 0) {
             LOGGER.error("Price must be positive, received: {}", price);
-            return false;
+            return OrderCreationResult.failure(
+                String.format("Invalid price: %.2f - must be positive", price), venue);
         }
         
         try {
-            // 验证场地是否存在
+            // 验证场地
             if (!VENUE_CONFIGS.containsKey(venue)) {
                 LOGGER.error("Unknown venue specified: {}", venue);
-                return false;
+                return OrderCreationResult.failure(
+                    String.format("Unknown venue: %s", venue), venue);
+            }
+            
+            // 检查场地状态
+            Boolean venueActive = venueStatus.get(venue);
+            if (!Boolean.TRUE.equals(venueActive)) {
+                LOGGER.error("Venue {} is not active", venue);
+                return OrderCreationResult.failure(
+                    String.format("Venue %s is not active or trader not logged in", venue), venue);
             }
             
             VenueConfig targetVenue = VENUE_CONFIGS.get(venue);
@@ -822,7 +982,7 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
             activeVenueConfig = targetVenue;
             
             try {
-                // 查找对应的原生instrument ID
+                // 查找映射
                 String nativeId = findInstrumentMapping(cusip, venue);
                 if (nativeId == null) {
                     LOGGER.error("No instrument mapping found for CUSIP: {} on venue: {}", 
@@ -832,23 +992,34 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
                     LOGGER.info("Running diagnostic for mapping failure...");
                     diagnoseInstrumentMappings(cusip);
                     
-                    return false;  // 映射失败，不添加到监控
+                    return OrderCreationResult.failure(
+                        String.format("No instrument mapping found for CUSIP %s on venue %s", 
+                            cusip, venue), venue);
                 }
                 
-                // 直接使用用户提供的价格
+                // 处理价格
                 double finalPrice = Math.round(price * 100.0) / 100.0;
                 
                 // 创建订单
+                reqId++;
+                int currentReqId = reqId;
+                
                 MultiVenueOrderCreator orderCreator = createParameterizedOrder(
                     nativeId, cusip, side, quantity, finalPrice);
                 
-                // 只有在订单创建成功后才添加到活跃监控
                 if (orderCreator != null) {
+                    // 成功创建订单
                     activeOrderCusips.add(cusip);
-                    return true;
+                    
+                    // 尝试获取实际的订单ID（可能还是PENDING状态）
+                    String orderId = orderCreator.orderId != null ? 
+                        orderCreator.orderId : "PENDING_" + currentReqId;
+                    
+                    return OrderCreationResult.success(orderId, venue);
                 } else {
                     LOGGER.error("Failed to create order for CUSIP: {}", cusip);
-                    return false;
+                    return OrderCreationResult.failure(
+                        "Order creation failed - internal error", venue);
                 }
                 
             } finally {
@@ -858,61 +1029,63 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
             
         } catch (Exception e) {
             LOGGER.error("Error creating order from Redis: ", e);
-            return false;
+            return OrderCreationResult.failure(
+                "Order creation error: " + e.getMessage(), venue);
         }
     }
    
    /**
     * 将 findInstrumentMapping 设为 public static 以便 RedisMessageBridge 访问
     */
-   public static String findInstrumentMapping(String cusip, String venue) {
-       try {
-           // 直接使用传入的venue参数获取配置
-           if (venue == null || venue.trim().isEmpty()) {
-               LOGGER.error("Venue parameter is required for mapping");
-               return null;
-           }
-           
-           VenueConfig targetVenue = VENUE_CONFIGS.get(venue);
-           if (targetVenue == null) {
-               LOGGER.error("Unknown venue for mapping: {}", venue);
-               return null;
-           }
+    public static String findInstrumentMapping(String cusip, String venue) {
+        try {
+            // 直接使用传入的venue参数获取配置
+            if (venue == null || venue.trim().isEmpty()) {
+                LOGGER.error("Venue parameter is required for mapping");
+                return null;
+            }
+            
+            VenueConfig targetVenue = VENUE_CONFIGS.get(venue);
+            if (targetVenue == null) {
+                LOGGER.error("Unknown venue for mapping: {}", venue);
+                return null;
+            }
 
-           // 获取所有instrument数据
-           java.lang.reflect.Field f = DepthListener.class.getDeclaredField("instrumentData");
-           f.setAccessible(true);
-           Map<String, ?> data = (Map<String, ?>) f.get(depthListener);
-           
-           // 查找包含CUSIP的实际instrument ID
-           for (String instrumentId : data.keySet()) {
-               if (instrumentId.contains(cusip)) {
-                   LOGGER.debug("Testing mapping: instrumentId={}, sourceId={}", 
-                       instrumentId, targetVenue.marketSource);
-                   
-                   // 修正参数顺序：instrumentId, sourceId, isAON
-                   String result = depthListener.getInstrumentFieldBySourceString(
-                       instrumentId,               // instrumentId (如 "912797PQ4_07_22_25_07_23_25_Fixed")
-                       targetVenue.marketSource,   // sourceId (如 "FENICS_USREPO")
-                       false                       // isAON
-                   );
-                   
-                   if (result != null) {
-                       LOGGER.info("Found instrument mapping: {} -> {} for venue {}", 
-                           instrumentId, result, venue);
-                       return result;  // 找到第一个有效映射就立即返回，避免重复日志
-                   }
-               }
-           }
-           
-           LOGGER.warn("No instrument mapping found for CUSIP: {} on venue: {}", cusip, venue);
-           return null;
-           
-       } catch (Exception e) {
-           LOGGER.error("Error finding instrument mapping: ", e);
-           return null;
-       }
-   }
+            // 获取所有instrument数据
+            java.lang.reflect.Field f = DepthListener.class.getDeclaredField("instrumentData");
+            f.setAccessible(true);
+            Map<String, ?> data = (Map<String, ?>) f.get(depthListener);
+            
+            // 查找包含CUSIP的实际instrument ID
+            for (String instrumentId : data.keySet()) {
+                if (instrumentId.contains(cusip)) {
+                    LOGGER.debug("Testing mapping: instrumentId={}, sourceId={}", 
+                        instrumentId, targetVenue.marketSource);
+                    
+                    // 修正参数顺序：instrumentId, sourceId, isAON
+                    String result = depthListener.getInstrumentFieldBySourceString(
+                        instrumentId,               // instrumentId (如 "912797PQ4_07_22_25_07_23_25_Fixed")
+                        targetVenue.marketSource,   // sourceId (如 "FENICS_USREPO")
+                        false                       // isAON
+                    );
+                    
+                    if (result != null) {
+                        LOGGER.info("Found instrument mapping: {} -> {} for venue {}", 
+                            instrumentId, result, venue);
+                        return result;  // 找到第一个有效映射就立即返回，避免重复日志
+                    }
+                }
+            }
+            
+            // 删除这行 WARN 日志，因为调用者会记录 ERROR
+            // LOGGER.warn("No instrument mapping found for CUSIP: {} on venue: {}", cusip, venue);
+            return null;
+            
+        } catch (Exception e) {
+            LOGGER.error("Error finding instrument mapping: ", e);
+            return null;
+        }
+    }
    
    /**
     * 列出所有包含指定CUSIP的instrument
@@ -1063,70 +1236,65 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
    }
    
    // MkvFunctionCallListener implementation
-   @Override
-   public void onResult(MkvFunctionCallEvent event, MkvSupply supply) {
-       try {
-           String result = supply.getString(supply.firstIndex());
-           
-           if (result.contains("OK")) {
-               String extractedOrderId = extractOrderId(result);
-               
-               OrderDetails details = orderTracking.get(String.valueOf(myReqId));
-               if (details != null) {
-                   details.status = "SUBMITTED";
-                   if (extractedOrderId != null) {
-                       details.orderId = extractedOrderId;
-                   }
-                   
-                   LOGGER.info("Order response: {} (SUBMITTED)", 
-                       extractedOrderId != null ? extractedOrderId : "PENDING_" + myReqId);
-                   printActiveMonitoring();
-                   LOGGER.info("----");
-                   
-                   publishOrderResponseToRedis(
-                       extractedOrderId != null ? extractedOrderId : "PENDING_" + myReqId,
-                       "SUBMITTED", 
-                       "Order submitted successfully", 
-                       details.venue  // 使用 OrderDetails 中存储的 venue
-                   );
-               }
-           } else {
-               OrderDetails details = orderTracking.get(String.valueOf(myReqId));
-               if (details != null) {
-                   details.status = "FAILED";
-                   details.errorMsg = result;
-                   
-                   // 从活跃监控中移除失败的CUSIP
-                   activeOrderCusips.remove(details.cusip);
-                   LOGGER.info("Removed {} from active monitoring due to order failure", details.cusip);
-                   printActiveMonitoring();
-                   
-                   // 提取详细的错误信息
-                   String detailedError = extractDetailedError(result);
-                   
-                   publishOrderResponseToRedis(
-                       "FAILED_" + myReqId,
-                       "FAILED", 
-                       detailedError,  // 使用详细错误
-                       details.venue
-                   );
-               }
-               
-               if (result.contains("101") || result.contains("not logged in")) {
-                   LOGGER.error("Error 101: User not logged in to venue {}", activeVenueConfig.marketSource);
-               } else if (result.contains("Price Exceeds Current Price Band")) {
-                   LOGGER.error("Price Band Error: Order price outside allowed range");
-               } else if (result.contains("Invalid Instrument")) {
-                   LOGGER.error("Invalid Instrument: CUSIP may not be valid for this venue");
-               } else {
-                   LOGGER.error("Order submission failed: {}", result);
-               }
-           }
-           
-       } catch (Exception e) {
-           LOGGER.error("Error processing order response: ", e);
-       }
-   }
+    @Override
+    public void onResult(MkvFunctionCallEvent event, MkvSupply supply) {
+        try {
+            String result = supply.getString(supply.firstIndex());
+            
+            // 提取响应代码 - 可能是 "0:OK", "-101:Error", "-105:Not Logged In" 等
+            String responseCode = extractResponseCode(result);
+            
+            if (result.contains("OK")) {
+                String extractedOrderId = extractOrderId(result);
+                
+                OrderDetails details = orderTracking.get(String.valueOf(myReqId));
+                if (details != null) {
+                    details.status = "SUBMITTED";
+                    if (extractedOrderId != null) {
+                        details.orderId = extractedOrderId;
+                    }
+                    
+                    // 使用新的日志格式
+                    LOGGER.info("Order {} submitted ({})", 
+                        extractedOrderId != null ? extractedOrderId : "PENDING_" + myReqId,
+                        responseCode);
+                    printActiveMonitoring();
+                    LOGGER.info("----");
+                    
+                    publishOrderResponseToRedis(
+                        extractedOrderId != null ? extractedOrderId : "PENDING_" + myReqId,
+                        "SUBMITTED", 
+                        "Order submitted successfully", 
+                        details.venue
+                    );
+                }
+            } else {
+                OrderDetails details = orderTracking.get(String.valueOf(myReqId));
+                if (details != null) {
+                    details.status = "FAILED";
+                    details.errorMsg = result;
+                    
+                    // 从活跃监控中移除失败的CUSIP
+                    activeOrderCusips.remove(details.cusip);
+                    LOGGER.info("Order {} failed ({})", "FAILED_" + myReqId, responseCode);
+                    LOGGER.info("Removed {} from active monitoring due to order failure", details.cusip);
+                    printActiveMonitoring();
+                    
+                    // 提取详细的错误信息
+                    String detailedError = extractDetailedError(result);
+                    
+                    publishOrderResponseToRedis(
+                        "FAILED_" + myReqId,
+                        "FAILED", 
+                        detailedError,
+                        details.venue
+                    );
+                }
+            }
+        } catch (Exception e) {
+            LOGGER.error("Error processing order response: ", e);
+        }
+    }
    
    /**
     * 提取详细的错误信息
@@ -1149,6 +1317,32 @@ public class MultiVenueOrderCreator implements MkvFunctionCallListener, MkvPlatf
            return "Order failed: " + result;
        }
    }
+   
+    private static String extractResponseCode(String result) {
+        if (result == null || result.isEmpty()) {
+            return "UNKNOWN";
+        }
+        
+        // 查找第一个空格或者 "-Result" 的位置
+        int spaceIndex = result.indexOf(" ");
+        int resultIndex = result.indexOf("-Result");
+        
+        int endIndex = -1;
+        if (spaceIndex > 0 && resultIndex > 0) {
+            endIndex = Math.min(spaceIndex, resultIndex);
+        } else if (spaceIndex > 0) {
+            endIndex = spaceIndex;
+        } else if (resultIndex > 0) {
+            endIndex = resultIndex;
+        }
+        
+        if (endIndex > 0) {
+            return result.substring(0, endIndex).trim();
+        }
+        
+        // 如果找不到分隔符，尝试提取前20个字符作为代码
+        return result.length() > 20 ? result.substring(0, 20) + "..." : result;
+    }
    
    private String extractOrderId(String result) {
        try {

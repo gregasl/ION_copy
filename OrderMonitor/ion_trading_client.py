@@ -277,12 +277,14 @@ class IONTradingClient:
                 for oid, order in list(self._active_orders.items()):
                     if oid.startswith('PENDING_') and (
                         (order_id.startswith('REDIS_') and status == 'SUBMITTED') or
-                        (not order_id.startswith('REDIS_') and not order_id.startswith('PENDING_'))
+                        (order_id.startswith('ERROR_') and status in ['FAILED', 'ERROR']) or
+                        (not order_id.startswith('REDIS_') and not order_id.startswith('PENDING_') and not order_id.startswith('ERROR_'))
                     ):
                         if order.status in ['PENDING', 'SUBMITTED']:
                             order_to_update = order
                             old_order_id = oid
                             order_found = True
+                            break
                             break
             
             if order_found and order_to_update:
