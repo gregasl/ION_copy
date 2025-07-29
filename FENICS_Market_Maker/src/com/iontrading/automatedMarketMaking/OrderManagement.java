@@ -1715,7 +1715,7 @@ private void processOrderUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolea
                     return;
                     }
                 }
-                addOrder(market, trader, nativeId, hedgeDirection, qtyHit, orderPrice, "Limit", "FAS"); 
+                addOrder(market, trader, nativeId, hedgeDirection, qtyHit, orderPrice, "Limit", "FAK"); 
             } else {
                 LOGGER.warn("Hedging not applicable for Id={}, market={}, Verb={}, currentlyActive={}, priorActive={}, qtyHit={}, price={}, wasOrderActive={}", Id, src, VerbStr, currentlyActive, qtyHit, orderPrice, wasOrderActive);
             }

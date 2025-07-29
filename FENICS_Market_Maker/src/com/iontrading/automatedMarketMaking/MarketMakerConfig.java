@@ -160,8 +160,8 @@ public final class MarketMakerConfig {
         private LocalTime regMarketOpenTime = LocalTime.of(9, 0); // 9:00 AM EST
         private LocalTime regMarketCloseTime = LocalTime.of(17, 0); // 4:30 PM EST
         private LocalTime cashMarketOpenTime = LocalTime.of(7, 0); // 7:00 AM EST
-        private LocalTime cashMarketCloseTime = LocalTime.of(17, 0); // 11:55 AM EST
-        
+        private LocalTime cashMarketCloseTime = LocalTime.of(11, 45); // 11:45 AM EST
+
         private Set<String> targetVenues = new HashSet<>(Arrays.asList("BTEC_REPO_US", "DEALERWEB_REPO"));
         
         public LocalTime getCashMarketOpenTime() {
