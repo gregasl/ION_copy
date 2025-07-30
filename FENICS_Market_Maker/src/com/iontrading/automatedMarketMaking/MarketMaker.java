@@ -1,18 +1,18 @@
 package com.iontrading.automatedMarketMaking;
 
 import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
+// import java.util.Objects;
+// import java.util.Set;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.ArrayList;
-import java.util.Arrays;
+// import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
+// import java.util.Iterator;
 import java.util.List;
-import java.util.concurrent.ConcurrentHashMap;
+// import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -21,8 +21,8 @@ import java.time.Duration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.iontrading.OSP.packets.i;
-import com.iontrading.janino.p.t;
+// import com.iontrading.OSP.packets.i;
+// import com.iontrading.janino.p.t;
 import com.iontrading.mkv.Mkv;
 import com.iontrading.mkv.MkvObject;
 import com.iontrading.mkv.MkvPattern;
@@ -30,8 +30,8 @@ import com.iontrading.mkv.MkvPublishManager;
 import com.iontrading.mkv.enums.MkvObjectType;
 import com.iontrading.mkv.events.MkvPublishListener;
 import com.iontrading.mkv.events.MkvRecordListener;
-import com.iontrading.mkv.exceptions.MkvException;
-import java.io.ObjectInputFilter;
+// import com.iontrading.mkv.exceptions.MkvException;
+// import java.io.ObjectInputFilter;
 
 /**
  * MarketMaker implements a market making strategy for FENICS that quotes based on
@@ -345,7 +345,7 @@ public class MarketMaker implements IOrderManager {
         scheduler.scheduleAtFixedRate(
             this::logDiagnosticStatistics, 
             30, // Initial delay (seconds) 
-            60, // Run every minute
+            5 * 60, // Run every 5 minutes
             TimeUnit.SECONDS
         );
         
@@ -1155,10 +1155,6 @@ public class MarketMaker implements IOrderManager {
         // Batch update counters to reduce atomic operations
         int updates = marketUpdateCounter.incrementAndGet();
         orderRepository.incrementInstrumentUpdateCounter(id);
-        
-        boolean significantCashGcChange = false;
-        boolean significantRegGcChange = false;
-
 
         // Process based on term code - avoid string operations
         boolean isCash = id.endsWith("C_Fixed");
@@ -2819,14 +2815,14 @@ public class MarketMaker implements IOrderManager {
     //     return 0;
     // }
 
-    private double getCachedVenueMinimum(String instrumentId, String venue) {
-        String cacheKey = instrumentId + ":" + venue;
-        double cachedValue = orderRepository.getCachedVenueMinimum(instrumentId, venue, -1);
-        if (cachedValue < 0) {
-            cachedValue = depthListener.getMinimumQuantityBySource(instrumentId, venue, config.getMinSize());
-            orderRepository.cacheVenueMinimum(instrumentId, venue, cachedValue);
-        }
-        return cachedValue;
-    }
+    // private double getCachedVenueMinimum(String instrumentId, String venue) {
+    //     String cacheKey = instrumentId + ":" + venue;
+    //     double cachedValue = orderRepository.getCachedVenueMinimum(instrumentId, venue, -1);
+    //     if (cachedValue < 0) {
+    //         cachedValue = depthListener.getMinimumQuantityBySource(instrumentId, venue, config.getMinSize());
+    //         orderRepository.cacheVenueMinimum(instrumentId, venue, cachedValue);
+    //     }
+    //     return cachedValue;
+    // }
     
 }
