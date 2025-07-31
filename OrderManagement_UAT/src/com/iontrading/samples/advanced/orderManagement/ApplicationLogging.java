@@ -26,7 +26,7 @@ import java.lang.Object;
 public class ApplicationLogging {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(ApplicationLogging.class);
-    private static final Logger MACHINE_READABLE_LOGGER = LoggerFactory.getLogger("MACHINE_READABLE");
+    // private static final Logger MACHINE_READABLE_LOGGER = LoggerFactory.getLogger("MACHINE_READABLE");
     private static boolean initialized = false;
     
     /**
@@ -63,9 +63,9 @@ public class ApplicationLogging {
             LOGGER.info("=== SLF4J/Logback logging initialized programmatically for {} ===", applicationName);
             LOGGER.info("Log directory: {}", dir.getAbsolutePath());
             
-            // Test machine readable logging
-            MACHINE_READABLE_LOGGER.info("SYSTEM,STARTUP,{},{},,,,,,,,-1,", 
-                applicationName, new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS").format(new Date()));
+            // // Test machine readable logging
+            // MACHINE_READABLE_LOGGER.info("SYSTEM,STARTUP,{},{},,,,,,,,-1,", 
+            //     applicationName, new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS").format(new Date()));
             
             initialized = true;
             return true;
@@ -96,20 +96,20 @@ public class ApplicationLogging {
             logDir + "/" + applicationName + "_" + datePattern + ".log",
             logDir + "/" + applicationName + "_%d{yyyy-MM-dd}.%i.log");
         
-        // 3. Create Machine Readable File Appender
-        RollingFileAppender<ILoggingEvent> machineFileAppender = createMachineFileAppender(context,
-            logDir + "/" + applicationName + "_machine_" + datePattern + ".csv",
-            logDir + "/" + applicationName + "_machine_%d{yyyy-MM-dd}.%i.csv");
+        // // 3. Create Machine Readable File Appender
+        // RollingFileAppender<ILoggingEvent> machineFileAppender = createMachineFileAppender(context,
+        //     logDir + "/" + applicationName + "_machine_" + datePattern + ".csv",
+        //     logDir + "/" + applicationName + "_machine_%d{yyyy-MM-dd}.%i.csv");
         
         // 4. Create Async Appenders for Performance
         AsyncAppender asyncMainAppender = createAsyncAppender(context, "ASYNC_MAIN", mainFileAppender);
-        AsyncAppender asyncMachineAppender = createAsyncAppender(context, "ASYNC_MACHINE", machineFileAppender);
+        // AsyncAppender asyncMachineAppender = createAsyncAppender(context, "ASYNC_MACHINE", machineFileAppender);
         
         // 5. Configure Machine Readable Logger
         ch.qos.logback.classic.Logger machineLogger = context.getLogger("MACHINE_READABLE");
         machineLogger.setLevel(Level.INFO);  // Now unambiguous - refers to ch.qos.logback.classic.Level
         machineLogger.setAdditive(false); // Don't inherit from root
-        machineLogger.addAppender(asyncMachineAppender);
+        // machineLogger.addAppender(asyncMachineAppender);
         
         // 6. Configure Application Loggers
         ch.qos.logback.classic.Logger appLogger = context.getLogger("com.iontrading.samples.advanced.orderManagement");
@@ -124,13 +124,13 @@ public class ApplicationLogging {
         // Start all appenders
         consoleAppender.start();
         mainFileAppender.start();
-        machineFileAppender.start();
+        // machineFileAppender.start();
         asyncMainAppender.start();
-        asyncMachineAppender.start();
+        // asyncMachineAppender.start();
         
         System.out.println("Programmatic logging configuration completed");
         System.out.println("Main log file: " + logDir + "/" + applicationName + "_" + datePattern + ".log");
-        System.out.println("Machine log file: " + logDir + "/" + applicationName + "_machine_" + datePattern + ".csv");
+        // System.out.println("Machine log file: " + logDir + "/" + applicationName + "_machine_" + datePattern + ".csv");
     }
     
     /**
@@ -184,33 +184,33 @@ public class ApplicationLogging {
     /**
      * Create machine readable file appender
      */
-    private static RollingFileAppender<ILoggingEvent> createMachineFileAppender(LoggerContext context,
-            String fileName, String fileNamePattern) {
-        RollingFileAppender<ILoggingEvent> fileAppender = new RollingFileAppender<>();
-        fileAppender.setContext(context);
-        fileAppender.setName("MACHINE_FILE");
-        fileAppender.setFile(fileName);
+    // private static RollingFileAppender<ILoggingEvent> createMachineFileAppender(LoggerContext context,
+    //         String fileName, String fileNamePattern) {
+    //     RollingFileAppender<ILoggingEvent> fileAppender = new RollingFileAppender<>();
+    //     fileAppender.setContext(context);
+    //     fileAppender.setName("MACHINE_FILE");
+    //     fileAppender.setFile(fileName);
         
-        // Create encoder - just the message, no formatting
-        PatternLayoutEncoder encoder = new PatternLayoutEncoder();
-        encoder.setContext(context);
-        encoder.setPattern("%msg%n");
-        encoder.start();
-        fileAppender.setEncoder(encoder);
+    //     // Create encoder - just the message, no formatting
+    //     PatternLayoutEncoder encoder = new PatternLayoutEncoder();
+    //     encoder.setContext(context);
+    //     encoder.setPattern("%msg%n");
+    //     encoder.start();
+    //     fileAppender.setEncoder(encoder);
         
-        // Create rolling policy
-        SizeAndTimeBasedRollingPolicy<ILoggingEvent> rollingPolicy = new SizeAndTimeBasedRollingPolicy<>();
-        rollingPolicy.setContext(context);
-        rollingPolicy.setParent(fileAppender);
-        rollingPolicy.setFileNamePattern(fileNamePattern);
-        rollingPolicy.setMaxFileSize(FileSize.valueOf("100MB"));
-        rollingPolicy.setMaxHistory(30);
-        rollingPolicy.setTotalSizeCap(FileSize.valueOf("1GB"));
-        rollingPolicy.start();
+    //     // Create rolling policy
+    //     SizeAndTimeBasedRollingPolicy<ILoggingEvent> rollingPolicy = new SizeAndTimeBasedRollingPolicy<>();
+    //     rollingPolicy.setContext(context);
+    //     rollingPolicy.setParent(fileAppender);
+    //     rollingPolicy.setFileNamePattern(fileNamePattern);
+    //     rollingPolicy.setMaxFileSize(FileSize.valueOf("100MB"));
+    //     rollingPolicy.setMaxHistory(30);
+    //     rollingPolicy.setTotalSizeCap(FileSize.valueOf("1GB"));
+    //     rollingPolicy.start();
         
-        fileAppender.setRollingPolicy(rollingPolicy);
-        return fileAppender;
-    }
+    //     fileAppender.setRollingPolicy(rollingPolicy);
+    //     return fileAppender;
+    // }
     
     /**
      * Create async appender for performance
@@ -241,43 +241,41 @@ public class ApplicationLogging {
         LOGGER.debug("TEST: Debug level logging");
         
         // Test machine readable logging
-        logOrderEvent("TEST", "SYSTEM", "testuser", "TEST_INSTRUMENT", "BUY", 
-                      100.0, 25.50, "LIMIT", "DAY", 999, "TEST_ORDER_123");
+        // logOrderEvent("TEST", "SYSTEM", "testuser", "TEST_INSTRUMENT", "BUY", 
+        //               100.0, 25.50, "LIMIT", "DAY", 999, "TEST_ORDER_123");
         
         LOGGER.info("=== Logging test complete - check logs directory ===");
     }
-    
-    // ... rest of your existing methods (logOrderEvent, etc.) remain the same
-    
+        
     /**
      * Log order information in machine-readable format
      */
-    public static void logOrderEvent(
-            String operation, String source, String trader, String instrumentId,
-            String direction, double size, double price, String orderType,
-            String tif, int requestId, String orderId) {
+    // public static void logOrderEvent(
+    //         String operation, String source, String trader, String instrumentId,
+    //         String direction, double size, double price, String orderType,
+    //         String tif, int requestId, String orderId) {
         
-        String safeInstrumentId = instrumentId.replace(",", "\\,");
-        String safeOrderId = (orderId != null) ? orderId.replace(",", "\\,") : "";
-        String timestamp = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS").format(new Date());
+    //     String safeInstrumentId = instrumentId.replace(",", "\\,");
+    //     String safeOrderId = (orderId != null) ? orderId.replace(",", "\\,") : "";
+    //     String timestamp = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS").format(new Date());
         
-        String csvRecord = String.format(
-            "%s,%s,%s,%s,%s,%s,%.2f,%.4f,%s,%s,%d,%s",
-            timestamp, operation, source, trader, safeInstrumentId, direction,
-            size, price, orderType, tif, requestId, safeOrderId
-        );
+    //     String csvRecord = String.format(
+    //         "%s,%s,%s,%s,%s,%s,%.2f,%.4f,%s,%s,%d,%s",
+    //         timestamp, operation, source, trader, safeInstrumentId, direction,
+    //         size, price, orderType, tif, requestId, safeOrderId
+    //     );
         
-        MACHINE_READABLE_LOGGER.info(csvRecord);
-        LOGGER.debug("Order event: {}", csvRecord);
-    }
+    //     MACHINE_READABLE_LOGGER.info(csvRecord);
+    //     LOGGER.debug("Order event: {}", csvRecord);
+    // }
     
     /**
      * Simplified order update logging
      */
     public static void logOrderUpdate(String operation, int requestId, String orderId, String status) {
         String timestamp = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS").format(new Date());
-        String csvRecord = String.format("%s,%s,,,,,,,,,,%d,%s,%s", timestamp, operation, requestId, orderId, status);
-        MACHINE_READABLE_LOGGER.info(csvRecord);
+        // String csvRecord = String.format("%s,%s,,,,,,,,,,%d,%s,%s", timestamp, operation, requestId, orderId, status);
+        // MACHINE_READABLE_LOGGER.info(csvRecord);
     }
     
     /**
