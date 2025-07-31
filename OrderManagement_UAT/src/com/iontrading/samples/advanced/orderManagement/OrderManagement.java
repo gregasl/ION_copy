@@ -27,6 +27,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -535,7 +536,7 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
       // Add a shutdown hook to clean up the scheduler
       Runtime.getRuntime().addShutdownHook(new Thread(() -> {
           LOGGER.info("Shutting down order expiration scheduler");
-          shutdownExecutor(orderExpirationScheduler, "Order expiration scheduler");
+          shutdownExecutorGracefully(orderExpirationScheduler, "OrderExpiration", 60);
       }));
 
       LOGGER.info("Order expiration checker initialized (TTL: 60 secs before 7:15, 15 secs after)");
@@ -640,156 +641,157 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
 	        LOGGER.info("Unsubscribed from Redis channel: {}", channel);
 	    }
 	}
-	
-
-/**
- * Parses a control message string into a Map.
- * 
- * @param message The message string to parse
- * @return A Map containing the parsed message data
- */
-@SuppressWarnings("unchecked")
-private Map<String, Object> parseControlMessage(String message) {
-    try {
-        // Parse message as JSON
-        return OBJECT_MAPPER.readValue(message, Map.class);
-    } catch (Exception e) {
-        // If not valid JSON, create a simple command map
-        LOGGER.warn("Failed to parse control message as JSON, treating as plain command: {}", message);
         
-        Map<String, Object> result = new HashMap<>();
-        result.put("command", message.trim());
-        return result;
-    }
-}
 
-/**
- * Handles the STOP command, cancelling existing orders and preventing new ones.
- * 
- * @param controlMessage The control message containing command parameters
- */
-private void handleStopCommand(Map<String, Object> controlMessage) {
-    // Skip if already stopped
-    if (isSystemStopped) {
-        LOGGER.info("System already in STOPPED state, ignoring redundant STOP command");
-        return;
-    }
-
-    LOGGER.warn("Executing STOP command - cancelling orders and preventing new submissions");
-
-    // Set the system to stopped state
-    isSystemStopped = true;
-
-    // Disable continuous trading to prevent auto-trading
-    continuousTradingEnabled = false;
-    
-    // Cancel all existing orders
-    cancelAllOrders();
-    
-    // Publish status update
-//    publishSystemStatus();
-
-    LOGGER.warn("STOP command executed - system is now STOPPED");
-}
-
-/**
- * Handles the RESUME command, allowing new orders to be submitted.
- * 
- * @param controlMessage The control message containing command parameters
- */
-private void handleResumeCommand(Map<String, Object> controlMessage) {
-    // Skip if not stopped
-    if (!isSystemStopped) {
-        LOGGER.info("System already in RUNNING state, ignoring redundant RESUME command");
-        return;
-    }
-
-    LOGGER.warn("Executing RESUME command - allowing new order submissions");
-
-    // Set the system back to running state
-    isSystemStopped = false;
-
-    // Re-enable continuous trading if requested
-    Boolean enableTrading = (Boolean) controlMessage.getOrDefault("enableTrading", Boolean.TRUE);
-    if (enableTrading) {
-        continuousTradingEnabled = true;
-        LOGGER.info("Continuous trading re-enabled as part of RESUME command");
-    } else {
-        LOGGER.info("Continuous trading remains disabled after RESUME command");
-    }
-    
-    // Publish status update
-//    publishSystemStatus();
-
-    LOGGER.warn("RESUME command executed - system is now RUNNING");
-}
-
-  /**
-   * Called when a publication event occurs.
-   * This implementation doesn't handle individual publication events.
-   */
-  public void onPublish(MkvObject mkvObject, boolean pub_unpub, boolean dwl) {
-    // Not handling individual publication events
-    if (LOGGER.isDebugEnabled()) {
-      LOGGER.debug("Publication event for: {}", mkvObject.getName());
-    }
-  }
-
-  /**
-   * Called when a publication download is complete.
-   * This is where we set up the order chain subscription and
-   * potentially send an initial FAS order if configured.
-   * 
-   * @param component The component name
-   * @param start Whether this is the start of idle time
-   */
-  public void onPublishIdle(String component, boolean start) {
-    if (LOGGER.isDebugEnabled()) {
-      LOGGER.debug("Publication idle for component: {}, start: {}", component, start);
-    }
-  }
-
-  /**
-   * Not interested in this event because our component is a pure subscriber
-   * and is not supposed to receive requests for subscriptions.
-   */
-  public void onSubscribe(MkvObject mkvObject) {
-    // No action needed - we are not a publisher
-    if (LOGGER.isDebugEnabled()) {
-      LOGGER.debug("Subscription event for: {}", mkvObject.getName());
-    }
-  }
-
-  /**
- * Implements the MkvPlatformListener.onMain method to handle platform events.
- * This is where we'll handle the shutdown request from the daemon.
- */
-@Override
-public void onMain(MkvPlatformEvent event) {
-    if (event.intValue() == MkvPlatformEvent.SHUTDOWN_REQUEST_code) {
-        LOGGER.warn("Received shutdown request from MKV platform");
-        
-        // Set the shutdown flag
-        shutdownRequested = true;
-        
+    /**
+     * Parses a control message string into a Map.
+     * 
+     * @param message The message string to parse
+     * @return A Map containing the parsed message data
+     */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> parseControlMessage(String message) {
         try {
-            // Request async shutdown to give us time to clean up
-            Mkv.getInstance().shutdown(MkvShutdownMode.ASYNC, 
-                "OrderManagement is processing pending operations before shutdown...");
+            // Parse message as JSON
+            return OBJECT_MAPPER.readValue(message, Map.class);
+        } catch (Exception e) {
+            // If not valid JSON, create a simple command map
+            LOGGER.warn("Failed to parse control message as JSON, treating as plain command: {}", message);
             
-            // Start the graceful shutdown process in a separate thread
-            // to avoid blocking the platform event thread
-            Thread shutdownThread = new Thread(this::performGracefulShutdown, "Shutdown-Handler");
-            shutdownThread.setDaemon(true);
-            shutdownThread.start();
-        } catch (MkvException e) {
-            LOGGER.error("Error during async shutdown request: {}", e.getMessage(), e);
-            
-            // If the async shutdown request fails, try to continue with normal shutdown
-            initiateShutdown();
+            Map<String, Object> result = new HashMap<>();
+            result.put("command", message.trim());
+            return result;
         }
     }
-}
+
+    /**
+     * Handles the STOP command, cancelling existing orders and preventing new ones.
+     * 
+     * @param controlMessage The control message containing command parameters
+     */
+    private void handleStopCommand(Map<String, Object> controlMessage) {
+        // Skip if already stopped
+        if (isSystemStopped) {
+            LOGGER.info("System already in STOPPED state, ignoring redundant STOP command");
+            return;
+        }
+
+        LOGGER.warn("Executing STOP command - cancelling orders and preventing new submissions");
+
+        // Set the system to stopped state
+        isSystemStopped = true;
+
+        // Disable continuous trading to prevent auto-trading
+        continuousTradingEnabled = false;
+        
+        // Cancel all existing orders
+        cancelAllOrders();
+        
+        // Publish status update
+    //    publishSystemStatus();
+
+        LOGGER.warn("STOP command executed - system is now STOPPED");
+    }
+
+    /**
+     * Handles the RESUME command, allowing new orders to be submitted.
+     * 
+     * @param controlMessage The control message containing command parameters
+     */
+    private void handleResumeCommand(Map<String, Object> controlMessage) {
+        // Skip if not stopped
+        if (!isSystemStopped) {
+            LOGGER.info("System already in RUNNING state, ignoring redundant RESUME command");
+            return;
+        }
+
+        LOGGER.warn("Executing RESUME command - allowing new order submissions");
+
+        // Set the system back to running state
+        isSystemStopped = false;
+
+        // Re-enable continuous trading if requested
+        Boolean enableTrading = (Boolean) controlMessage.getOrDefault("enableTrading", Boolean.TRUE);
+        if (enableTrading) {
+            continuousTradingEnabled = true;
+            LOGGER.info("Continuous trading re-enabled as part of RESUME command");
+        } else {
+            LOGGER.info("Continuous trading remains disabled after RESUME command");
+        }
+        
+        // Publish status update
+    //    publishSystemStatus();
+
+        LOGGER.warn("RESUME command executed - system is now RUNNING");
+    }
+
+    /**
+     * Called when a publication event occurs.
+     * This implementation doesn't handle individual publication events.
+     */
+    public void onPublish(MkvObject mkvObject, boolean pub_unpub, boolean dwl) {
+        // Not handling individual publication events
+        if (LOGGER.isDebugEnabled()) {
+        LOGGER.debug("Publication event for: {}", mkvObject.getName());
+        }
+    }
+
+    /**
+     * Called when a publication download is complete.
+     * This is where we set up the order chain subscription and
+     * potentially send an initial FAS order if configured.
+     * 
+     * @param component The component name
+     * @param start Whether this is the start of idle time
+     */
+    public void onPublishIdle(String component, boolean start) {
+        if (LOGGER.isDebugEnabled()) {
+        LOGGER.debug("Publication idle for component: {}, start: {}", component, start);
+        }
+    }
+
+    /**
+     * Not interested in this event because our component is a pure subscriber
+     * and is not supposed to receive requests for subscriptions.
+     */
+    public void onSubscribe(MkvObject mkvObject) {
+        // No action needed - we are not a publisher
+        if (LOGGER.isDebugEnabled()) {
+        LOGGER.debug("Subscription event for: {}", mkvObject.getName());
+        }
+    }
+
+    /**
+     * Implements the MkvPlatformListener.onMain method to handle platform events.
+     * This is where we'll handle the shutdown request from the daemon.
+     */
+    @Override
+    public void onMain(MkvPlatformEvent event) {
+        if (event.intValue() == MkvPlatformEvent.SHUTDOWN_REQUEST_code) {
+            LOGGER.warn("Received shutdown request from MKV platform");
+            
+            // Set the shutdown flag
+            // shutdownRequested = true;
+            
+            try {
+                // Do the shutdown work synchronously in this method
+                boolean isReady = performGracefulShutdown();
+            if (isReady) {
+                // Signal that we're completely done
+                Mkv.getInstance().shutdown(MkvShutdownMode.SYNC, 
+                    "OrderManagement shutdown complete");
+                LOGGER.warn("Signaled SYNC shutdown to platform");
+            } else {
+                // We need more time, request async and let platform retry
+                Mkv.getInstance().shutdown(MkvShutdownMode.ASYNC, 
+                    "OrderManagement still processing...");
+                LOGGER.warn("Requested ASYNC shutdown - platform will retry");
+            }
+            } catch (MkvException e) {
+                LOGGER.error("Error during shutdown signaling: {}", e.getMessage(), e);
+            }
+        }
+    }
 
 /**
  * Implements the MkvPlatformListener.onComponent method.
@@ -2317,12 +2319,12 @@ private void setupPatternSubscriptionMonitor() {
                         expiredCount++;
                         
                         // Log to machine-readable format
-                        ApplicationLogging.logOrderUpdate(
-                            "AUTO_CANCEL", 
-                            order.getMyReqId(),
-                            order.getOrderId(),
-                            "Order expired after " + (order.getAgeMillis() / 1000) + " seconds"
-                        );
+                        // ApplicationLogging.logOrderUpdate(
+                        //     "AUTO_CANCEL", 
+                        //     order.getMyReqId(),
+                        //     order.getOrderId(),
+                        //     "Order expired after " + (order.getAgeMillis() / 1000) + " seconds"
+                        // );
                     }
                 }
             } 
@@ -2399,12 +2401,12 @@ private void setupPatternSubscriptionMonitor() {
                             cancelledActiveCount++;
                             
                             // Log to machine-readable format
-                            ApplicationLogging.logOrderUpdate(
-                                "STALE_CANCEL", 
-                                cancelOrder.getMyReqId(),
-                                orderId,
-                                "Stale order cancelled after > 60 seconds"
-                            );
+                            // ApplicationLogging.logOrderUpdate(
+                            //     "STALE_CANCEL", 
+                            //     cancelOrder.getMyReqId(),
+                            //     orderId,
+                            //     "Stale order cancelled after > 60 seconds"
+                            // );
                         }
                     }
                 } catch (Exception e) {
@@ -2461,23 +2463,6 @@ public boolean isShuttingDown() {
     return isShuttingDown;
 }
 
-/**
- * Helper method to shutdown an executor service
- */
-private void shutdownExecutor(ExecutorService executor, String name) {
-    isShuttingDown = true;
-    cancelAllOrders();
-
-    shutdownExecutorGracefully(heartbeatScheduler, "Heartbeat", 2);
-    shutdownExecutorGracefully(orderExpirationScheduler, "Order expiration", 5);
-    shutdownExecutorGracefully(scheduler, "Market recheck", 10);
-    if (jedisPool != null) {
-        jedisPool.close();
-    }
-    
-    LOGGER.info("OrderManagement shutdown complete");
-}
-
 private void shutdownExecutorGracefully(ExecutorService executor, String name, int timeoutSeconds) {
     if (executor == null || executor.isShutdown()) {
         return;
@@ -2502,46 +2487,45 @@ private void shutdownExecutorGracefully(ExecutorService executor, String name, i
     }
 }
 
-/**
- * Performs a graceful shutdown of the OrderManagement component.
- * This includes canceling all orders and cleaning up resources.
- */
-private void performGracefulShutdown() {
-    LOGGER.warn("Starting graceful shutdown sequence");
-    
-    // Mark as shutting down
-    isShuttingDown = true;
-    
-    try {
-        // 1. Stop accepting new orders
+    /**
+     * Performs a graceful shutdown of the OrderManagement component.
+     * This includes canceling all orders and cleaning up resources.
+     */
+    private boolean performGracefulShutdown() {
+        LOGGER.warn("Starting graceful shutdown sequence");
+        
+        // Mark as shutting down
+        if (isShuttingDown) {
+            LOGGER.warn("Shutdown already in progress, ignoring duplicate request");
+            return true;
+        }
+
+        LOGGER.warn("Starting graceful shutdown sequence");
+        isShuttingDown = true;
         isSystemStopped = true;
         continuousTradingEnabled = false;
-        LOGGER.info("Stopped accepting new orders");
-        
-        // 2. Cancel all existing orders
-        cancelAllOrders();
-        LOGGER.info("All orders canceled");
-        
-        // 3. Wait for any pending operations to complete (with timeout)
-        waitForPendingOperations();
-        
-        // 4. Cleanup resources
-        cleanupResources();
-        
-        // 5. Signal that we're ready to stop
-        signalReadyToStop();
-        
-    } catch (Exception e) {
-        LOGGER.error("Error during graceful shutdown: {}", e.getMessage(), e);
-        
-        // Even if there's an error, try to signal that we're ready to stop
+
         try {
-            signalReadyToStop();
-        } catch (Exception ex) {
-            LOGGER.error("Error signaling ready to stop: {}", ex.getMessage(), ex);
+            // 1. Stop accepting new orders
+            LOGGER.info("Stopped accepting new orders");
+            
+            // 2. Cancel all existing orders
+            cancelAllOrders();
+            LOGGER.info("All orders canceled");
+            
+            // 3. Wait for any pending operations to complete (with timeout)
+            waitForPendingOperations();
+            
+            // 4. Cleanup resources
+            cleanupResources();
+            
+        } catch (Exception e) {
+            LOGGER.error("Error during graceful shutdown: {}", e.getMessage(), e);
+            return false;
         }
+
+        return true;
     }
-}
 
 /**
  * Waits for any pending operations to complete, with a timeout.
@@ -2588,7 +2572,7 @@ private void cleanupResources() {
     LOGGER.info("Cleaning up resources");
     
     // Shutdown Redis connection pool
-    if (jedisPool != null) {
+    if (jedisPool != null  && !jedisPool.isClosed()) {
         try {
             LOGGER.info("Closing Redis connection pool");
             jedisPool.destroy(); // Use destroy() for older Jedis versions
@@ -2598,21 +2582,11 @@ private void cleanupResources() {
     }
 
     // Shutdown all executors
-    shutdownExecutor(heartbeatScheduler, "Heartbeat scheduler");
-    shutdownExecutor(scheduler, "Market recheck scheduler");
-    shutdownExecutor(orderExpirationScheduler, "Order expiration scheduler");
-    
-    LOGGER.info("Resource cleanup completed");
-}
+    shutdownExecutorGracefully(heartbeatScheduler, "Heartbeat", 2);
+    shutdownExecutorGracefully(scheduler, "Market recheck scheduler", 10);
+    shutdownExecutorGracefully(orderExpirationScheduler, "Order expiration scheduler", 5);
 
-/**
- * Signals to the MKV platform that we're ready to stop.
- */
-private void signalReadyToStop() throws MkvException {
-    LOGGER.warn("OrderManagement is now ready to stop");
-    
-    // Signal that we're ready for a synchronous shutdown
-    Mkv.getInstance().shutdown(MkvShutdownMode.SYNC, "OrderManagement is ready to stop");
+    LOGGER.info("Resource cleanup completed");
 }
 
 /**
@@ -2664,8 +2638,15 @@ public boolean isShutdownRequested() {
 /**
  * Cancels all outstanding orders currently tracked by this OrderManagement instance.
  */
+private final AtomicBoolean ordersCancelled = new AtomicBoolean(false);
+
 public void cancelAllOrders() {
     LOGGER.info("Cancelling all outstanding orders");
+
+    if (ordersCancelled.getAndSet(true)) {
+        LOGGER.debug("Orders already cancelled, skipping");
+        return;
+    }
 
     // Create a copy of the orders map to avoid concurrent modification
     Map<Integer, MarketOrder> ordersCopy = new HashMap<>(orders);
@@ -2704,12 +2685,12 @@ public void cancelAllOrders() {
                 removeOrder(order.getMyReqId());
                 
                 // Log to machine-readable format
-                ApplicationLogging.logOrderUpdate(
-                    "AUTO_CANCEL", 
-                    order.getMyReqId(),
-                    order.getOrderId(),
-                    "Order cancelled by system shutdown"
-                );
+                // ApplicationLogging.logOrderUpdate(
+                //     "AUTO_CANCEL", 
+                //     order.getMyReqId(),
+                //     order.getOrderId(),
+                //     "Order cancelled by system shutdown"
+                // );
             }
         }
     }
