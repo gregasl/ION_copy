@@ -793,30 +793,30 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
         }
     }
 
-/**
- * Implements the MkvPlatformListener.onComponent method.
- * This is called when component state changes.
- */
-@Override
-public void onComponent(MkvComponent comp, boolean start) {
-    LOGGER.info("Component {} {}", comp.getName(), start ? "started" : "stopped");
-}
+    /**
+     * Implements the MkvPlatformListener.onComponent method.
+     * This is called when component state changes.
+     */
+    @Override
+    public void onComponent(MkvComponent comp, boolean start) {
+        LOGGER.info("Component {} {}", comp.getName(), start ? "started" : "stopped");
+    }
 
-/**
- * Implements the MkvPlatformListener.onConnect method.
- * This is called when the connection state changes.
- */
-@Override
-public void onConnect(String comp, boolean start) {
-    LOGGER.info("Connection to {} {}", comp, start ? "established" : "lost");
-}
+    /**
+     * Implements the MkvPlatformListener.onConnect method.
+     * This is called when the connection state changes.
+     */
+    @Override
+    public void onConnect(String comp, boolean start) {
+        LOGGER.info("Connection to {} {}", comp, start ? "established" : "lost");
+    }
 
-  /**
-   * Sets up subscriptions to depth records using a pattern-based approach.
-   * Subscribes to the consolidated market data from VMO_REPO_US.
-   */
-  public void subscribeToDepths() {
-        try {
+    /**
+     * Sets up subscriptions to depth records using a pattern-based approach.
+     * Subscribes to the consolidated market data from VMO_REPO_US.
+     */
+    public void subscribeToDepths() {
+            try {
             LOGGER.info("Setting up subscriptions to instrument patterns");
 
             // Also subscribe to the instrument pattern explicitly
