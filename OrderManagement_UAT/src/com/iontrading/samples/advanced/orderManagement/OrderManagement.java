@@ -10,6 +10,7 @@
 
 package com.iontrading.samples.advanced.orderManagement;
 
+import java.lang.invoke.TypeDescriptor;
 import java.util.Set;
 import java.util.HashSet;
 import java.util.ArrayList;
@@ -20,8 +21,7 @@ import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ExecutorService;
@@ -37,6 +37,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.iontrading.mkv.Mkv;
 import com.iontrading.mkv.MkvChain;
 import com.iontrading.mkv.MkvObject;
+import com.iontrading.mkv.MkvLog;
 import com.iontrading.mkv.MkvPattern;
 import com.iontrading.mkv.MkvPublishManager;
 import com.iontrading.mkv.MkvRecord;
@@ -63,101 +64,9 @@ import redis.clients.jedis.exceptions.JedisConnectionException;
 public class OrderManagement implements MkvPublishListener, MkvRecordListener,
     MkvChainListener, IOrderManager, MkvPlatformListener {
     
-  // Add logger for debugging
-private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.class);
-
-    /**
-     * Ultra-minimal production logging - only critical events
-     */
-    public static void configureProductionLogging() {
-        // Set global default to ERROR (minimal logging)
-        ApplicationLogging.setGlobalLogLevel("ERROR");
-        
-        // Only critical business events at WARN level
-        ApplicationLogging.setLogLevels("WARN",
-            "com.iontrading.samples.advanced.orderManagement.OrderManagement"
-        );
-        
-        // Keep order tracking at WARN for business monitoring
-        ApplicationLogging.setLogLevels("WARN",
-            "com.iontrading.samples.advanced.orderManagement.MarketOrder"
-        );
-        
-        // All infrastructure components at ERROR only
-        ApplicationLogging.setLogLevels("ERROR",
-            "com.iontrading.samples.advanced.orderManagement.DepthListener",
-            "com.iontrading.samples.advanced.orderManagement.AsyncLoggingManager",
-            "com.iontrading.samples.advanced.orderManagement.ApplicationLogging",
-            "com.iontrading.samples.advanced.orderManagement.MarketDef",
-            "com.iontrading.samples.advanced.orderManagement.Best",
-            "com.iontrading.samples.advanced.orderManagement.Instrument",
-            "com.iontrading.samples.advanced.orderManagement.GCBest",
-            "com.iontrading.samples.advanced.orderManagement.GCLevelResult"
-        );
-
-        System.out.println("PRODUCTION logging configured - minimal output mode");
-    }
-
-    /**
-     * Development logging with reasonable verbosity
-     */
-    public static void configureDevelopmentLogging() {
-        // Set global default to WARN
-        ApplicationLogging.setGlobalLogLevel("WARN");
-        
-        // Core business logic at INFO
-        ApplicationLogging.setLogLevels("INFO",
-            "com.iontrading.samples.advanced.orderManagement.OrderManagement",
-            "com.iontrading.samples.advanced.orderManagement.MarketOrder"
-
-        );
-
-        // Infrastructure at ERROR
-        ApplicationLogging.setLogLevels("ERROR",
-            "com.iontrading.samples.advanced.orderManagement.AsyncLoggingManager",
-            "com.iontrading.samples.advanced.orderManagement.ApplicationLogging",
-            "com.iontrading.samples.advanced.orderManagement.Instrument",
-            "com.iontrading.samples.advanced.orderManagement.Best",
-            "com.iontrading.samples.advanced.orderManagement.DepthListener",
-            "com.iontrading.samples.advanced.orderManagement.MarketDef",
-            "com.iontrading.samples.advanced.orderManagement.GCBest",
-            "com.iontrading.samples.advanced.orderManagement.GCLevelResult"
-        );
-    }
-
-    /**
-     * Debug mode for specific troubleshooting
-     */
-    public static void configureDebugLogging(String focusComponent) {
-        configureDevelopmentLogging();
-        
-        if (focusComponent != null && !focusComponent.isEmpty()) {
-            ApplicationLogging.setLogLevel(
-                "com.iontrading.samples.advanced.orderManagement." + focusComponent,
-                "DEBUG"
-            );
-            System.out.println("DEBUG logging enabled for " + focusComponent);
-        }
-    }
-
-    public static void configureLogging(boolean isProduction, String focusComponent) {
-        try {
-            if (isProduction) {
-                configureProductionLogging();
-                LOGGER.info("Configured for PRODUCTION mode");
-            } else {
-                configureDevelopmentLogging();
-                LOGGER.info("Configured for DEVELOPMENT mode");
-
-                // If a focus component is specified, enable detailed debugging for it
-                if (focusComponent != null && !focusComponent.isEmpty()) {
-                    configureDebugLogging(focusComponent);
-                }
-            }
-        } catch (Exception e) {
-            LOGGER.error("Error configuring logging: {}", e.getMessage(), e);
-        }
-    }
+    private MkvLog myLog;
+    private int logLevel;
+    private IONLogger logger;
 
   private volatile boolean isShuttingDown = false;
 
@@ -281,7 +190,7 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
                   if (!"PONG".equals(pingResponse)) {
                       throw new RuntimeException("Redis ping test failed, expected 'PONG', got: " + pingResponse);
                   }
-                  LOGGER.info("Connected to Redis pool at {}:{}", REDIS_HOST, REDIS_PORT);
+                  logger.info("Connected to Redis pool at " + REDIS_HOST + ":" + REDIS_PORT);
                   isRedisConnected = true;
               } finally {
                   // Return the resource to the pool
@@ -290,7 +199,7 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
                   }
               }
           } catch (Exception e) {
-              LOGGER.error("Error connecting to Redis pool", e);
+              logger.error("Error connecting to Redis pool " + e);
               throw new RuntimeException("Redis connection pool initialization failed", e);
           }
       }
@@ -317,7 +226,7 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
           jedis.publish(key, jsonPayload);
           
       } catch (JedisConnectionException jce) {
-          LOGGER.error("Redis connection lost, attempting to reconnect", jce);
+          logger.error("Redis connection lost, attempting to reconnect " + jce);
           if (jedis != null) {
               jedisPool.returnBrokenResource(jedis);
               jedis = null;
@@ -325,10 +234,10 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
           try {
               initializeRedisConnection();
           } catch (Exception e) {
-              LOGGER.error("Failed to reconnect to Redis", e);
+              logger.error("Failed to reconnect to Redis " + e);
           }
       } catch (Exception e) {
-          LOGGER.error("Error publishing to Redis", e);
+          logger.error("Error publishing to Redis " + e);
       } finally {
           if (jedis != null) {
               jedisPool.returnResource(jedis);
@@ -341,23 +250,8 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
    * Initializes the MKV API and sets up subscriptions.
    */
   public static void main(String[] args) {
-      // Initialize centralized logging before anything else
-      try {
-          System.out.println("### STARTUP: Beginning application initialization");
-    	  if (!ApplicationLogging.initialize("orderManagement")) {
-    		  System.err.println("Failed to initialize logging, exiting");
-    		  System.exit(1);
-    	  }
-
-    	  LOGGER.info("Starting OrderManagement");
-      } catch (Exception e) {
-    	  LOGGER.error("Failed to start: {}", e.getMessage(), e);
-      }
-
-    System.out.println("### DIRECT: Creating OrderManagement instance");
     // Create the order management instance
     OrderManagement om = new OrderManagement();
-    System.out.println("### DIRECT: OrderManagement instance created");    
     
     try {
     	// Get thread information
@@ -369,12 +263,6 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
     	        System.out.println("  - " + t.getName() + " (daemon: " + t.isDaemon() + ", alive: " + t.isAlive() + ", state: " + t.getState() + ")");
     	    }
     	}
-    	
-    	AsyncLoggingManager manager = AsyncLoggingManager.getInstance();
-    	System.out.println("### DIRECT: AsyncLoggingManager instance: " + manager);
-    	System.out.println("### DIRECT: Current queue size: " + manager.getCurrentQueueSize());
-    	System.out.println("### DIRECT: Messages queued: " + manager.getMessagesQueued());
-    	System.out.println("### DIRECT: Messages processed: " + manager.getMessagesProcessed());
       
       // Set up the Quality of Service for the MKV API
       MkvQoS qos = new MkvQoS();
@@ -382,31 +270,35 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
       qos.setPublishListeners(new MkvPublishListener[] { om });
       qos.setPlatformListeners(new MkvPlatformListener[] { om });
 
-      LOGGER.info("Starting MKV API");
+      
       // Start the MKV API if it hasn't been started already
       Mkv existingMkv = Mkv.getInstance();
+      om.logLevel = existingMkv.getProperties().getIntProperty("DEBUG");
+      // Initialize the log after starting Mkv
+      om.myLog = existingMkv.getLogManager().createLogFile("ORDER_MANAGEMENT");
+      om.logger.info("Starting MKV API");
       if (existingMkv == null) {
           Mkv.start(qos);
       } else {
-          LOGGER.info("MKV API already started");
+          om.logger.info("MKV API already started");
           existingMkv.getPublishManager().addPublishListener(om);
           existingMkv.getPlatform().addPlatformListener(om);
       }
 
       // Initialize DepthListener after MKV is started
       depthListener = new DepthListener(om);
-      LOGGER.info("DepthListener initialized");
+      om.logger.info("DepthListener initialized");
 
       // DepthListener now handles instrument data loading internally
       // and reports status through its health monitoring methods
-      LOGGER.info("Instrument data will be loaded by DepthListener automatically");
+      om.logger.info("Instrument data will be loaded by DepthListener automatically");
 
       // Set up depth subscriptions - this will trigger the instrument data loading
-      LOGGER.info("Setting up depths subscriptions");
+      om.logger.info("Setting up depths subscriptions");
       om.subscribeToDepths();
     } catch (MkvException e) {
-      LOGGER.error("Failed to start MKV API: {}", e.getMessage(), e);
-      LOGGER.error("Error details", e);
+      om.logger.error("Failed to start MKV API: " + e.getMessage());
+      om.logger.error("Error details: " + e);
     }
   }
     
@@ -422,7 +314,7 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
     if (depthListener != null) {
       return depthListener.getInstrumentFieldBySourceString(instrumentId, sourceId, isAON);
     }
-    LOGGER.warn("DepthListener not initialized - cannot get native instrument ID");
+    logger.error("DepthListener not initialized - cannot get native instrument ID");
     return null;
   }
   
@@ -443,17 +335,16 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
    * Generates a unique application ID based on the current time.
    */
   public OrderManagement() {
-    configureLogging(false, null);
 
     applicationId = "Java_Order_Manager"; 
-    LOGGER.info("Application ID: {}", applicationId);
+    logger.info("Application " + applicationId);
     
     initializeRedisConnection();
     
     // Add shutdown hook for Redis pool
     Runtime.getRuntime().addShutdownHook(new Thread(() -> {
         if (jedisPool != null) {
-            LOGGER.info("Shutting down Redis connection pool");
+            logger.info("Shutting down Redis connection pool");
             jedisPool.destroy(); // Use destroy() for older Jedis versions
         }
     }));
@@ -502,7 +393,7 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
     venueToTraderMap.put("FENICS_USREPO", "frosasl1");
       // Add more venue-trader mappings as needed
 
-      LOGGER.info("Venue to trader mapping initialized with {} entries", venueToTraderMap.size());
+    logger.info("Venue to trader mapping initialized with " + venueToTraderMap.size() + " entries");
   }
 
   public static long getOrderTtlForCurrentTime() {
@@ -535,18 +426,18 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
       
       // Add a shutdown hook to clean up the scheduler
       Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-          LOGGER.info("Shutting down order expiration scheduler");
+          logger.info("Shutting down order expiration scheduler");
           shutdownExecutorGracefully(orderExpirationScheduler, "OrderExpiration", 60);
       }));
 
-      LOGGER.info("Order expiration checker initialized (TTL: 60 secs before 7:15, 15 secs after)");
+      logger.info("Order expiration checker initialized (TTL: 60 secs before 7:15, 15 secs after)");
   }
 
 	//Helper method to get trader ID for a venue
 	private String getTraderForVenue(String venue) {
 	   String traderId = venueToTraderMap.get(venue);
 	   if (traderId == null) {
-	       LOGGER.warn("No trader configured for venue: {}", venue);
+	       logger.warn("No trader configured for venue: " + venue);
 	       return "DEFAULT_TRADER"; // Fallback trader ID
 	   }
 	   return traderId;
@@ -558,12 +449,12 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
 	 */
 	private void initializeRedisControlListener() {
 	    if (!isRedisConnected) {
-	        LOGGER.error("Cannot initialize Redis control listener - Redis is not connected");
+	        logger.error("Cannot initialize Redis control listener - Redis is not connected");
 	        return;
 	    }
-	    
-	    LOGGER.info("Initializing Redis control channel listener on channel: {}", ADMIN_CHANNEL);
-	    
+
+	    logger.info("Initializing Redis control channel listener on channel: " + ADMIN_CHANNEL);
+
 	    // Start a separate thread for Redis pub/sub listening
 	    Thread redisListenerThread = new Thread(() -> {
 	        Jedis subscriberJedis = null;
@@ -571,13 +462,13 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
 	            // Get a dedicated connection from the pool for pub/sub
 	            subscriberJedis = jedisPool.getResource();
 
-	            LOGGER.info("Redis control listener started on channel: {}", ADMIN_CHANNEL);
-	            
+	            logger.info("Redis control listener started on channel: " + ADMIN_CHANNEL);
+
 	            // Create a subscriber to process messages
 	            subscriberJedis.subscribe(new JedisPubSubListener(), ADMIN_CHANNEL);
 	            
 	        } catch (Exception e) {
-	            LOGGER.error("Error in Redis control listener: {}", e.getMessage(), e);
+	            logger.error("Error in Redis control listener: " + e.getMessage());
 	            if (subscriberJedis != null) {
 	                jedisPool.returnBrokenResource(subscriberJedis);
 	                subscriberJedis = null;
@@ -588,7 +479,7 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
 	                try {
 	                    jedisPool.returnResource(subscriberJedis);
 	                } catch (Exception e) {
-	                    LOGGER.warn("Error returning Redis subscriber to pool: {}", e.getMessage());
+	                    logger.error("Error returning Redis subscriber to pool: " + e.getMessage());
 	                }
 	            }
 	        }
@@ -597,8 +488,8 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
 	    // Set as daemon thread so it doesn't prevent JVM shutdown
 	    redisListenerThread.setDaemon(true);
 	    redisListenerThread.start();
-	    
-	    LOGGER.info("Redis control listener thread started");
+
+	    logger.info("Redis control listener thread started");
 	}
 	
     /**
@@ -612,7 +503,7 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
 	            return; // Ignore messages from other channels
 	        }
 
-	        LOGGER.info("Received control message: {} on channel: {}", message, channel);
+	        logger.info("Received control message: " + message + " on channel: " + channel);
 
 	        try {
 	            // Parse message as JSON to extract command and parameters
@@ -624,21 +515,21 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
 	            } else if ("RESUME".equalsIgnoreCase(command)) {
 	                handleResumeCommand(controlMessage);
 	            } else {
-	                LOGGER.warn("Unknown control command received: {}", command);
+	                logger.warn("Unknown control command received: " + command);
 	            }
 	        } catch (Exception e) {
-	            LOGGER.error("Error processing control message: {}", e.getMessage(), e);
+	            logger.error("Error processing control message: " + e.getMessage());
 	        }
 	    }
 
 	    @Override
 	    public void onSubscribe(String channel, int subscribedChannels) {
-	        LOGGER.info("Subscribed to Redis channel: {}", channel);
+	        logger.info("Subscribed to Redis channel: " + channel);
 	    }
 
 	    @Override
 	    public void onUnsubscribe(String channel, int subscribedChannels) {
-	        LOGGER.info("Unsubscribed from Redis channel: {}", channel);
+	        logger.info("Unsubscribed from Redis channel: " + channel);
 	    }
 	}
         
@@ -656,8 +547,8 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
             return OBJECT_MAPPER.readValue(message, Map.class);
         } catch (Exception e) {
             // If not valid JSON, create a simple command map
-            LOGGER.warn("Failed to parse control message as JSON, treating as plain command: {}", message);
-            
+            logger.warn("Failed to parse control message as JSON, treating as plain command: " + message);
+
             Map<String, Object> result = new HashMap<>();
             result.put("command", message.trim());
             return result;
@@ -672,11 +563,11 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
     private void handleStopCommand(Map<String, Object> controlMessage) {
         // Skip if already stopped
         if (isSystemStopped) {
-            LOGGER.info("System already in STOPPED state, ignoring redundant STOP command");
+            logger.warn("System already in STOPPED state, ignoring redundant STOP command");
             return;
         }
 
-        LOGGER.warn("Executing STOP command - cancelling orders and preventing new submissions");
+        logger.info("Executing STOP command - cancelling orders and preventing new submissions");
 
         // Set the system to stopped state
         isSystemStopped = true;
@@ -690,7 +581,7 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
         // Publish status update
     //    publishSystemStatus();
 
-        LOGGER.warn("STOP command executed - system is now STOPPED");
+        logger.info("STOP command executed - system is now STOPPED");
     }
 
     /**
@@ -701,11 +592,11 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
     private void handleResumeCommand(Map<String, Object> controlMessage) {
         // Skip if not stopped
         if (!isSystemStopped) {
-            LOGGER.info("System already in RUNNING state, ignoring redundant RESUME command");
+            logger.warn("System already in RUNNING state, ignoring redundant RESUME command");
             return;
         }
 
-        LOGGER.warn("Executing RESUME command - allowing new order submissions");
+        logger.info("Executing RESUME command - allowing new order submissions");
 
         // Set the system back to running state
         isSystemStopped = false;
@@ -714,15 +605,15 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
         Boolean enableTrading = (Boolean) controlMessage.getOrDefault("enableTrading", Boolean.TRUE);
         if (enableTrading) {
             continuousTradingEnabled = true;
-            LOGGER.info("Continuous trading re-enabled as part of RESUME command");
+            logger.info("Continuous trading re-enabled as part of RESUME command");
         } else {
-            LOGGER.info("Continuous trading remains disabled after RESUME command");
+            logger.info("Continuous trading remains disabled after RESUME command");
         }
         
         // Publish status update
     //    publishSystemStatus();
 
-        LOGGER.warn("RESUME command executed - system is now RUNNING");
+        logger.info("RESUME command executed - system is now RUNNING");
     }
 
     /**
@@ -731,9 +622,7 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
      */
     public void onPublish(MkvObject mkvObject, boolean pub_unpub, boolean dwl) {
         // Not handling individual publication events
-        if (LOGGER.isDebugEnabled()) {
-        LOGGER.debug("Publication event for: {}", mkvObject.getName());
-        }
+        logger.info("Publication event for: {} " + mkvObject.getName());
     }
 
     /**
@@ -745,9 +634,7 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
      * @param start Whether this is the start of idle time
      */
     public void onPublishIdle(String component, boolean start) {
-        if (LOGGER.isDebugEnabled()) {
-        LOGGER.debug("Publication idle for component: {}, start: {}", component, start);
-        }
+        logger.info("Publication idle for component: " + component + ", start: " + start);
     }
 
     /**
@@ -756,9 +643,7 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
      */
     public void onSubscribe(MkvObject mkvObject) {
         // No action needed - we are not a publisher
-        if (LOGGER.isDebugEnabled()) {
-        LOGGER.debug("Subscription event for: {}", mkvObject.getName());
-        }
+        logger.info("Subscription event for: " + mkvObject.getName());
     }
 
     /**
@@ -768,8 +653,8 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
     @Override
     public void onMain(MkvPlatformEvent event) {
         if (event.intValue() == MkvPlatformEvent.SHUTDOWN_REQUEST_code) {
-            LOGGER.warn("Received shutdown request from MKV platform");
-            
+            logger.warn("Received shutdown request from MKV platform");
+
             // Set the shutdown flag
             // shutdownRequested = true;
             
@@ -780,15 +665,15 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
                 // Signal that we're completely done
                 Mkv.getInstance().shutdown(MkvShutdownMode.SYNC, 
                     "OrderManagement shutdown complete");
-                LOGGER.warn("Signaled SYNC shutdown to platform");
+                logger.info("Signaled SYNC shutdown to platform");
             } else {
                 // We need more time, request async and let platform retry
                 Mkv.getInstance().shutdown(MkvShutdownMode.ASYNC, 
                     "OrderManagement still processing...");
-                LOGGER.warn("Requested ASYNC shutdown - platform will retry");
+                logger.info("Requested ASYNC shutdown - platform will retry");
             }
             } catch (MkvException e) {
-                LOGGER.error("Error during shutdown signaling: {}", e.getMessage(), e);
+                logger.error("Error during shutdown signaling: " + e.getMessage() + " " + e);
             }
         }
     }
@@ -799,7 +684,7 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
      */
     @Override
     public void onComponent(MkvComponent comp, boolean start) {
-        LOGGER.info("Component {} {}", comp.getName(), start ? "started" : "stopped");
+        logger.info("Component " + comp.getName() + " " + (start ? "started" : "stopped"));
     }
 
     /**
@@ -808,7 +693,7 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
      */
     @Override
     public void onConnect(String comp, boolean start) {
-        LOGGER.info("Connection to {} {}", comp, start ? "established" : "lost");
+        logger.info("Connection to " + comp + " " + (start ? "established" : "lost"));
     }
 
     /**
@@ -817,12 +702,12 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
      */
     public void subscribeToDepths() {
             try {
-            LOGGER.info("Setting up subscriptions to instrument patterns");
+            logger.info("Setting up subscriptions to instrument patterns");
 
             // Also subscribe to the instrument pattern explicitly
             subscribeToInstrumentPattern();
 
-            LOGGER.info("Subscribing to consolidated depth data using pattern: {}", DEPTH_PATTERN);
+            logger.info("Subscribing to consolidated depth data using pattern: " + DEPTH_PATTERN);
 
             // Subscribe to the depth pattern
             subscribeToPattern();
@@ -840,8 +725,8 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
             setupPatternSubscriptionMonitor();
             
         } catch (Exception e) {
-            LOGGER.error("Error setting up depth subscriptions: {}", e.getMessage(), e);
-            LOGGER.error("Error details", e);
+            logger.error("Error setting up depth subscriptions: " + e.getMessage() + e);
+            logger.error("Error details: " + e);
         }
     }
 
@@ -858,17 +743,17 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
                 synchronized (subscriptionLock) {
                     // Check again inside synchronization to avoid race conditions
                     if (!subscribedPatterns.contains(pattern)) {
-                        LOGGER.info("Found " + pattern + ", subscribing: {}", pattern);
+                        logger.info("Found " + pattern + ", subscribing: " + pattern);
 
                         ((MkvPattern) obj).subscribe(fields, this);
 
                         // Mark that we've successfully subscribed
                         subscribedPatterns.add(pattern);
-                        LOGGER.info("Successfully subscribed to {}", pattern);
+                        logger.info("Successfully subscribed to " + pattern);
                     }
                 }
             } else {
-                LOGGER.warn("Pattern not found: {}", pattern);
+                logger.warn("Pattern not found: " + pattern);
 
                 MkvPublishListener patternListener = new MkvPublishListener() {
                     @Override
@@ -910,80 +795,9 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
                 pm.addPublishListener(patternListener);
             }
         } catch (Exception e) {
-            LOGGER.error("Error subscribing to pattern: {}", e.getMessage(), e);
+            logger.error("Error subscribing to pattern: " + e.getMessage() + e);
         }
     }
-
-//   private void subscribeToRecord() {
-// 	    try {
-// 	        // Get the publish manager to access patterns
-// 	        MkvPublishManager pm = Mkv.getInstance().getPublishManager();
-	       
-// 	        // Look up the pattern object
-// 	        MkvObject obj = pm.getMkvObject(ORDER_PATTERN);
-	       
-// 	        if (obj != null && obj.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
-// 	            // Subscribe within a synchronized block
-// 	            synchronized (subscriptionLock) {
-// 	                // Check again inside synchronization to avoid race conditions
-// 	                if (!isPatternSubscribed) {
-// 	                    LOGGER.info("Found order pattern, subscribing: {}", ORDER_PATTERN);
-
-// 	                    ((MkvPattern) obj).subscribe(ORDER_FIELDS, this);
-
-// 	                    // Mark that we've successfully subscribed
-// 	                    isPatternSubscribed = true;
-
-// 	                    LOGGER.info("Successfully subscribed to order pattern");
-// 	                }
-// 	            }
-// 	        } else {
-// 	            LOGGER.warn("Order pattern not found: {}", ORDER_PATTERN);
-
-// 	            // Create a single shared listener instance instead of an anonymous one
-// 	            final MkvPublishListener patternListener = new MkvPublishListener() {
-// 	                @Override
-// 	                public void onPublish(MkvObject mkvObject, boolean pub_unpub, boolean dwl) {
-// 	                    // Only proceed if we're not already subscribed
-// 	                    if (isPatternSubscribed) {
-// 	                        return;
-// 	                    }
-	                    
-// 	                    // Check if this is our pattern being published
-// 	                    if (pub_unpub && mkvObject.getName().equals(ORDER_PATTERN) &&
-// 	                        mkvObject.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
-// 	                        trySubscribeAndRemoveOrderListener(mkvObject, pm, this);
-// 	                    }
-// 	                }
-	               
-// 	                @Override
-// 	                public void onPublishIdle(String component, boolean start) {
-// 	                    // Only proceed if we're not already subscribed
-// 	                    if (isPatternSubscribed) {
-// 	                        return;
-// 	                    }
-	                    
-// 	                    // Try looking for the pattern again at idle time
-// 	                    MkvObject obj = pm.getMkvObject(ORDER_PATTERN);
-
-// 	                    if (obj != null && obj.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
-// 	                        trySubscribeAndRemoveOrderListener(obj, pm, this);
-// 	                    }
-// 	                }
-	               
-// 	                @Override
-// 	                public void onSubscribe(MkvObject mkvObject) {
-// 	                    // Not needed
-// 	                }
-// 	            };
-	            
-// 	            // Add the shared listener
-// 	            pm.addPublishListener(patternListener);
-// 	        }
-// 	    } catch (Exception e) {
-// 	        LOGGER.error("Error subscribing to pattern: {}", e.getMessage(), e);
-// 	    }
-// 	}
 	
     // Helper method to handle subscription and listener removal safely
     private void trySubscribeAndRemoveListener(MkvObject mkvObject, MkvPublishManager pm, MkvPublishListener listener, String pattern, String[] fields) {
@@ -994,18 +808,18 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
             }
             
             try {
-                LOGGER.info("Pattern found, subscribing: {}", pattern);
+                logger.info("Pattern found, subscribing: " + pattern);
 
                 ((MkvPattern) mkvObject).subscribe(fields, this);
                 subscribedPatterns.add(pattern);
 
-                LOGGER.info("Successfully subscribed to {}", pattern);
+                logger.info("Successfully subscribed to " + pattern);
 
                 // Remove the listener now that we've subscribed - safely outside the callback
                 // but still inside synchronization
                 pm.removePublishListener(listener);
             } catch (Exception e) {
-                LOGGER.error("Error subscribing to pattern: {}", e.getMessage(), e);
+                logger.error("Error subscribing to pattern: " + e.getMessage() + " " + e);
             }
         }
     }
@@ -1016,9 +830,9 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
 	*/
 	private void subscribeToInstrumentPattern() {
 	   try {
-	
-	       LOGGER.info("Subscribing to instrument data using pattern: {}", INSTRUMENT_PATTERN);
-	
+
+	       logger.info("Subscribing to instrument data using pattern: {}" + INSTRUMENT_PATTERN);
+
 	       // Get the publish manager to access patterns
 	       MkvPublishManager pm = Mkv.getInstance().getPublishManager();
 	      
@@ -1026,7 +840,7 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
 	       MkvObject obj = pm.getMkvObject(INSTRUMENT_PATTERN);
 	      
 	       if (obj != null && obj.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
-	           LOGGER.info("Found instrument pattern, subscribing: {}", INSTRUMENT_PATTERN);
+	           logger.info("Found instrument pattern, subscribing: {}" + INSTRUMENT_PATTERN);
 	           
 	           // Initialize with the full field list from MarketDef
 	           List<String> fieldsList = new ArrayList<>(Arrays.asList(INSTRUMENT_FIELDS));
@@ -1038,18 +852,18 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
 	                   String[] fields = fieldsList.toArray(new String[0]);
 	                   ((MkvPattern) obj).subscribe(fields, depthListener);
 	                   subscribed = true;
-	
-	                   LOGGER.info("Successfully subscribed to instrument pattern with {} fields", fieldsList.size());
+
+	                   logger.info("Successfully subscribed to instrument pattern with {} fields" + fieldsList.size());
 	               } catch (Exception e) {
 	                   // If we have any fields left to remove
 	                   if (fieldsList.size() > 3) {  // Keep at least 3 essential fields
 	                       // Remove the last field in the list
 	                       String lastField = fieldsList.remove(fieldsList.size() - 1);
-	                       LOGGER.warn("Subscription failed with field: {}. Retrying with {} fields.", lastField, fieldsList.size());
+	                       logger.info("Subscription failed with field: {}. Retrying with {} fields." + lastField + fieldsList.size());
 	                   } else {
 	                       // If we've removed too many fields, try with a minimal set
-	                       LOGGER.warn("Failed with reduced field set, trying minimal fields");
-	
+	                       logger.info("Failed with reduced field set, trying minimal fields");
+
 	                       // Define minimal essential fields
 	                       String[] minimalFields = new String[] {
 	                           "Id", "IsAON"
@@ -1058,9 +872,9 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
 	                       try {
 	                           ((MkvPattern) obj).subscribe(minimalFields, depthListener);
 	                           subscribed = true;
-	                           LOGGER.info("Successfully subscribed with minimal fields");
+	                           logger.info("Successfully subscribed with minimal fields");
 	                       } catch (Exception minEx) {
-	                           LOGGER.error("Failed even with minimal fields: {}", minEx.getMessage(), minEx);
+	                           logger.info("Failed even with minimal fields: {}" + minEx.getMessage() + " " + minEx);
 	                           throw minEx;  // Propagate the exception if even minimal fields fail
 	                       }
 	                       break;
@@ -1068,11 +882,11 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
 	               }
 	           }
 	       } else {
-	           LOGGER.warn("Instrument pattern not found: {}", INSTRUMENT_PATTERN);
+	           logger.info("Instrument pattern not found: {}" + INSTRUMENT_PATTERN);
 	       }
 	   } catch (Exception e) {
-	       LOGGER.error("Error subscribing to instrument pattern: {}", e.getMessage(), e);
-	       LOGGER.error("Error details", e);
+	       logger.info("Error subscribing to instrument pattern: {}" + e.getMessage() + " " + e);
+	       logger.info("Error details " + e);
 	   }
 	}
 	
@@ -1089,19 +903,19 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
 	           synchronized (subscriptionLock) {
 	               // Check again inside synchronization to avoid race conditions
 	               if (!isPatternSubscribed) {
-	                   LOGGER.info("Found consolidated depth pattern, subscribing: {}", DEPTH_PATTERN);
-	
+	                   logger.info("Found consolidated depth pattern, subscribing: {}" + DEPTH_PATTERN);
+
 	                   ((MkvPattern) obj).subscribe(DEPTH_FIELDS, depthListener);
 	
 	                   // Mark that we've successfully subscribed
 	                   isPatternSubscribed = true;
-	
-	                   LOGGER.info("Successfully subscribed to consolidated depth pattern");
+
+	                   logger.info("Successfully subscribed to consolidated depth pattern");
 	               }
 	           }
 	       } else {
-	           LOGGER.warn("Consolidated depth pattern not found: {}", DEPTH_PATTERN);
-	
+	           logger.info("Consolidated depth pattern not found: {}" + DEPTH_PATTERN);
+
 	           // Create a single shared listener instance instead of an anonymous one
 	           final MkvPublishListener patternListener = new MkvPublishListener() {
 	               @Override
@@ -1143,7 +957,7 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
 	           pm.addPublishListener(patternListener);
 	       }
 	   } catch (Exception e) {
-	       LOGGER.error("Error subscribing to pattern: {}", e.getMessage(), e);
+	       logger.error("Error subscribing to pattern: {}" + e.getMessage() + " " + e);
 	   }
 	}
 	
@@ -1156,18 +970,18 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
 	       }
 	       
 	       try {
-	           LOGGER.info("Pattern found, subscribing: {}", DEPTH_PATTERN);
-	
+	           logger.info("Pattern found, subscribing: {}" + DEPTH_PATTERN);
+
 	           ((MkvPattern) mkvObject).subscribe(DEPTH_FIELDS, depthListener);
 	           isPatternSubscribed = true;
-	
-	           LOGGER.info("Successfully subscribed to pattern");
-	
+
+	           logger.info("Successfully subscribed to pattern");
+
 	           // Remove the listener now that we've subscribed - safely outside the callback
 	           // but still inside synchronization
 	           pm.removePublishListener(listener);
 	       } catch (Exception e) {
-	           LOGGER.error("Error subscribing to pattern: {}", e.getMessage(), e);
+	           logger.error("Error subscribing to pattern: {}" + e.getMessage() + " " + e);
 	       }
 	   }
 	 }
@@ -1179,9 +993,7 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
    * @param order The MarketOrder to cache
    */
   private void addOrder(MarketOrder order) {
-    if (LOGGER.isDebugEnabled()) {
-      LOGGER.debug("Adding order to cache: reqId={}", order.getMyReqId());
-    }
+    logger.info("Adding order to cache: reqId=" + order.getMyReqId());
     orders.put(Integer.valueOf(order.getMyReqId()), order);
   }
 
@@ -1192,9 +1004,7 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
    * @param reqId The request ID of the order to remove
    */
   public void removeOrder(int reqId) {
-    if (LOGGER.isDebugEnabled()) {
-      LOGGER.debug("Removing order from cache: reqId={}", reqId);
-    }
+    logger.info("Removing order from cache: reqId=" + reqId);
     orders.remove(Integer.valueOf(reqId));
   }
 
@@ -1206,9 +1016,7 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
    */
   public MarketOrder getOrder(int reqId) {
     MarketOrder order = orders.get(Integer.valueOf(reqId));
-    if (LOGGER.isDebugEnabled()) {
-      LOGGER.debug("Retrieving order from cache: reqId={}, found={}", reqId, (order != null));
-    }
+    logger.info("Retrieving order from cache: reqId={}, found={}" + reqId + ", " + (order != null));
     return order;
   }
 
@@ -1227,7 +1035,7 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
     // Then your lookup becomes much more efficient
     public MarketOrder getOrderByOrderId(String orderId) {
         if (orderId == null || orderId.isEmpty()) {
-            LOGGER.warn("Cannot find order with null or empty orderId");
+            logger.error("Cannot find order with null or empty orderId");
             return null;
         }
         
@@ -1255,9 +1063,7 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
     public void onPartialUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply,
         boolean isSnap) {
         // Not interested in partial updates
-        if (LOGGER.isDebugEnabled()) {
-        LOGGER.debug("Partial update for record: {}", mkvRecord.getName());
-        }
+        logger.info("Partial update for record: {}" + mkvRecord.getName());
     }
 
     /**
@@ -1275,11 +1081,11 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
                 } else if (recordName.contains("CM_LOGIN")) {
                     processLoginUpdate(mkvRecord, mkvSupply, isSnap);
                 } else {
-                    LOGGER.warn("Received unexpected record type: {}", recordName);
+                    logger.warn("Received unexpected record type: {}" + recordName);
                 }
 
         } catch (Exception e) {
-            LOGGER.error("Error processing order update: {}", e.getMessage(), e);
+            logger.error("Error processing order update: {}" + e.getMessage() + " " + e);
         }
     }
 
@@ -1292,10 +1098,7 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
 
             // If this order wasn't placed by us, or is dead, ignore it
             if (!"OrderManagement".equals(CompNameOrigin) || (orderId == null || orderId.isEmpty()) || "No".equalsIgnoreCase(activeStr)) {
-                if (LOGGER.isDebugEnabled()) {
-                LOGGER.debug("Ignoring order update for non-matching order: {}",
-                    mkvRecord.getName());
-                }
+                logger.warn("Ignoring order update for non-matching order: {}" + mkvRecord.getName());
                 return;
             } else {
                 // This is an order we placed - forward the update to the MarketOrder
@@ -1310,20 +1113,18 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
                     if ("Yes".equalsIgnoreCase(activeStr)) {
                         // Order is active, add or update it in the map
                         activeOrders.put(compositeKey, timeStamp);
-                        LOGGER.debug("Order is active: orderId={}, source={}, created={}", 
-                            orderId, origSrc, timeStamp);
+                        logger.info("Order is active: orderId="+orderId+" source="+origSrc+", created="+timeStamp);
                     } else {
                         // Order is no longer active, remove from the map
                         activeOrders.remove(compositeKey);
-                        LOGGER.info("Order removed from active list: orderId={}, source={}", 
-                            orderId, origSrc);
+                        logger.info("Order removed from active list: orderId="+orderId+" source="+origSrc);
                     }
                 } catch (Exception e) {
-                    LOGGER.error("Error accessing OrigID field: {}", e.getMessage(), e);
+                    logger.error("Error accessing OrigID field: {}" + e.getMessage()+ e);
                 }
             }
         } catch (Exception e) {
-        LOGGER.error("Error accessing order fields: {}", e.getMessage(), e);
+            logger.error("Error accessing order fields: {}" + e.getMessage()+ e);
         }
     }
 
@@ -1332,7 +1133,7 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
             String trader = mkvRecord.getValue("Id").getString();
             
             if (!venueToTraderMap.containsValue(trader)) {
-                LOGGER.debug("Ignoring login update from another trader: {}", trader);
+                logger.warn("Ignoring login update from another trader: {}"+  trader);
                 return; // Not our trader
             }
 
@@ -1345,21 +1146,21 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
                 if (src != null && !src.isEmpty() && tStatus != null && !tStatus.isEmpty()) {
                     //check if valid venue
                     if (!validVenues.contains(src)) {
-                        LOGGER.info("Not valid venue: {}", src);
+                        logger.warn("Not valid venue: {}" + src);
                         continue;
                     } else {
                         if (tStatus.equals("On")){
                             venueActiveStatus.put(src, true);
-                            LOGGER.info("Venue {} is now active for trader {}", src, trader);
+                            logger.info("Venue " + src + " is now active for trader " + trader);
                         } else {
                             venueActiveStatus.put(src, false);
-                            LOGGER.info("Venue {} is now inactive for trader {}", src, trader);
+                            logger.info("Venue " + src + " is now inactive for trader " + trader);
                         }
                     }
                 }
             }
         } catch (Exception e) {
-            LOGGER.error("Error processing login update: {}", e.getMessage(), e);
+            logger.error("Error processing login update: {}" + e.getMessage()+ e);
         }
     }
 
@@ -1372,9 +1173,7 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
   public void orderDead(MarketOrder order) {
     incrementPendingOperations();
     try {
-        if (LOGGER.isInfoEnabled()) {
-            LOGGER.info("Order is dead: orderId={}, reqId={}", order.getOrderId(), order.getMyReqId());
-        }
+        logger.info("Order is dead: orderId=" + order.getOrderId() + ", reqId=" + order.getMyReqId());
         // Remove the order from the cache
         removeOrder(order.getMyReqId());
     } finally {
@@ -1393,23 +1192,19 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
     
     // Check if the system is in stopped state
     if (isSystemStopped  || isShutdownRequested()) {
-        LOGGER.error("Order rejected - system is in STOPPED state: source={}, trader={}, instrId={}",
-            MarketSource, TraderId, instrId);
+        logger.error("Order rejected - system is in STOPPED state: source=" + MarketSource + ", trader=" + TraderId + ", instrId=" + instrId);
         return null;
     }
 
     if (venueActiveStatus.getOrDefault(MarketSource, null) == null) {
-        LOGGER.error("Order rejected - venue is not active: source={}, trader={}, instrId={}",
-            MarketSource, TraderId, instrId);
+        logger.error("Order rejected - venue is not active: source=" + MarketSource + ", trader=" + TraderId + ", instrId=" + instrId);
         return null;
     }
 
     // Increment pending operations before creating the order
     incrementPendingOperations();
     try {
-        LOGGER.info("Attempting to create order: source={}, trader={}, instrId={}, verb={}, qty={}, price={}, type={}, tif={}",
-                    MarketSource, TraderId, instrId, verb, qty, price, type, tif);
-
+        logger.info("Attempting to create order: source=" + MarketSource + ", trader=" + TraderId + ", instrId=" + instrId + ", verb=" + verb + ", qty=" + qty + ", price=" + price + ", type=" + type + ", tif=" + tif);
 
         // Create the order using the static factory method
         MarketOrder order = MarketOrder.orderCreate(MarketSource, TraderId, instrId, verb, qty, price,
@@ -1421,21 +1216,18 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
         
         // Check if there was an error code returned that indicates rejection
         if (order.getErrCode() != 0) {
-            LOGGER.warn("Order rejected by market: reqId={}, instrId={}, errCode={}, errStr={}, source={}, trader={}",
-                order.getMyReqId(), instrId, order.getErrCode(), order.getErrStr(), MarketSource, TraderId);
-            
+            logger.error("Order rejected by market: reqId=" + order.getMyReqId() + ", instrId=" + instrId + ", errCode=" + order.getErrCode() + ", errStr=" + order.getErrStr() + ", source=" + MarketSource + ", trader=" + TraderId);
+
             // Remove the rejected order from the cache since it won't be processed
             removeOrder(order.getMyReqId());
             return null; // Return null for rejected orders to indicate failure
         }
 
-        if (LOGGER.isInfoEnabled()) {
-            LOGGER.info("Order created successfully: reqId={}, instrId={}", order.getMyReqId(), instrId);
-        }
+        logger.info("Order created successfully: reqId=" + order.getMyReqId() + ", instrId=" + instrId);
+
         } else {
             // Log a more detailed error when order creation fails completely
-            LOGGER.error("Order creation failed: instrId={}, source={}, trader={}, verb={}, qty={}, price={}, type={}, tif={}",
-                instrId, MarketSource, TraderId, verb, qty, price, type, tif);
+            logger.error("Order creation failed: instrId=" + instrId + ", source=" + MarketSource + ", trader=" + TraderId + ", verb=" + verb + ", qty=" + qty + ", price=" + price + ", type=" + type + ", tif=" + tif);
             }
         return order;
     } finally {
@@ -1450,11 +1242,7 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
    */
   @Override
     public void best(Best best, double cash_gc, double reg_gc, GCBest gcBestCash, GCBest gcBestREG) {
-            LOGGER.info("best() called: instrument={}, ask= ({}), asksrc= ({}), bid= ({}), bidsrc= ({}), cash_gc=({}), reg_gc=({})", 
-                best.getId(), 
-                best.getAsk(), best.getAskSrc(), 
-                best.getBid(), best.getBidSrc(),
-                cash_gc, reg_gc);
+            logger.info("best() called: instrument=" + best.getId() + ", ask= (" + best.getAsk() + "), asksrc= (" + best.getAskSrc() + "), bid= (" + best.getBid() + "), bidsrc= (" + best.getBidSrc() + "), cash_gc=(" + cash_gc + "), reg_gc=(" + reg_gc + ")");
 
         // Store the latest best for this instrument
         synchronized(gcDataLock) {
@@ -1469,7 +1257,7 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
             latestBestByInstrument.put(best.getInstrumentId(), best);
         }
 
-        LOGGER.info("Calling processMarketOpportunity for {}", best.getId());
+        logger.info("Calling processMarketOpportunity for " + best.getId());
 
         processMarketOpportunity(best, cash_gc, reg_gc, gcBestCash, gcBestREG);
     }
@@ -1481,7 +1269,7 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
 	   
 	   // Add a shutdown hook to clean up the scheduler
 	   Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-	       LOGGER.info("Shutting down market recheck scheduler");
+	       logger.info("Shutting down market recheck scheduler");
 	       scheduler.shutdown();
 	       try {
 	           if (!scheduler.awaitTermination(5, TimeUnit.SECONDS)) {
@@ -1492,7 +1280,7 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
 	           Thread.currentThread().interrupt();
 	       }
 	   }));
-	   LOGGER.info("Market recheck scheduler initialized");
+	   logger.info("Market recheck scheduler initialized");
        scheduler.scheduleAtFixedRate(this::cleanupOldEntries,
            30,     // Initial delay (30 minutes)
             60,    // Period (60 minutes)
@@ -1545,7 +1333,7 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
             }
             
         } catch (Exception e) {
-            LOGGER.warn("Error during cleanup", e);
+            logger.error("Error during cleanup " + e);
         }
     }
 	/**
@@ -1615,15 +1403,13 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
 
 	    // Skip if the system is in stopped state
 	    if (isSystemStopped) {
-	        if (LOGGER.isDebugEnabled()) {
-	            LOGGER.debug("Skipping market opportunity processing - system is in STOPPED state");
-	        }
+            logger.info("Skipping market opportunity processing - system is in STOPPED state");
 	        return;
 	    }
 		
 		// Skip if the best object is null
 	    if (best == null) {
-	        LOGGER.warn("processMarketOpportunity called with null best object");
+	        logger.warn("processMarketOpportunity called with null best object");
 	        return;
 	    }
 
@@ -1641,8 +1427,7 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
 	    double bid = best.getBid();
   	    double ask = best.getAsk();
 
-        LOGGER.debug("Price check: ask={}, bid={}, spread={}", 
-            ask, bid, ask - bid);
+        logger.info("Price check: ask=" + ask + ", bid=" + bid + ", spread=" + (ask - bid));
 
         String id = best.getId();
         boolean isStrip = (id.startsWith("91283") || id.startsWith("912800") || id.startsWith("912815") || id.startsWith("912820") || id.startsWith("912821") || id.startsWith("912803"));
@@ -1684,8 +1469,7 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
 	  		}
 	  		
 	  		if (gcLevelResult == null) {
-	  			LOGGER.debug("No GC market available for comparison - Type: {}, Instrument: {}", 
-                    (id.contains("C_Fixed") ? "CASH" : "REG"), id);
+	  			logger.warn("No GC market available for comparison - Type: " + (id.contains("C_Fixed") ? "CASH" : "REG") + ", Instrument: " + id);
 	  			return;
         	} else if (gcLevelResult != null) {
 	  			
@@ -1697,24 +1481,21 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
                     gcBidPrice = gcLevelResult.getBidPrice();
                     gcAskPrice = gcLevelResult.getAskPrice();
                 } catch (Exception e) {
-                    LOGGER.warn("Error accessing GC level prices for {}: {}", id, e.getMessage());
+                    logger.error("Error accessing GC level prices for " + id + ": " + e.getMessage());
                     return;
                 }
                 if (gcBidPrice == null) {
-                    LOGGER.debug("Skipping trade: Missing GC level bid price - Instrument: {}, Type: {}, Current Ask: {}", 
-                        id, (id.contains("C_Fixed") ? "CASH" : "REG"), ask);
+                    logger.warn("Skipping trade: Missing GC level bid price - Instrument: " + id + ", Type: " + (id.contains("C_Fixed") ? "CASH" : "REG") + ", Current Ask: " + ask);
                     return;
                 }
                 
                 if (ask < gcBidPrice) {
-                     LOGGER.debug("Skipping trade: ask {} is less than GC level bid {} - Type: {}, Instrument: {}", 
-                         ask, gcBidPrice, (id.contains("C_Fixed") ? "CASH" : "REG"), id);
+                     logger.warn("Skipping trade: ask " + ask + " is less than GC level bid " + gcBidPrice + " - Type: " + (id.contains("C_Fixed") ? "CASH" : "REG") + ", Instrument: " + id);
                     return;
                 }
                 
                 if (gcAskPrice != null && ask < gcAskPrice) {
-                     LOGGER.debug("Skipping trade: ask {} is less than GC level ask {} - Type: {}, Instrument: {}", 
-                         ask, gcAskPrice, (id.contains("C_Fixed") ? "CASH" : "REG"), id);
+                     logger.warn("Skipping trade: ask " + ask + " is less than GC level ask " + gcAskPrice + " - Type: " + (id.contains("C_Fixed") ? "CASH" : "REG") + ", Instrument: " + id);
                     return;
                 }
                 
@@ -1732,7 +1513,7 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
 	    
 	      // Self-match detection
 	    if  (skipSelfMatch) {
-			LOGGER.info("Failed self-match prevention check");
+			logger.warn("Failed self-match prevention check");
 			return;
 	    }
 
@@ -1760,9 +1541,9 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
   		  	if (cash_gc != 0) {
   		        double threshold = isDynamicThresholdPeriod() ? calculateSpreadThreshold() : 2.0;
   		  		if ((cash_gc - ask) > threshold) {
-  		            if (LOGGER.isDebugEnabled() && isDynamicThresholdPeriod()) {
+  		            if (isDynamicThresholdPeriod()) {
   		                // Only log during the dynamic threshold period to reduce overhead
-  		                LOGGER.debug("Skipping trade: spread {} exceeds time-based threshold {}", (cash_gc - ask), threshold);
+  		                logger.warn("Skipping trade: spread " + (cash_gc - ask) + " exceeds time-based threshold " + threshold);
   		            }
   		            return;
   		  		}
@@ -1776,21 +1557,20 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
   	    if (isCash && (cash_gc != 0) && (minsizeDiff > 0)) {
             if ((((ask-bid) * orderBidSize) - ((cash_gc - ask) * minsizeDiff)) / minsizeDiff > -0.02) {
                 // Trade is not close enough to breakeven
-                if (LOGGER.isInfoEnabled()) {
-                    LOGGER.info("ID: {} - Skipping trade as not close enough to breakeven: Details: [{}], {}, ask={}, bid={}, " +
-                        "orderBidSize={}, cash_gc={}, ask={}, minsizeDiff={}, orderAskSize={}",
-                        id, isCash ? "CASH" : "REG", ask, bid, orderBidSize, cash_gc, ask, minsizeDiff, orderAskSize);
-                }
+                logger.warn("ID: " + id + " - Skipping trade as not close enough to breakeven: Details: [" + 
+                    (isCash ? "CASH" : "REG") + "], ask=" + ask + ", bid=" + bid + 
+                    ", orderBidSize=" + orderBidSize + ", cash_gc=" + cash_gc + 
+                    ", ask=" + ask + ", minsizeDiff=" + minsizeDiff + ", orderAskSize=" + orderAskSize);
                 return;
             }
         } else if (isREG && (reg_gc != 0) && (minsizeDiff > 0)) {
             if ((((ask-bid) * orderBidSize) - ((reg_gc - ask) * minsizeDiff)) / minsizeDiff > 0.005) {
                 // Trade is not close enough to breakeven
-                if (LOGGER.isInfoEnabled()) {
-                    LOGGER.info("ID: {} - Skipping trade as not close enough to breakeven: Details: [{}], {}, ask={}, bid={}, " +
-                        "orderBidSize={}, reg_gc={}, ask={}, minsizeDiff={}, orderAskSize={}",
-                        id, isCash ? "CASH" : "REG", ask, bid, orderBidSize, reg_gc, ask, minsizeDiff, orderAskSize);
-                }
+                logger.warn("ID: " + id + " - Skipping trade as not close enough to breakeven: Details: [" + 
+                    (isCash ? "CASH" : "REG") + "], ask=" + ask + ", bid=" + bid + 
+                    ", orderBidSize=" + orderBidSize + ", reg_gc=" + reg_gc + 
+                    ", ask=" + ask + ", minsizeDiff=" + minsizeDiff + ", orderAskSize=" + orderAskSize);
+
                 return;
             }
         } 
@@ -1798,7 +1578,6 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
         String reason = "";
   	    double spread = ask - bid;
   	    String securityType = isCash ? "CASH" : (isREG ? "REG" : "UNKNOWN");
-  	    if (LOGGER.isInfoEnabled()) {
         // Build detailed reason message
             if ((minsizeDiff == 0) && sameSource && (ask-(0.03 + cashRegAdjustment) < bid)) {
                 reason = "Equal size, same source, spread < 0.03 + adjustment";
@@ -1818,7 +1597,7 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
             } else if (minsizeDiff == 0 && (ask-0.02 < bid)) {
                 reason = "Equal size, spread < 0.02";
             }
-  	    }
+
 
 	  	if (((minsizeDiff == 0) && sameSource && (ask-(0.03 + cashRegAdjustment) < bid)) || 
 	  		    ((minsizeDiff > 25) && (ask-(0.04 + cashRegAdjustment) < bid)) || 
@@ -1830,15 +1609,11 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
 	  		    ((minsizeDiff <= 5) && ((ask-0.01) < bid)) || 
 	  		    ((minsizeDiff == 0) && ((ask-0.02) < bid))
 	  		) {
-	        LOGGER.info("ID: {} - Skipping trade: Details: [{}] ask={:.6f} ({}), bid={:.6f} ({}), " +
-  		        "sizeDiff={:.2f}, minSizeDiff={:.2f}, spread={:.6f}, " +
-  		        "askSize={:.2f}/{:.2f}, bidSize={:.2f}/{:.2f}, multiplier={}, adjustment={:.6f}",
-  		        id, reason, securityType,
-  		        ask, askSrc, bid, bidSrc,
-  		        sizeDiff, minsizeDiff, spread,
-  		        orderAskSize, orderAskSizeTotal,
-  		        orderBidSize, orderBidSizeTotal,
-  		        multiplier, cashRegAdjustment);
+            logger.warn("ID: " + id + " - Skipping trade: Details: [" + reason + "] " + securityType + 
+                " ask=" + ask + " (" + askSrc + "), bid=" + bid + " (" + bidSrc + "), " +
+                "sizeDiff=" + sizeDiff + ", minSizeDiff=" + minsizeDiff + ", spread=" + spread + ", " +
+                "askSize=" + orderAskSize + "/" + orderAskSizeTotal + ", bidSize=" + orderBidSize + "/" + orderBidSizeTotal + ", " +
+                "multiplier=" + multiplier + ", adjustment=" + cashRegAdjustment);
                 return;
 	  		}
         
@@ -1847,7 +1622,6 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
   	    boolean AskIsAON = best.getAskIsAON();
  	    boolean BidIsAON = best.getBidIsAON();
 
-        if (LOGGER.isDebugEnabled()) {
             StringBuilder sb = messageBuilder.get();
             sb.setLength(0);
             sb.append("Processing trading opportunity for instrument id: ").append(idFull)
@@ -1856,9 +1630,8 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
             .append(", bidSize=").append(orderBidSizeTotal).append(" (").append(orderBidSize).append(")")
             .append(": ask=").append(ask).append(" (").append(askSrc).append(")")
             .append(", bid=").append(bid).append(" (").append(bidSrc).append(")");
-            LOGGER.debug(sb.toString());
-        }
-    	
+            logger.debug(sb.toString());
+
         // Create a unique key for this instrument pair to track trades
         String tradingKey = id + "|" + askSrc + "|" + bidSrc;
         
@@ -1868,29 +1641,22 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
         
         if (lastTradeTime != null && (currentTime - lastTradeTime) < MIN_TRADE_INTERVAL_MS) {
             // Too soon to trade this instrument again
-          if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("Skipping trade for {} last trade was too recent: {}ms since last trade", tradingKey, (currentTime - lastTradeTime));
-          }
+            logger.debug(reason);("Skipping trade for " + tradingKey + " last trade was too recent: " + (currentTime - lastTradeTime) + "ms since last trade");
             return;
         }
-        
-        // Log that we found an opportunity
-      if (LOGGER.isDebugEnabled()) {
-        LOGGER.debug("Found trading opportunity for {}: IsAON={} ask={} ({})", id, AskIsAON, ask, askSrc);
-        LOGGER.debug(", IsAON={} bid={} ({})", BidIsAON, bid, bidSrc);
-      }
+
+        logger.debug("Found trading opportunity for " + id + ": IsAON=" + AskIsAON + " ask=" + ask + " (" + askSrc + ")");
+        logger.debug("IsAON=" + BidIsAON + " bid=" + bid + " (" + bidSrc + ")");
 
       // Get the native instrument IDs
       String askVenueInstrument = depthListener.getInstrumentFieldBySourceString(id, askSrc, AskIsAON);
       String bidVenueInstrument = depthListener.getInstrumentFieldBySourceString(id, bidSrc, BidIsAON);
       
-   // Add null checks
-      if (askVenueInstrument == null || bidVenueInstrument == null) {
-          if (LOGGER.isWarnEnabled()) {
-              LOGGER.warn("Missing instrument mapping for {}, ask source: {}, bid source: {}", id, askSrc, bidSrc);
-          }
-          return; // Skip this opportunity
-      }
+    // Add null checks
+    if (askVenueInstrument == null || bidVenueInstrument == null) {
+        logger.warn("Missing instrument mapping for " + id + ", ask source: " + askSrc + ", bid source: " + bidSrc);
+        return; // Skip this opportunity
+    }
 
       // Get the trader IDs for each venue
       String askTrader = getTraderForVenue(askSrc);
@@ -1898,7 +1664,7 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
         
    // Add protection against zero or negative sizes
       if (orderAskSizeTotal <= 0 || orderBidSizeTotal <= 0) {
-          LOGGER.warn("Invalid sizes detected for {}: ask={}, bid={}", id, orderAskSizeTotal, orderBidSizeTotal);
+          logger.warn("Invalid sizes detected for "+ id +": ask="+ orderAskSizeTotal +", bid="+ orderBidSizeTotal);
           return;
       }
 
@@ -1907,37 +1673,18 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
   	  String ordertypeBid = null;
   	  ordertypeBid = "FAS";
   	  ordertypeAsk = "FAS";
-  	  //need to further examine the DEALERWEB ordertypes
-//	  if ((BidIsAON && bidSrc.equals("DEALERWEB_REPO")) || bidSrc.equals("DEALERWEB_REPO")) {
-//		  ordertypeBid = "FAS";
-//	  } else if (BidIsAON) {
-//		  ordertypeBid = "FOK";
-//	  } else {
-//		  ordertypeBid = "FAK";
-//	  };
-//	  
-//  	  //need to further examine the DEALERWEB ordertypes
-//	  if ((AskIsAON && askSrc.equals("DEALERWEB_REPO")) || askSrc.equals("DEALERWEB_REPO")) {
-//		  ordertypeAsk = "FAS";
-//	  } else if (AskIsAON) {
-//		  ordertypeAsk = "FOK";
-//	  } else {
-//		  ordertypeAsk = "FAK";
-//    	  }
-      // Before checking trader information (pre self-match check)
-      if (LOGGER.isDebugEnabled()) {
-    	    LOGGER.debug("Checking for self-match: " +
-    	        "ASK: src=" + askSrc + ", trader=" + askTrader + ", venue=" + askVenueInstrument + 
-    	        ", size=" + orderAskSize + ", price=" + ask + ", type=" + ordertypeAsk + ", IsAON=" + AskIsAON + 
-    	        " | BID: src=" + bidSrc + ", trader=" + bidTrader + ", venue=" + bidVenueInstrument + 
-    	        ", size=" + orderBidSize + ", price=" + bid + ", type=" + ordertypeBid + ", IsAON=" + BidIsAON);
-    	}
+
+        logger.debug("Checking for self-match: " +
+            "ASK: src=" + askSrc + ", trader=" + askTrader + ", venue=" + askVenueInstrument + 
+            ", size=" + orderAskSize + ", price=" + ask + ", type=" + ordertypeAsk + ", IsAON=" + AskIsAON + 
+            " | BID: src=" + bidSrc + ", trader=" + bidTrader + ", venue=" + bidVenueInstrument + 
+            ", size=" + orderBidSize + ", price=" + bid + ", type=" + ordertypeBid + ", IsAON=" + BidIsAON);
 
 
-	  if (LOGGER.isDebugEnabled()) {
-          LOGGER.debug("### BUY ORDER BEING SENT: src: {}, trader: {}, venue: {}, direction: Buy, size: {}, prc: {}, Limit, ordertype: {}, IsAON: {}", askSrc, askTrader, askVenueInstrument, orderAskSize, ask, ordertypeAsk, AskIsAON);
-          LOGGER.debug("### SELL ORDER BEING SENT: src: {}, trader: {}, venue: {}, direction: Sell, size: {}, prc: {}, Limit, ordertype: {}, IsAON: {}", bidSrc, bidTrader, bidVenueInstrument, orderBidSize, bid, ordertypeBid, BidIsAON);
-	  }
+        logger.debug("### BUY ORDER BEING SENT: src: " + askSrc + ", trader: " + askTrader + ", venue: " + askVenueInstrument + 
+              ", direction: Buy, size: " + orderAskSize + ", prc: " + ask + ", Limit, ordertype: " + ordertypeAsk + ", IsAON: " + AskIsAON);
+        logger.debug("### SELL ORDER BEING SENT: src: " + bidSrc + ", trader: " + bidTrader + ", venue: " + bidVenueInstrument + 
+              ", direction: Sell, size: " + orderBidSize + ", prc: " + bid + ", Limit, ordertype: " + ordertypeBid + ", IsAON: " + BidIsAON);
 
   	   // Placing active orders
         addOrder(askSrc, askTrader, askVenueInstrument, "Buy", orderAskSize, 
@@ -1947,9 +1694,7 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
 
         // Record that we've traded this instrument
         lastTradeTimeByInstrument.put(tradingKey, currentTime);
-      if (LOGGER.isDebugEnabled()) {
-        LOGGER.debug("Recorded trade for {} at {}", tradingKey, new java.util.Date(currentTime));
-      }
+        logger.debug("Recorded trade for " + tradingKey + " at " + new java.util.Date(currentTime));
     }
 	
 	/**
@@ -1973,13 +1718,13 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
         String id = best.getId();
         
         // Log that we're starting GC opportunity processing
-        LOGGER.info("Processing GC opportunity - checking for potential GC-level arbitrage for id: {}", id);
+        logger.debug("Processing GC opportunity - checking for potential GC-level arbitrage for id: " + id);
 
         boolean skipSelfMatch = (best.isMinePrice(best.getAskStatus()));
 
         // Self-match detection
         if (skipSelfMatch) {
-            LOGGER.info("Failed self-match prevention for Processing GC check");
+            logger.warn("Failed self-match prevention for Processing GC check");
             return;
         }
         
@@ -1987,13 +1732,12 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
         Double gcBidPrice = gclvlResult.getBidPrice();
         
         // Log that we found a GC bid price
-        LOGGER.info("Found GC bid price for arbitrage: {}", gcBidPrice);
+        logger.debug("Found GC bid price for arbitrage: " + gcBidPrice);
 
         double threshold = isAfterEightThirtyFive() ? 0.05 : 0.03;
         // Skip if spread is insufficient for the time
         if ((ask - threshold) < gcBidPrice) {
-            LOGGER.debug("Skipping GC trade for id: {} - insufficient spread - ask=%.6f, gcBid=%.6f, threshold=%.2f, spread=%.6f",
-                id, ask, gcBidPrice, threshold, ask - gcBidPrice);
+            logger.debug("Skipping GC trade for id: " + id + " - insufficient spread - ask=" + ask + ", gcBid=" + gcBidPrice + ", threshold=" + threshold + ", spread=" + (ask - gcBidPrice));
             return;
         }
 
@@ -2008,7 +1752,7 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
         
         // If the venue instrument is null, log an error and return
         if (askVenueInstrument == null) {
-            LOGGER.warn("Missing instrument mapping for GC trade: {}, source: {}", id, askSrc);
+            logger.error("Missing instrument mapping for GC trade: " + id + ", source: " + askSrc);
             return;
         }
 
@@ -2017,14 +1761,10 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
 
         String ordertypeAsk = "FAS";
 
-        if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("### GC BUY ORDER BEING SENT: src: {}, trader: {}, venue: {}, direction: Buy, size: {}, prc: {}, Limit, ordertype: {}, IsAON: {}",
-                askSrc, askTrader, askVenueInstrument, orderAskSize, ask, ordertypeAsk, AskIsAON);
-        }
+        logger.debug("### GC BUY ORDER BEING SENT: src: " + askSrc + ", trader: " + askTrader + ", venue: " + askVenueInstrument + ", direction: Buy, size: " + orderAskSize + ", prc: " + ask + ", Limit, ordertype: " + ordertypeAsk + ", IsAON: " + AskIsAON);
 
         // Add more detailed debugging output
-        LOGGER.debug("Detailed order info - id: {}, fullId: {}, venueId: {}, source: {}, trader: {}",
-            id, fullInstrumentId, askVenueInstrument, askSrc, askTrader);
+        logger.debug("Detailed order info - id: " + id + ", fullId: " + fullInstrumentId + ", venueId: " + askVenueInstrument + ", source: " + askSrc + ", trader: " + askTrader);
 
         // Send the order with the correct venue instrument ID
         addOrder(askSrc, askTrader, askVenueInstrument, "Buy", orderAskSize, 
@@ -2053,7 +1793,7 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
 	        
 	    } catch (Exception e) {
 	        // Make sure logging errors don't disrupt trading
-	        LOGGER.warn("Error logging market details: {}", e.getMessage());
+	        logger.error("Error logging market details: " + e.getMessage());
 	    }
 	}
 
@@ -2061,9 +1801,8 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
 	// Add this method to enable/disable continuous trading
 	public void setContiguousTradingEnabled(boolean enabled) {
 	    this.continuousTradingEnabled = enabled;
-      if (LOGGER.isDebugEnabled()) {
-	      LOGGER.debug("Continuous trading " + (enabled ? "enabled" : "disabled"));
-      }
+        logger.debug("Continuous trading " + (enabled ? "enabled" : "disabled"));
+
 	}
   /**
    * Handles changes to the order chain.
@@ -2071,30 +1810,28 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
    */
   public void onSupply(MkvChain chain, String record, int pos,
       MkvChainAction action) {
-        if (LOGGER.isDebugEnabled()) {
-          LOGGER.debug("Order chain update: chain={}, record={}, pos={}, action={}",
-              chain.getName(), record, pos, action);
-        }
+    logger.debug("Order chain update: chain=" + chain.getName() + ", record=" + record + ", pos=" + pos + ", action=" + action);
+
     switch (action.intValue()) {
     case MkvChainAction.INSERT_code:
     case MkvChainAction.APPEND_code:
       // For new records, subscribe to receive updates
-      LOGGER.info("New record in chain, subscribing: {}", record);
+      logger.debug("New record in chain, subscribing: " + record);
       subscribeToRecord(record);
       break;
     case MkvChainAction.SET_code:
       // For a SET action (chain is being completely redefined),
       // subscribe to all records in the chain
-      LOGGER.info("Chain SET action, subscribing to all records");
+      logger.debug("Chain SET action, subscribing to all records");
       for (Iterator iter = chain.iterator(); iter.hasNext();) {
         String recName = (String) iter.next();
-        LOGGER.info("Subscribing to chain record: {}", recName);
+        logger.debug("Subscribing to chain record: " + recName);
         subscribeToRecord(recName);
       }
       break;
     case MkvChainAction.DELETE_code:
-    LOGGER.debug("Ignoring DELETE action for record: {}", record);
-      break;
+        logger.debug("Ignoring DELETE action for record: " + record);
+        break;
     }
   }
 
@@ -2106,16 +1843,16 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
    */
   private void subscribeToRecord(String record) {
     try {
-      LOGGER.info("Subscribing to record: {}", record);
+      logger.debug("Subscribing to record: " + record);
 
       // Get the record object
       MkvRecord rec = Mkv.getInstance().getPublishManager().getMkvRecord(record);
       
       // Subscribe to receive updates for the configured fields
       rec.subscribe(MarketDef.ORDER_FIELDS, this);
-      LOGGER.info("Successfully subscribed to record: {}", record);
+      logger.debug("Successfully subscribed to record: " + record);
     } catch (Exception e) {
-      LOGGER.error("Error subscribing to record: {}, error: {}", record, e.getMessage(), e);
+      logger.error("Error subscribing to record: " + record + ", error: " + e.getMessage());
     }
   }
 
@@ -2140,13 +1877,13 @@ private void initializeHeartbeat() {
             publishToRedis(HEARTBEAT_CHANNEL, status);
             
         } catch (Exception e) {
-            LOGGER.warn("Error in heartbeat logging: {}", e.getMessage(), e);
+            logger.error("Error in heartbeat logging: " + e.getMessage());
         }
     }, 30, 30, TimeUnit.SECONDS); // Run every 30 seconds
 
     // Add a shutdown hook to properly close the heartbeat scheduler
     Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-        LOGGER.info("Shutting down heartbeat scheduler");
+        logger.debug("Shutting down heartbeat scheduler");
         heartbeatScheduler.shutdown();
         try {
             if (!heartbeatScheduler.awaitTermination(5, TimeUnit.SECONDS)) {
@@ -2174,11 +1911,11 @@ private void setupPatternSubscriptionMonitor() {
                     // Try with an absolute minimum set
                     try {
                         String[] bareMinimumFields = new String[] { "Id" };
-                        LOGGER.debug("Retrying with absolute minimum field: {}", Arrays.toString(bareMinimumFields));
+                        logger.debug("Retrying with absolute minimum field: " + Arrays.toString(bareMinimumFields));
                         isInstrSubscribed = pattern.isSubscribed(depthListener, bareMinimumFields);
                     } catch (Exception e2) {
-                        LOGGER.warn("Error checking with minimum field. Using status from DepthListener: {}", e2.getMessage());
-                        
+                        logger.error("Error checking with minimum field. Using status from DepthListener: " + e2.getMessage());
+
                         // Fall back to the cached state in the DepthListener
                         if (depthListener != null) {
                             Map<String, Object> healthStatus = depthListener.getHealthStatus();
@@ -2191,32 +1928,32 @@ private void setupPatternSubscriptionMonitor() {
                         depthListener.setInstrumentPatternSubscribed(isInstrSubscribed);
                     }
 
-                LOGGER.info("Instrument pattern subscription check: subscribed={}", isInstrSubscribed);
+                logger.debug("Instrument pattern subscription check: subscribed=" + isInstrSubscribed);
 
                 // If not subscribed, resubscribe using our adaptive approach
                 if (!isInstrSubscribed) {
-                    LOGGER.warn("Instrument pattern not subscribed, subscribing now");
+                    logger.debug("Instrument pattern not subscribed, subscribing now");
 
                     try {
                         // Try using the full subscription method with failover logic
                         subscribeToInstrumentPattern();
                     } catch (Exception e) {
-                        LOGGER.error("Error calling subscribeToInstrumentPattern: {}", e.getMessage(), e);
+                        logger.error("Error calling subscribeToInstrumentPattern: " + e.getMessage());
 
                         // Last resort: try to subscribe with just the absolute minimum field
                         try {
                             String[] bareMinimumFields = new String[] { "Id" };
-                            LOGGER.warn("Trying last resort subscription with field: {}", Arrays.toString(bareMinimumFields));
+                            logger.debug("Trying last resort subscription with field: " + Arrays.toString(bareMinimumFields));
                             pattern.subscribe(bareMinimumFields, depthListener);
-                            LOGGER.info("Successfully subscribed with bare minimum field");
+                            logger.debug("Successfully subscribed with bare minimum field");
                         } catch (Exception e2) {
-                            LOGGER.error("All subscription attempts failed: {}", e2.getMessage(), e2);
+                            logger.error("All subscription attempts failed: " + e2.getMessage());
                         }
                     }
                 }
             } else {
                 // The instrument pattern doesn't exist yet
-                LOGGER.debug("Instrument pattern not found: {}", instrumentPattern);
+                logger.debug("Instrument pattern not found: {}" + instrumentPattern);
             }
 
             // Check depth pattern
@@ -2229,15 +1966,14 @@ private void setupPatternSubscriptionMonitor() {
                 try {
                     currentlySubscribed = pattern.isSubscribed(depthListener, DEPTH_FIELDS);
                 } catch (Exception e) {
-                    LOGGER.warn("Error checking depth pattern subscription: {}", e.getMessage());
+                    logger.error("Error checking depth pattern subscription: " + e.getMessage());
                 }
 
-                LOGGER.debug("Depth pattern subscription check: subscribed={}, our state={}",
-                    currentlySubscribed, isPatternSubscribed);
+                logger.debug("Depth pattern subscription check: subscribed=" + currentlySubscribed + ", our state=" + isPatternSubscribed);
 
                 // If we think we're subscribed but actually aren't, resubscribe
                 if (isPatternSubscribed && !currentlySubscribed) {
-                    LOGGER.warn("Depth pattern subscription lost, resubscribing");
+                    logger.debug("Depth pattern subscription lost, resubscribing");
                     pattern.subscribe(DEPTH_FIELDS, depthListener);
                 }
 
@@ -2245,7 +1981,7 @@ private void setupPatternSubscriptionMonitor() {
                 isPatternSubscribed = currentlySubscribed;
             } else {
                 if (isPatternSubscribed) {
-                    LOGGER.warn("Depth pattern not found but we thought we were subscribed");
+                    logger.debug("Depth pattern not found but we thought we were subscribed");
                     isPatternSubscribed = false;
                 }
                 
@@ -2256,10 +1992,10 @@ private void setupPatternSubscriptionMonitor() {
             // Additional detailed logging
             if (depthListener != null) {
                 Map<String, Object> healthStatus = depthListener.getHealthStatus();
-                LOGGER.info("Market data health status: {}", healthStatus);
+                logger.debug("Market data health status: " + healthStatus);
             }
         } catch (Exception e) {
-            LOGGER.error("Error in pattern subscription monitor: {}", e.getMessage(), e);
+            logger.error("Error in pattern subscription monitor: " + e.getMessage());
         }
     }, 15, 30, TimeUnit.SECONDS);  // Check sooner initially (15 sec), then every 30 sec
   }
@@ -2277,7 +2013,7 @@ private void setupPatternSubscriptionMonitor() {
         // Create a copy of the orders map to avoid concurrent modification
         Map<Integer, MarketOrder> ordersCopy = new HashMap<>(orders);
         int expiredCount = 0;
-        LOGGER.info("Checking for expired orders - currently tracking {} orders", ordersCopy.size());
+        logger.debug("Checking for expired orders - currently tracking " + ordersCopy.size() + " orders");
 
         for (MarketOrder order : ordersCopy.values()) {
             // Skip cancel requests
@@ -2293,7 +2029,7 @@ private void setupPatternSubscriptionMonitor() {
 
                 // Check if the order is in a valid state for cancellation
                 if (orderId == null || orderId.isEmpty()) {
-                    LOGGER.warn("Order ID is null or empty for reqId: {}", order.getMyReqId());
+                    logger.error("Order ID is null or empty for reqId: " + order.getMyReqId());
                     continue;
                 }
                 
@@ -2301,8 +2037,7 @@ private void setupPatternSubscriptionMonitor() {
                 if (orderId != null && !orderId.isEmpty()) {
                     String traderId = getTraderForVenue(marketSource);
 
-                    LOGGER.info("Auto-cancelling expired order: reqId={}, orderId={}, age={} seconds",
-                        order.getMyReqId(), orderId, (order.getAgeMillis() / 1000));
+                    logger.info("Auto-cancelling expired order: reqId=" + order.getMyReqId() + ", orderId=" + orderId + ", age=" + (order.getAgeMillis() / 1000) + " seconds");
 
                     // Issue the cancel request
                     MarketOrder cancelOrder = MarketOrder.orderCancel(
@@ -2316,15 +2051,7 @@ private void setupPatternSubscriptionMonitor() {
                         // Track the cancel request
                         removeOrder(order.getMyReqId());
                         expiredCount++;
-                        
-                        // Log to machine-readable format
-                        // ApplicationLogging.logOrderUpdate(
-                        //     "AUTO_CANCEL", 
-                        //     order.getMyReqId(),
-                        //     order.getOrderId(),
-                        //     "Order expired after " + (order.getAgeMillis() / 1000) + " seconds"
-                        // );
-                    }
+                   }
                 }
             } 
         }
@@ -2375,16 +2102,13 @@ private void setupPatternSubscriptionMonitor() {
                     
                     // Get the time in milliseconds
                     long entryTime = cal.getTimeInMillis();
-                    
-                    LOGGER.debug("Processing order: {} with timestamp: {} ({})",
-                        orderId, timeStamp, new java.util.Date(entryTime));
-                    
+
+                    logger.debug("Processing order: " + orderId + " with timestamp: " + timeStamp + " (" + new java.util.Date(entryTime) + ")");
+
                     if (entryTime < cutoffTime) {
                         // Order is older than 60 seconds, cancel it
                         String traderId = getTraderForVenue(marketSource);
-                        
-                        LOGGER.info("Cancelling stale active order: orderId={}, source={}, age={} seconds",
-                            orderId, marketSource, (currentTime - entryTime) / 1000);
+                        logger.info("Cancelling stale active order: orderId=" + orderId + ", source=" + marketSource + ", age=" + (currentTime - entryTime) / 1000 + " seconds");
                             
                         // Issue the cancel request
                         MarketOrder cancelOrder = MarketOrder.orderCancel(
@@ -2398,31 +2122,24 @@ private void setupPatternSubscriptionMonitor() {
                             // Remove from active orders map
                             activeOrders.remove(compositeKey);
                             cancelledActiveCount++;
-                            
-                            // Log to machine-readable format
-                            // ApplicationLogging.logOrderUpdate(
-                            //     "STALE_CANCEL", 
-                            //     cancelOrder.getMyReqId(),
-                            //     orderId,
-                            //     "Stale order cancelled after > 60 seconds"
-                            // );
+      
                         }
                     }
                 } catch (Exception e) {
-                    LOGGER.warn("Error processing active order entry: {}", e.getMessage());
+                    logger.error("Error processing active order entry: " + e.getMessage());
                 }
             }
 
             if (cancelledActiveCount > 0) {
-                LOGGER.info("Cancelled {} stale active orders", cancelledActiveCount);
+                logger.info("Cancelled " + cancelledActiveCount + " stale active orders");
             }
         }
 
         if (expiredCount > 0) {
-            LOGGER.info("Auto-cancelled {} expired orders", expiredCount);
+            logger.info("Auto-cancelled " + expiredCount + " expired orders");
         }
     } catch (Exception e) {
-        LOGGER.error("Error checking for expired orders: {}", e.getMessage(), e);
+        logger.error("Error checking for expired orders: " + e.getMessage() + ", " + e);
     }
 }
 
@@ -2435,8 +2152,8 @@ public void initiateShutdown() {
     shutdownRequested = true;
         
     // Log that we're starting shutdown
-    LOGGER.warn("Initiating application shutdown");
-    
+    logger.info("Initiating application shutdown");
+
     // Start the graceful shutdown process in a separate thread
     Thread shutdownThread = new Thread(this::performGracefulShutdown, "Manual-Shutdown");
     shutdownThread.setDaemon(true);
@@ -2449,7 +2166,7 @@ public void initiateShutdown() {
  */
 @Deprecated
 public void shutdown() {
-    LOGGER.info("shutdown() called - redirecting to initiateShutdown()");
+    logger.warn("shutdown() called - redirecting to initiateShutdown()");
     initiateShutdown();
 }
 
@@ -2468,20 +2185,20 @@ private void shutdownExecutorGracefully(ExecutorService executor, String name, i
     }
     
     try {
-        LOGGER.info("Shutting down {} executor", name);
+        logger.info("Shutting down {} executor" + name);
         executor.shutdown();
         
         if (!executor.awaitTermination(timeoutSeconds, TimeUnit.SECONDS)) {
-            LOGGER.warn("{} executor did not terminate gracefully, forcing shutdown", name);
+            logger.warn(name + " executor did not terminate gracefully, forcing shutdown");
             List<Runnable> pendingTasks = executor.shutdownNow();
-            LOGGER.info("Cancelled {} pending tasks for {}", pendingTasks.size(), name);
+            logger.info("Cancelled " + pendingTasks.size() + " pending tasks for " + name);
         }
     } catch (InterruptedException e) {
-        LOGGER.warn("Interrupted while shutting down {} executor", name);
+        logger.warn("Interrupted while shutting down " + name + " executor");
         executor.shutdownNow();
         Thread.currentThread().interrupt();
     } catch (Exception e) {
-        LOGGER.error("Error shutting down {} executor: {}", name, e.getMessage());
+        logger.error("Error shutting down " + name + " executor: " + e.getMessage());
         executor.shutdownNow();
     }
 }
@@ -2491,27 +2208,26 @@ private void shutdownExecutorGracefully(ExecutorService executor, String name, i
      * This includes canceling all orders and cleaning up resources.
      */
     private boolean performGracefulShutdown() {
-        LOGGER.warn("Starting graceful shutdown sequence");
-        
+        logger.info("Starting graceful shutdown sequence");
+
         // Mark as shutting down
         if (isShuttingDown) {
-            LOGGER.warn("Shutdown already in progress, ignoring duplicate request");
+            logger.warn("Shutdown already in progress, ignoring duplicate request");
             return true;
         }
 
-        LOGGER.warn("Starting graceful shutdown sequence");
+        logger.info("Starting graceful shutdown sequence");
         isShuttingDown = true;
         isSystemStopped = true;
         continuousTradingEnabled = false;
 
         try {
             // 1. Stop accepting new orders
-            LOGGER.info("Stopped accepting new orders");
-            
+            logger.info("Stopped accepting new orders");
             // 2. Cancel all existing orders
             cancelAllOrders();
-            LOGGER.info("All orders canceled");
-            
+            logger.info("All orders canceled");
+
             // 3. Wait for any pending operations to complete (with timeout)
             waitForPendingOperations();
             
@@ -2519,7 +2235,7 @@ private void shutdownExecutorGracefully(ExecutorService executor, String name, i
             cleanupResources();
             
         } catch (Exception e) {
-            LOGGER.error("Error during graceful shutdown: {}", e.getMessage(), e);
+            logger.error("Error during graceful shutdown: " + e.getMessage() + e);
             return false;
         }
 
@@ -2530,8 +2246,8 @@ private void shutdownExecutorGracefully(ExecutorService executor, String name, i
  * Waits for any pending operations to complete, with a timeout.
  */
 private void waitForPendingOperations() {
-    LOGGER.info("Waiting for {} pending operations to complete", pendingOperations);
-    
+    logger.info("Waiting for " + pendingOperations + " pending operations to complete");
+
     long startTime = System.currentTimeMillis();
     long endTime = startTime + SHUTDOWN_TIMEOUT_MS;
     
@@ -2544,7 +2260,7 @@ private void waitForPendingOperations() {
                     shutdownLock.wait(Math.min(1000, remainingTime));
                 }
             } catch (InterruptedException e) {
-                LOGGER.warn("Interrupted while waiting for pending operations", e);
+                logger.warn("Interrupted while waiting for pending operations: " + e.getMessage());
                 Thread.currentThread().interrupt();
                 break;
             }
@@ -2553,14 +2269,14 @@ private void waitForPendingOperations() {
         // Log progress periodically
         if (pendingOperations > 0 && System.currentTimeMillis() > startTime + 5000) {
             startTime = System.currentTimeMillis();
-            LOGGER.info("Still waiting for {} pending operations to complete", pendingOperations);
+            logger.info("Still waiting for " + pendingOperations + " pending operations to complete");
         }
     }
     
     if (pendingOperations > 0) {
-        LOGGER.warn("Timeout waiting for {} pending operations to complete", pendingOperations);
+        logger.warn("Timeout waiting for " + pendingOperations + " pending operations to complete");
     } else {
-        LOGGER.info("All pending operations completed");
+        logger.info("All pending operations completed");
     }
 }
 
@@ -2568,15 +2284,15 @@ private void waitForPendingOperations() {
  * Cleans up resources before shutdown.
  */
 private void cleanupResources() {
-    LOGGER.info("Cleaning up resources");
-    
+    logger.info("Cleaning up resources");
+
     // Shutdown Redis connection pool
     if (jedisPool != null  && !jedisPool.isClosed()) {
         try {
-            LOGGER.info("Closing Redis connection pool");
+            logger.info("Closing Redis connection pool");
             jedisPool.destroy(); // Use destroy() for older Jedis versions
         } catch (Exception e) {
-            LOGGER.warn("Error closing Redis connection pool: {}", e.getMessage());
+            logger.error("Error closing Redis connection pool: " + e.getMessage() + e);
         }
     }
 
@@ -2585,7 +2301,7 @@ private void cleanupResources() {
     shutdownExecutorGracefully(scheduler, "Market recheck scheduler", 10);
     shutdownExecutorGracefully(orderExpirationScheduler, "Order expiration scheduler", 5);
 
-    LOGGER.info("Resource cleanup completed");
+    logger.info("Resource cleanup completed");
 }
 
 /**
@@ -2596,9 +2312,7 @@ private void cleanupResources() {
 public void incrementPendingOperations() {
     synchronized (shutdownLock) {
         pendingOperations++;
-        if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("Incremented pending operations to {}", pendingOperations);
-        }
+        logger.info("Incremented pending operations to " + pendingOperations);
     }
 }
 
@@ -2611,11 +2325,8 @@ public void decrementPendingOperations() {
         if (pendingOperations > 0) {
             pendingOperations--;
         }
-        
-        if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("Decremented pending operations to {}", pendingOperations);
-        }
-        
+        logger.info("Decremented pending operations to " + pendingOperations);
+
         // If we're shutting down and there are no more pending operations,
         // notify any waiting threads
         if (shutdownRequested && pendingOperations == 0) {
@@ -2640,10 +2351,10 @@ public boolean isShutdownRequested() {
 private final AtomicBoolean ordersCancelled = new AtomicBoolean(false);
 
 public void cancelAllOrders() {
-    LOGGER.info("Cancelling all outstanding orders");
+    logger.info("Cancelling all outstanding orders");
 
     if (ordersCancelled.getAndSet(true)) {
-        LOGGER.debug("Orders already cancelled, skipping");
+        logger.info("Orders already cancelled, skipping");
         return;
     }
 
@@ -2661,7 +2372,7 @@ public void cancelAllOrders() {
         
         // Check if the order is in a valid state for cancellation
         if (orderId == null || orderId.isEmpty()) {
-            LOGGER.warn("Order ID is null or empty for order: {}", order);
+            logger.warn("Order ID is null or empty for order: " + order);
             continue;
         }
 
@@ -2669,8 +2380,8 @@ public void cancelAllOrders() {
         if (orderId != null && !orderId.isEmpty()) {
             String traderId = getTraderForVenue(marketSource);
 
-            LOGGER.info("Cancelling order: reqId={}, orderId={}", order.getMyReqId(), orderId);
-            
+            logger.info("Cancelling order: reqId=" + order.getMyReqId() + ", orderId=" + orderId);
+
             // Issue the cancel request
             MarketOrder cancelOrder = MarketOrder.orderCancel(
                 marketSource, 
@@ -2694,6 +2405,22 @@ public void cancelAllOrders() {
         }
     }
 
-    LOGGER.info("All outstanding orders cancelled");
+    logger.info("All outstanding orders cancelled");
     }
+    /**
+     * Gets the MkvLog instance for use by other components
+     * @return The MkvLog instance
+     */
+    public MkvLog getMkvLog() {
+        return myLog;
+    }
+
+    /**
+     * Gets the current log level
+     * @return The log level
+     */
+    public int getLogLevel() {
+        return logLevel;
+    }
+
 }
