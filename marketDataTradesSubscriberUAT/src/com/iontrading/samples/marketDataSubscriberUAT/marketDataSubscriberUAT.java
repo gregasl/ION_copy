@@ -28,27 +28,28 @@ import java.time.format.DateTimeFormatter;
 
 public class marketDataSubscriberUAT  implements MkvPlatformListener {
     private MkvLog myLog;
+    private int logLevel;
 
     // Logging utility methods using ION MkvLog 
     // The ION log manager controls filtering externally
-    private void logError(String message) {
-        myLog.add(0, "[ERROR] " + message);  // Level 0 - Critical errors
-    }
-
-    private void logWarning(String message) {
-        myLog.add(0, "[WARNING] " + message);  // Level 0 - Important warnings
-    }
-
-    private void logInfo(String message) {
-        myLog.add(1, "[INFO] " + message);  // Level 1 - Operational info
-    }
-
-    private void logVerbose(String message) {
-        myLog.add(2, "[VERBOSE] " + message);  // Level 2 - Detailed processing
-    }
-
-    private void logDebug(String message) {
-        myLog.add(3, "[DEBUG] " + message);  // Level 3 - Debug information
+    private void logger(String message) {
+        switch (logLevel) {
+            case 0:
+                myLog.add("[ERROR] " + message);  // Level 0 - Critical errors
+                break;
+            case 1:
+                myLog.add("[WARNING] " + message);  // Level 1 - Important warnings
+                break;
+            case 2:
+                myLog.add("[INFO] " + message);  // Level 2 - Operational info
+                break;
+            case 3:
+                myLog.add("[VERBOSE] " + message);  // Level 3 - Detailed processing
+                break;
+            case 4:
+                myLog.add("[DEBUG] " + message);  // Level 4 - Debug information
+                break;
+        }
     }
 
     // Static logger configuration
@@ -201,13 +202,13 @@ public class marketDataSubscriberUAT  implements MkvPlatformListener {
                 try (Jedis testJedis = jedisPool.getResource()) {
                     testJedis.clientSetname(hostname + ":marketDataSubscriberUAT");
                     isRedisConnected.set(true);
-                    logInfo("Connected to Redis at " + REDIS_HOST + ":" + REDIS_PORT + " using JedisPool");
+                    logger("Connected to Redis at " + REDIS_HOST + ":" + REDIS_PORT + " using JedisPool");
 
                     // Start heartbeat after successful connection
                     startHeartbeat();
                 }
             } catch (Exception e) {
-                logError("Error connecting to Redis: " + e.getMessage());
+                logger("Error connecting to Redis: " + e.getMessage());
                 throw new RuntimeException("Redis connection failed", e);
             }
         }
@@ -228,7 +229,7 @@ public class marketDataSubscriberUAT  implements MkvPlatformListener {
                 }
             }, 0, HEARTBEAT_INTERVAL_SECONDS, TimeUnit.SECONDS);
 
-            logInfo("Redis heartbeat scheduled every " + HEARTBEAT_INTERVAL_SECONDS + " seconds");
+            logger("Redis heartbeat scheduled every " + HEARTBEAT_INTERVAL_SECONDS + " seconds");
         }
     }
 
@@ -240,12 +241,13 @@ public class marketDataSubscriberUAT  implements MkvPlatformListener {
 
         try {
             mkv = Mkv.start(qos);
+            logLevel = mkv.getProperties().getIntProperty("DEBUG");
             // Initialize the log after starting Mkv
             myLog = mkv.getLogManager().createLogFile("MARKET_DATA");
-            logInfo("MKV connection established successfully");
+            logger("MKV connection established successfully");
 
         } catch (MkvException e) {
-            logError("MKV connection failed: " + e.getMessage());
+            logger("MKV connection failed: " + e.getMessage());
             throw new RuntimeException("MKV initialization failed", e);
         }
     }
@@ -274,16 +276,16 @@ public class marketDataSubscriberUAT  implements MkvPlatformListener {
             jedis.setex(key, EXPIRY_SECONDS, jsonPayload);
             jedis.publish(key, jsonPayload);
 
-            // logInfo("Published data to Redis - Key: " + key);
+            // logger("Published data to Redis - Key: " + key);
         } catch (JedisConnectionException jce) {
-            logError("Redis connection lost, attempting to reconnect: " + jce.getMessage());
+            logger("Redis connection lost, attempting to reconnect: " + jce.getMessage());
             try {
                 initializeRedisConnection();
             } catch (Exception e) {
-                logError("Failed to reconnect to Redis: " + e.getMessage());
+                logger("Failed to reconnect to Redis: " + e.getMessage());
             }
         } catch (Exception e) {
-            logError("Error publishing to Redis: " + e.getMessage());
+            logger("Error publishing to Redis: " + e.getMessage());
         }
     }
     
@@ -348,9 +350,9 @@ public class marketDataSubscriberUAT  implements MkvPlatformListener {
 
                             }
                         } catch (NumberFormatException e) {
-                            logError("Error parsing attribute index from field: " + fieldName + " - " + e.getMessage());
+                            logger("Error parsing attribute index from field: " + fieldName + " - " + e.getMessage());
                         } catch (Exception e) {
-                            logError("Error processing attribute field: " + fieldName + " - " + e.getMessage());
+                            logger("Error processing attribute field: " + fieldName + " - " + e.getMessage());
                         }
                     }
                     // Regular way updates
@@ -365,7 +367,7 @@ public class marketDataSubscriberUAT  implements MkvPlatformListener {
                 publishToRedis(key, recordName, recordData);
 
             } catch (Exception e) {
-                logError("Error processing market data update: " + e.getMessage());
+                logger("Error processing market data update: " + e.getMessage());
             }
         }
     }
@@ -406,7 +408,7 @@ public class marketDataSubscriberUAT  implements MkvPlatformListener {
                 publishToRedis(key, recordName, recordData);
 
             } catch (Exception e) {
-                logError("Error processing instrument data update: " + e.getMessage());
+                logger("Error processing instrument data update: " + e.getMessage());
             }
         }
     }
@@ -447,7 +449,7 @@ public class marketDataSubscriberUAT  implements MkvPlatformListener {
                 publishToRedis(key, recordName, recordData);
 
             } catch (Exception e) {
-                logError("Error processing trade data update: " + e.getMessage());
+                logger("Error processing trade data update: " + e.getMessage());
             }
         }
     }
@@ -488,7 +490,7 @@ public class marketDataSubscriberUAT  implements MkvPlatformListener {
                 publishToRedis(key, recordName, recordData);
 
             } catch (Exception e) {
-                logError("Error processing trade data update: " + e.getMessage());
+                logger("Error processing trade data update: " + e.getMessage());
             }
         }
     }
@@ -529,7 +531,7 @@ public class marketDataSubscriberUAT  implements MkvPlatformListener {
                 publishToRedis(key, recordName, recordData);
 
             } catch (Exception e) {
-                logError("Error processing trade data update: " + e.getMessage());
+                logger("Error processing trade data update: " + e.getMessage());
             }
         }
     }
@@ -554,9 +556,9 @@ public class marketDataSubscriberUAT  implements MkvPlatformListener {
                     try {
                         pattern.subscribe(fields, dataListener);
                         isDepthSubscribed = true;
-                        logInfo("Subscribed to market depth pattern: " + pattern.getName());
+                        logger("Subscribed to market depth pattern: " + pattern.getName());
                     } catch (Exception e) {
-                        logError("Error subscribing to market depth data: " + e.getMessage());
+                        logger("Error subscribing to market depth data: " + e.getMessage());
                         isDepthSubscribed = false;
                     }
                 }
@@ -565,9 +567,9 @@ public class marketDataSubscriberUAT  implements MkvPlatformListener {
                     try {
                         pattern.subscribe(fieldsTrade, tradeListener);
                         isTradeSubscribed = true;
-                        logInfo("Subscribed to trade pattern: " + pattern.getName());
+                        logger("Subscribed to trade pattern: " + pattern.getName());
                     } catch (Exception e) {
-                        logError("Error subscribing to trade data: " + e.getMessage());
+                        logger("Error subscribing to trade data: " + e.getMessage());
                         isTradeSubscribed = false;
                     }
                 }
@@ -576,9 +578,9 @@ public class marketDataSubscriberUAT  implements MkvPlatformListener {
                     try {
                         pattern.subscribe(fieldsInstrument, instrumentListener);
                         isInstrumentSubscribed = true;
-                        logInfo("Subscribed to instrument pattern: " + pattern.getName());
+                        logger("Subscribed to instrument pattern: " + pattern.getName());
                     } catch (Exception e) {
-                        logError("Error subscribing to instrument data: " + e.getMessage());
+                        logger("Error subscribing to instrument data: " + e.getMessage());
                         isInstrumentSubscribed = false;
                     }
                 }
@@ -587,9 +589,9 @@ public class marketDataSubscriberUAT  implements MkvPlatformListener {
                     try {
                         pattern.subscribe(fieldsOrder, orderListener);
                         isOrderSubscribed = true;
-                        logInfo("Subscribed to order pattern: " + pattern.getName());
+                        logger("Subscribed to order pattern: " + pattern.getName());
                     } catch (Exception e) {
-                        logError("Error subscribing to order data: " + e.getMessage());
+                        logger("Error subscribing to order data: " + e.getMessage());
                         isOrderSubscribed = false;
                     }
                 }
@@ -598,9 +600,9 @@ public class marketDataSubscriberUAT  implements MkvPlatformListener {
                     try {
                         pattern.subscribe(fieldsRefPrice, referencePriceListener);
                         isReferencePriceSubscribed = true;
-                        logInfo("Subscribed to reference price pattern: " + pattern.getName());
+                        logger("Subscribed to reference price pattern: " + pattern.getName());
                     } catch (Exception e) {
-                        logError("Error subscribing to reference price data: " + e.getMessage());
+                        logger("Error subscribing to reference price data: " + e.getMessage());
                         isReferencePriceSubscribed = false;
                     }
                 }
@@ -656,7 +658,7 @@ public class marketDataSubscriberUAT  implements MkvPlatformListener {
         if (!running) return true; // Prevent multiple shutdown calls
         running = false;
 
-        logInfo("Shutting down market data subscriber...");
+        logger("Shutting down market data subscriber...");
         try {
             // Send final heartbeat with stopped status if still connected
             if (isRedisConnected.get()) {
@@ -669,9 +671,9 @@ public class marketDataSubscriberUAT  implements MkvPlatformListener {
                     
                     String jsonPayload = OBJECT_MAPPER.writeValueAsString(heartbeatData);
                     jedis.publish(HEARTBEAT_CHANNEL, jsonPayload);
-                    logInfo("Final heartbeat sent with STOPPING status");
+                    logger("Final heartbeat sent with STOPPING status");
                 } catch (Exception e) {
-                    logWarning("Failed to send final heartbeat: " + e.getMessage());
+                    logger("Failed to send final heartbeat: " + e.getMessage());
                     return false;
                 }
             }
@@ -679,13 +681,13 @@ public class marketDataSubscriberUAT  implements MkvPlatformListener {
             // Stop heartbeat scheduler
             if (heartbeatScheduler != null) {
                 heartbeatScheduler.shutdownNow();
-                logInfo("Heartbeat scheduler terminated");
+                logger("Heartbeat scheduler terminated");
             }
             
             // Close JedisPool
             if (jedisPool != null) {
                 jedisPool.close();
-                logInfo("Redis connection pool closed");
+                logger("Redis connection pool closed");
             }
 
             // Rest of the shutdown code remains the same...
@@ -699,24 +701,24 @@ public class marketDataSubscriberUAT  implements MkvPlatformListener {
                 if (!processingExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
                     processingExecutor.shutdownNow();
                 }
-                logInfo("Executor services terminated");
+                logger("Executor services terminated");
             } catch (InterruptedException e) {
                 publishExecutor.shutdownNow();
                 processingExecutor.shutdownNow();
                 Thread.currentThread().interrupt();
-                logWarning("Executor service shutdown interrupted");
+                logger("Executor service shutdown interrupted");
                 return false;
             }
             
             Mkv.stop();
-            logInfo("MKV connection stopped");
+            logger("MKV connection stopped");
             
             // Release the latch to allow main thread to exit
             terminationLatch.countDown();
 
-            logInfo("Shutdown complete.");
+            logger("Shutdown complete.");
         } catch (Exception e) {
-            logError("Error during shutdown: " + e.getMessage());
+            logger("Error during shutdown: " + e.getMessage());
             return false;
         }
         return true;
@@ -740,10 +742,10 @@ public class marketDataSubscriberUAT  implements MkvPlatformListener {
     public void onMain(MkvPlatformEvent event) {
         if (event.equals(MkvPlatformEvent.START)) {
             Mkv.getInstance().getPublishManager().addPublishListener(new PublishListener());
-            logInfo("PublishListener registered successfully");
+            logger("PublishListener registered successfully");
         } else if (event.intValue() == MkvPlatformEvent.SHUTDOWN_REQUEST_code) {
-            logInfo("Received shutdown request from MKV platform");
-            
+            logger("Received shutdown request from MKV platform");
+
             try {
                 // Do the shutdown work synchronously in this method
                 boolean isReady = shutdown();
@@ -751,15 +753,15 @@ public class marketDataSubscriberUAT  implements MkvPlatformListener {
                 // Signal that we're completely done
                 Mkv.getInstance().shutdown(MkvShutdownMode.SYNC, 
                     "MarketDataSubscriber shutdown complete");
-                logInfo("Signaled SYNC shutdown to platform");
+                logger("Signaled SYNC shutdown to platform");
             } else {
                 // We need more time, request async and let platform retry
                 Mkv.getInstance().shutdown(MkvShutdownMode.ASYNC, 
                     "MarketDataSubscriber still processing...");
-                logWarning("Requested ASYNC shutdown - platform will retry");
+                logger("Requested ASYNC shutdown - platform will retry");
             }
             } catch (MkvException e) {
-                logError("Error during shutdown signaling: " + e.getMessage());
+                logger("Error during shutdown signaling: " + e.getMessage());
             }
         }
     }
@@ -770,7 +772,7 @@ public class marketDataSubscriberUAT  implements MkvPlatformListener {
      */
     @Override
     public void onComponent(MkvComponent comp, boolean start) {
-        logVerbose("Component " + comp.getName() + " " + (start ? "started" : "stopped"));
+        logger("Component " + comp.getName() + " " + (start ? "started" : "stopped"));
     }
 
     /**
@@ -779,7 +781,7 @@ public class marketDataSubscriberUAT  implements MkvPlatformListener {
      */
     @Override
     public void onConnect(String comp, boolean start) {
-        logVerbose("Connection to " + comp + " " + (start ? "established" : "lost"));
+        logger("Connection to " + comp + " " + (start ? "established" : "lost"));
     }
 
     private void sendHeartbeat() {
@@ -794,9 +796,9 @@ public class marketDataSubscriberUAT  implements MkvPlatformListener {
             String jsonPayload = OBJECT_MAPPER.writeValueAsString(heartbeatData);
             jedis.publish(HEARTBEAT_CHANNEL, jsonPayload);
 
-            // logFine("Heartbeat sent to Redis");
+            // logger("Heartbeat sent to Redis");
         } catch (Exception e) {
-            logWarning("Failed to send heartbeat: " + e.getMessage());
+            logger("Failed to send heartbeat: " + e.getMessage());
             isRedisConnected.set(false);
             
             // Try to reconnect
@@ -805,7 +807,7 @@ public class marketDataSubscriberUAT  implements MkvPlatformListener {
                     initializeRedisConnection();
                 }
             } catch (Exception reconnectEx) {
-                logError("Failed to reconnect to Redis during heartbeat: " + reconnectEx.getMessage());
+                logger("Failed to reconnect to Redis during heartbeat: " + reconnectEx.getMessage());
             }
         }
     }
