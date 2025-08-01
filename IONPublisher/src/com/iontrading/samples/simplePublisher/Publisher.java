@@ -37,6 +37,7 @@ package com.iontrading.samples.simplePublisher;
 
 import com.iontrading.mkv.Mkv;
 import com.iontrading.mkv.MkvComponent;
+import com.iontrading.mkv.MkvProperties;
 import com.iontrading.mkv.MkvRecord;
 import com.iontrading.mkv.MkvType;
 import com.iontrading.mkv.MkvLog;
@@ -74,27 +75,27 @@ import java.util.stream.Collectors;
 
 public class Publisher implements MkvPlatformListener {
     private MkvLog myLog;
-    
+    private int logLevel;
     // Logging utility methods using ION MkvLog 
     // The ION log manager controls filtering externally
-    private void logError(String message) {
-        myLog.add(0, "[ERROR] " + message);  // Level 0 - Critical errors
-    }
-
-    private void logWarning(String message) {
-        myLog.add(0, "[WARNING] " + message);  // Level 0 - Important warnings
-    }
-
-    private void logInfo(String message) {
-        myLog.add(1, "[INFO] " + message);  // Level 1 - Operational info
-    }
-
-    private void logVerbose(String message) {
-        myLog.add(2, "[VERBOSE] " + message);  // Level 2 - Detailed processing
-    }
-
-    private void logDebug(String message) {
-        myLog.add(3, "[DEBUG] " + message);  // Level 3 - Debug information
+    private void logger(String message) {
+        switch (logLevel) {
+            case 0:
+                myLog.add("[ERROR] " + message);  // Level 0 - Critical errors
+                break;
+            case 1:
+                myLog.add("[WARNING] " + message);  // Level 1 - Important warnings
+                break;
+            case 2:
+                myLog.add("[INFO] " + message);  // Level 2 - Operational info
+                break;
+            case 3:
+                myLog.add("[VERBOSE] " + message);  // Level 3 - Detailed processing
+                break;
+            case 4:
+                myLog.add("[DEBUG] " + message);  // Level 4 - Debug information
+                break;
+        }
     }
 
     private static final String REDIS_KEY_SEPARATOR = ":";
@@ -179,13 +180,14 @@ public class Publisher implements MkvPlatformListener {
         try {
             // Start the engine and get back the instance of Mkv
             this.mkv = Mkv.start(qos);
-            
+            MkvProperties properties = mkv.getProperties();
+            logLevel = properties.getIntProperty("DEBUG");
             // Initialize the log after starting Mkv
             this.myLog = mkv.getLogManager().createLogFile("PUBLISHER");
 
         } catch (MkvException e) {
             if (myLog != null) {
-                logError("Failed to initialize publisher: " + e.getMessage());
+                logger("Failed to initialize publisher: " + e.getMessage());
             }
             throw new RuntimeException("Failed to initialize publisher", e);
         }
@@ -205,62 +207,62 @@ public class Publisher implements MkvPlatformListener {
                 try {
                     redisPort = Integer.parseInt(args[i + 1]);
                 } catch (NumberFormatException e) {
-                    logWarning("Invalid Redis port number, using default: " + DEFAULT_REDIS_PORT);
+                    logger("Invalid Redis port number, using default: " + DEFAULT_REDIS_PORT);
                 }
             }
         }
 
-        logInfo("Connecting to Redis at " + redisHost + ":" + redisPort);
+        logger("Connecting to Redis at " + redisHost + ":" + redisPort);
         JedisPoolConfig poolConfig = new JedisPoolConfig();
         this.jedisPool = new JedisPool(poolConfig, redisHost, redisPort);
         
         // Test Redis connection
         try (Jedis jedis = jedisPool.getResource()) {
             String pong = jedis.ping();
-            logInfo("Redis connection test successful: " + pong);
+            logger("Redis connection test successful: " + pong);
         } catch (Exception e) {
-            logError("Failed to connect to Redis: " + e.getMessage());
+            logger("Failed to connect to Redis: " + e.getMessage());
             throw new RuntimeException("Failed to connect to Redis", e);
         }
         
         try {
-            logInfo("=== Starting ION Publisher ===");
-            logVerbose("Initializing with args: " + Arrays.toString(args));
-            logVerbose("Created MkvQoS configuration");
-            logVerbose("Created processing queue and thread pool");
-            logInfo("MKV engine started successfully");
-            
+            logger("=== Starting ION Publisher ===");
+            logger("Initializing with args: " + Arrays.toString(args));
+            logger("Created MkvQoS configuration");
+            logger("Created processing queue and thread pool");
+            logger("MKV engine started successfully");
+
             // Start processor thread first
-            logVerbose("Starting processor thread...");
+            logger("Starting processor thread...");
             startProcessorThread();
             Thread.sleep(1000); // Give processor thread time to initialize
-            
-            logVerbose("Starting heartbeat...");
+
+            logger("Starting heartbeat...");
             startHeartbeat();
-            
-            logVerbose("Loading existing data from Redis...");
+
+            logger("Loading existing data from Redis...");
             loadExistingData();
 
             // Then start Redis subscriber
-            logVerbose("Starting Redis subscriber...");
+            logger("Starting Redis subscriber...");
             startRedisSubscriber();
-            
-            logInfo("=== Publisher initialization complete ===");
-            logInfo("Publisher components status:");
-            logInfo("- Redis Connection: ACTIVE");
-            logInfo("- MKV Engine: RUNNING");
-            logInfo("- Update Processor: PROCESSING");
-            logInfo("- Redis Subscriber: LISTENING");
-            logInfo("Schema/Record Statistics:");
-            logInfo("- Schemas loaded: " + schemasByPrefix.size());
-            logInfo("- Records active: " + recordsByFullId.size());
-            logInfo("- Queue size: " + updateQueue.size() + "/" + updateQueue.remainingCapacity());
-            logInfo("");
-            logInfo("Waiting for Redis messages on pattern: " + REDIS_CHANNEL_PATTERN);
+
+            logger("=== Publisher initialization complete ===");
+            logger("Publisher components status:");
+            logger("- Redis Connection: ACTIVE");
+            logger("- MKV Engine: RUNNING");
+            logger("- Update Processor: PROCESSING");
+            logger("- Redis Subscriber: LISTENING");
+            logger("Schema/Record Statistics:");
+            logger("- Schemas loaded: " + schemasByPrefix.size());
+            logger("- Records active: " + recordsByFullId.size());
+            logger("- Queue size: " + updateQueue.size() + "/" + updateQueue.remainingCapacity());
+            logger("");
+            logger("Waiting for Redis messages on pattern: " + REDIS_CHANNEL_PATTERN);
 
         } catch (InterruptedException e) {
             if (myLog != null) {
-                logError("Failed to initialize publisher: " + e.getMessage());
+                logger("Failed to initialize publisher: " + e.getMessage());
             }
             throw new RuntimeException("Failed to initialize publisher", e);
         }
@@ -277,8 +279,8 @@ public class Publisher implements MkvPlatformListener {
     @Override
     public void onMain(MkvPlatformEvent event) {
         if (event.intValue() == MkvPlatformEvent.SHUTDOWN_REQUEST_code) {
-            logInfo("Received shutdown request from MKV platform");
-            
+            logger("Received shutdown request from MKV platform");
+
             try {
                 // Do the shutdown work synchronously in this method
                 boolean isReady = shutdown();
@@ -286,15 +288,15 @@ public class Publisher implements MkvPlatformListener {
                 // Signal that we're completely done
                 Mkv.getInstance().shutdown(MkvShutdownMode.SYNC, 
                     "OrderManagement shutdown complete");
-                logInfo("Signaled SYNC shutdown to platform");
+                logger("Signaled SYNC shutdown to platform");
             } else {
                 // We need more time, request async and let platform retry
                 Mkv.getInstance().shutdown(MkvShutdownMode.ASYNC, 
                     "OrderManagement still processing...");
-                logWarning("Requested ASYNC shutdown - platform will retry");
+                logger("Requested ASYNC shutdown - platform will retry");
             }
             } catch (MkvException e) {
-                logError("Error during shutdown signaling: " + e.getMessage());
+                logger("Error during shutdown signaling: " + e.getMessage());
             }
         }
     }
@@ -305,7 +307,7 @@ public class Publisher implements MkvPlatformListener {
      */
     @Override
     public void onComponent(MkvComponent comp, boolean start) {
-        logVerbose("Component " + comp.getName() + " " + (start ? "started" : "stopped"));
+        logger("Component " + comp.getName() + " " + (start ? "started" : "stopped"));
     }
 
     /**
@@ -314,7 +316,7 @@ public class Publisher implements MkvPlatformListener {
      */
     @Override
     public void onConnect(String comp, boolean start) {
-        logVerbose("Connection to " + comp + " " + (start ? "established" : "lost"));
+        logger("Connection to " + comp + " " + (start ? "established" : "lost"));
     }
 
     /**
@@ -323,7 +325,7 @@ public class Publisher implements MkvPlatformListener {
     private RedisKeyInfo parseRedisKey(String channel) {
         String[] parts = channel.split(REDIS_KEY_SEPARATOR);
         if (parts.length < 4) {
-            logWarning("Invalid channel format (expected ASL:market:instrument:type): " + channel);
+            logger("Invalid channel format (expected ASL:market:instrument:type): " + channel);
             return null;
         }
         
@@ -331,12 +333,12 @@ public class Publisher implements MkvPlatformListener {
         String recordPrefix = "ALL." + parts[1] + "." + source + ".";
         String recordId = parts[2];
         String typeName = parts[3];
-        
-        logDebug("Parsed Redis key - Source: " + source + 
-                   ", Record Prefix: " + recordPrefix + 
-                   ", Record ID: " + recordId + 
-                   ", Type Name: " + typeName);
-                   
+
+        logger("Parsed Redis key - Source: " + source + 
+               ", Record Prefix: " + recordPrefix + 
+               ", Record ID: " + recordId + 
+               ", Type Name: " + typeName);
+
         return new RedisKeyInfo(source, recordPrefix, recordId, typeName);
     }
 
@@ -348,7 +350,7 @@ public class Publisher implements MkvPlatformListener {
         List<ParsedToken> tokens = parseMessage(message);  // Changed from parseCSV to parseMessage
         
         if (tokens.isEmpty() || tokens.size() % 2 != 0) {
-            logWarning("Message must have complete name-value pairs. Got " + tokens.size() + " tokens");
+            logger("Message must have complete name-value pairs. Got " + tokens.size() + " tokens");
             return updates;
         }
 
@@ -414,7 +416,7 @@ public class Publisher implements MkvPlatformListener {
             tokens.add(new ParsedToken(finalValue, wasQuoted));
         }
 
-        logDebug("Parsed tokens: " + tokens.stream()
+        logger("Parsed tokens: " + tokens.stream()
             .map(t -> String.format("%s(quoted=%s)", t.value, t.wasQuoted))
             .collect(Collectors.joining(", ")));
             
@@ -456,15 +458,15 @@ public class Publisher implements MkvPlatformListener {
         RedisKeyInfo keyInfo = parseRedisKey(channel);
         if (keyInfo == null) return;
 
-        logVerbose("Initializing schema for channel: " + channel);
-        logVerbose("Field values: " + fieldValues);
+        logger("Initializing schema for channel: " + channel);
+        logger("Field values: " + fieldValues);
 
         String fullRecordId = keyInfo.recordPrefix + keyInfo.recordId;
         SchemaInfo schema = schemasByPrefix.get(keyInfo.recordPrefix);
 
         synchronized (recordLock) {
             if (schema == null || !isSchemaCompatible(schema, fieldValues)) {
-                logVerbose("Creating new schema for " + keyInfo.recordPrefix);
+                logger("Creating new schema for " + keyInfo.recordPrefix);
                 schema = createAndPublishSchema(keyInfo, fieldValues);
                 if (schema == null) return;
             }
@@ -472,19 +474,19 @@ public class Publisher implements MkvPlatformListener {
             MkvRecord record = recordsByFullId.get(fullRecordId);
             if (record == null) {
                 try {
-                    logVerbose("Publishing new record " + fullRecordId);
+                    logger("Publishing new record " + fullRecordId);
                     record = publishNewRecord(fullRecordId, schema, fieldValues);
                     if (record.isValid()) {
                         recordsByFullId.put(fullRecordId, record);
-                        logInfo("Successfully published record " + fullRecordId);
+                        logger("Successfully published record " + fullRecordId);
                     } else {
-                        logWarning("Failed to publish valid record " + fullRecordId);
+                        logger("Failed to publish valid record " + fullRecordId);
                     }
                 } catch (Exception e) {
-                    logError("Error publishing record " + fullRecordId + ": " + e.getMessage());
+                    logger("Error publishing record " + fullRecordId + ": " + e.getMessage());
                 }
             } else {
-                logVerbose("Updating existing record " + fullRecordId);
+                logger("Updating existing record " + fullRecordId);
                 applyUpdates(record, fieldValues, schema);
             }
         }
@@ -496,7 +498,7 @@ public class Publisher implements MkvPlatformListener {
         
         for (String fieldName : newValues.keySet()) {
             if (!schemaFields.contains(fieldName)) {
-                logWarning("Schema missing field: " + fieldName);
+                logger("Schema missing field: " + fieldName);
                 return false;
             }
         }
@@ -512,7 +514,7 @@ public class Publisher implements MkvPlatformListener {
                 
                 if (existingType != newType && 
                     !(existingType == MkvFieldType.REAL && newType == MkvFieldType.INT)) {
-                    logWarning(String.format("Type mismatch for field %s: existing=%s, new=%s", 
+                    logger(String.format("Type mismatch for field %s: existing=%s, new=%s", 
                         fieldName, existingType, newType));
                     return false;
                 }
@@ -549,12 +551,12 @@ public class Publisher implements MkvPlatformListener {
             typeName = "T_" + typeName;
         }
 
-        logVerbose("Generated sanitized type name: " + typeName);
-        
+        logger("Generated sanitized type name: " + typeName);
+
         SchemaInfo schema = createSchemaInfo(updates);
         
         try {
-            logVerbose(String.format(
+            logger(String.format(
                 "Creating new schema - Type: %s, Prefix: %s\nFields: %s\nTypes: %s",
                 typeName, keyInfo.recordPrefix,
                 String.join(",", schema.fieldNames),
@@ -562,28 +564,28 @@ public class Publisher implements MkvPlatformListener {
             ));
 
             // Add detailed logging for type creation
-            logVerbose("Checking for existing type: " + typeName);
+            logger("Checking for existing type: " + typeName);
             MkvType existingType = mkv.getPublishManager().getMkvType(typeName);
             
             if (existingType == null || !existingType.isValid()) {
                 try {
-                    logVerbose("Creating new MkvType with fields:");
+                    logger("Creating new MkvType with fields:");
                     for (int i = 0; i < schema.fieldNames.length; i++) {
-                        logDebug(String.format("  Field[%d]: name='%s', type=%s", 
+                        logger(String.format("  Field[%d]: name='%s', type=%s",
                             i, schema.fieldNames[i], schema.fieldTypes[i]));
                     }
                     
                     MkvType type = new MkvType(typeName, schema.fieldNames, schema.fieldTypes);
-                    logVerbose("Publishing type: " + typeName);
+                    logger("Publishing type: " + typeName);
                     type.publish();
                     
                     if (!type.isValid()) {
                         throw new MkvException("Type was created but is not valid: " + typeName);
                     }
                     
-                    logInfo("Successfully published new type: " + typeName);
+                    logger("Successfully published new type: " + typeName);
                 } catch (MkvException e) {
-                    logError(String.format(
+                    logger(String.format(
                         "Failed to create/publish type %s: %s\nStack: %s", 
                         typeName, e.getMessage(),
                         Arrays.toString(e.getStackTrace())
@@ -591,7 +593,7 @@ public class Publisher implements MkvPlatformListener {
                     return null;
                 }
             } else {
-                logVerbose("Using existing valid type: " + typeName);
+                logger("Using existing valid type: " + typeName);
             }
 
             SchemaInfo newSchema = new SchemaInfo(
@@ -602,12 +604,12 @@ public class Publisher implements MkvPlatformListener {
             );
             
             schemasByPrefix.put(keyInfo.recordPrefix, newSchema);
-            logVerbose("Stored schema for prefix: " + keyInfo.recordPrefix);
-            
+            logger("Stored schema for prefix: " + keyInfo.recordPrefix);
+
             return newSchema;
             
         } catch (Exception e) {
-            logError(String.format(
+            logger(String.format(
                 "Failed to create schema for prefix %s: %s\nStack: %s",
                 keyInfo.recordPrefix, e.getMessage(),
                 Arrays.toString(e.getStackTrace())
@@ -620,63 +622,63 @@ public class Publisher implements MkvPlatformListener {
      * Start the processor thread - simplified to a single thread model
      */
     private void startProcessorThread() {
-        logInfo("=== Initializing Update Processor ===");
-        logVerbose("Max queue capacity: " + updateQueue.remainingCapacity());
-        
+        logger("=== Initializing Update Processor ===");
+        logger("Max queue capacity: " + updateQueue.remainingCapacity());
+
         processorPool.submit(() -> {
             Thread.currentThread().setName("MKV-Update-Processor");
-            logInfo("=== Processor Thread Started ===");
-            logVerbose("Thread name: " + Thread.currentThread().getName());
-            logVerbose("Priority: " + Thread.currentThread().getPriority());
-            logVerbose("Waiting for updates on queue...");
-            
+            logger("=== Processor Thread Started ===");
+            logger("Thread name: " + Thread.currentThread().getName());
+            logger("Priority: " + Thread.currentThread().getPriority());
+            logger("Waiting for updates on queue...");
+
             while (running.get()) {
                 try {
                     RecordUpdate update = updateQueue.poll(100, TimeUnit.MILLISECONDS);
                     if (update != null) {
-                        logDebug("=== Processing Update ===");
-                        logDebug("Channel: " + update.channel);
-                        logDebug("Record ID: " + update.recordId); 
-                        logDebug("Fields to update: " + update.updates.keySet());
-                        
+                        logger("=== Processing Update ===");
+                        logger("Channel: " + update.channel);
+                        logger("Record ID: " + update.recordId);
+                        logger("Fields to update: " + update.updates.keySet());
+
                         try {
                             initializeSchemaFromMessage(update.channel, update.updates);
-                            logDebug("=== Update Processing Complete ===");
+                            logger("=== Update Processing Complete ===");
                         } catch (Exception e) {
-                            logError("Error processing update for channel " + update.channel + 
+                            logger("Error processing update for channel " + update.channel + 
                                      "\nError: " + e.getMessage() + 
                                      "\nStack: " + Arrays.toString(e.getStackTrace()));
                         }
                     }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
-                    logInfo("Processor thread interrupted");
+                    logger("Processor thread interrupted");
                     break;
                 } catch (Exception e) {
-                    logError("Unexpected error in processor thread: " + e.getMessage());
+                    logger("Unexpected error in processor thread: " + e.getMessage());
                 }
             }
-            logInfo("=== Processor Thread Shutting Down ===");
+            logger("=== Processor Thread Shutting Down ===");
         });
-        
-        logVerbose("Processor thread submitted to execution pool");
-        logInfo("=== Update Processor Ready ===");
+
+        logger("Processor thread submitted to execution pool");
+        logger("=== Update Processor Ready ===");
     }
 
     private void loadExistingData() {
-        logInfo("=== Loading Existing Data From Redis ===");
+        logger("=== Loading Existing Data From Redis ===");
         try (Jedis jedis = jedisPool.getResource()) {
             // Find all matching keys for our pattern
             // We need to convert the pattern used for subscription to a key pattern
             // ASL:*:*:* channel pattern needs to become ASL:*:*:* key pattern
             Set<String> keys = jedis.keys("ASL:*:*:*");
-            logInfo("Found " + keys.size() + " existing keys in Redis");
-            
+            logger("Found " + keys.size() + " existing keys in Redis");
+
             // Process each key
             for (String key : keys) {
                 String value = jedis.get(key);
                 if (value != null) {
-                    logDebug("Processing existing key: " + key + " with value: " + value);
+                    logger("Processing existing key: " + key + " with value: " + value);
                     
                     // Use the same processing logic as for messages
                     RedisKeyInfo keyInfo = parseRedisKey(key);
@@ -685,16 +687,16 @@ public class Publisher implements MkvPlatformListener {
                         if (!updates.isEmpty()) {
                             // Process this directly (blocking) so it's guaranteed to finish before we subscribe
                             initializeSchemaFromMessage(key, updates);
-                            logDebug("Processed existing key: " + key);
+                            logger("Processed existing key: " + key);
                         }
                     }
                 }
             }
-            logInfo("=== Completed Loading Existing Data ===");
-            logInfo("Loaded " + recordsByFullId.size() + " records with " 
+            logger("=== Completed Loading Existing Data ===");
+            logger("Loaded " + recordsByFullId.size() + " records with " 
                     + schemasByPrefix.size() + " schemas");
         } catch (Exception e) {
-            logError("Error loading existing data: " + e.getMessage());
+            logger("Error loading existing data: " + e.getMessage());
         }
     }
 
@@ -708,20 +710,20 @@ public class Publisher implements MkvPlatformListener {
     
     private void startRedisSubscriber() {
         try {
-            logInfo("=== Starting Redis Subscriber ==="); 
-            logVerbose("Creating Redis subscriber connection");
+            logger("=== Starting Redis Subscriber ===");
+            logger("Creating Redis subscriber connection");
             Jedis subscriberJedis = jedisPool.getResource();
             
             // Add connection status check
             String response = subscriberJedis.ping();
-            logVerbose("Subscriber connection test: " + response);
-            logInfo("Subscribing to channel pattern: " + REDIS_CHANNEL_PATTERN);
+            logger("Subscriber connection test: " + response);
+            logger("Subscribing to channel pattern: " + REDIS_CHANNEL_PATTERN);
 
             subscriberJedis.psubscribe(new JedisPubSub() {
                 public void onPSubscribe(String pattern, int subscribedChannels) {
-                    logInfo("=== Redis Pattern Subscription Active ===");
-                    logVerbose("Subscribed to pattern: " + pattern);
-                    logVerbose("Total subscribed channels: " + subscribedChannels);
+                    logger("=== Redis Pattern Subscription Active ===");
+                    logger("Subscribed to pattern: " + pattern);
+                    logger("Total subscribed channels: " + subscribedChannels);
                 }
                 
                 public void onPMessage(String pattern, String channel, String message) {
@@ -730,21 +732,21 @@ public class Publisher implements MkvPlatformListener {
                     queueHighWaterMark.updateAndGet(curr -> Math.max(curr, queueSize));
                     
                     if (queueSize >= MAX_QUEUE_SIZE) {
-                        logWarning("Queue full! Dropping message for channel: " + channel);
+                        logger("Queue full! Dropping message for channel: " + channel);
                         return;
                     }
                     
                     if (queueSize >= QUEUE_WARN_THRESHOLD) {
-                        logWarning("Queue size warning: " + queueSize + " messages pending");
+                        logger("Queue size warning: " + queueSize + " messages pending");
                     }
 
                     // Track message stats
                     messageCount.incrementAndGet();
-                    
-                    logDebug("=== Redis Message Received ===");
-                    logDebug("Pattern: " + pattern);
-                    logDebug("Channel: " + channel);
-                    logDebug("Message: " + message);
+                    schemaHits.incrementAndGet(); // Increment by 1 for each message
+                    logger("=== Redis Message Received ===");
+                    logger("Pattern: " + pattern);
+                    logger("Channel: " + channel);
+                    logger("Message: " + message);
 
                     // Process message since it matched our pattern
                     RedisKeyInfo keyInfo = parseRedisKey(channel);
@@ -753,7 +755,7 @@ public class Publisher implements MkvPlatformListener {
                         if (!updates.isEmpty()) {
                             // Pass full channel info to processor
                             updateQueue.offer(new RecordUpdate(channel, keyInfo.recordId, updates));
-                            logDebug("Queued update for processing - Channel: " + channel + ", Record: " + keyInfo.recordId);
+                            logger("Queued update for processing - Channel: " + channel + ", Record: " + keyInfo.recordId);
                         }
                     }
                 }
@@ -761,7 +763,7 @@ public class Publisher implements MkvPlatformListener {
             
             // Add monitoring thread
             monitor.scheduleAtFixedRate(() -> {
-                logVerbose(String.format(
+                logger(String.format(
                     "Stats - Messages: %d, Queue: %d/%d (max: %d), Schema Cache: %d hits/%d misses",
                     messageCount.get(),
                     updateQueue.size(), updateQueue.remainingCapacity(),
@@ -770,9 +772,9 @@ public class Publisher implements MkvPlatformListener {
                 ));
             }, 60, 60, TimeUnit.SECONDS);
 
-            logInfo("Redis subscriber started successfully");
+            logger("Redis subscriber started successfully");
         } catch (Exception e) {
-            logError("Failed to start Redis subscriber: " + e.getMessage());
+            logger("Failed to start Redis subscriber: " + e.getMessage());
             throw new RuntimeException("Failed to start Redis subscriber", e);
         }
     }
@@ -785,12 +787,12 @@ public class Publisher implements MkvPlatformListener {
         if (!type.isValid()) {
             throw new MkvException("Failed to publish type " + typeName);
         }
-        logInfo("Published new type " + typeName + " with fields: " + String.join(",", schema.fieldNames));
+        logger("Published new type " + typeName + " with fields: " + String.join(",", schema.fieldNames));
     }
 
     private MkvRecord publishNewRecord(String fullRecordId, SchemaInfo schema, Map<String, Object> values) throws MkvException {
         try {
-            logVerbose("Publishing record: " + fullRecordId + " with type: " + schema.typeName);
+            logger("Publishing record: " + fullRecordId + " with type: " + schema.typeName);
             
             MkvRecord record = new MkvRecord(fullRecordId, schema.typeName);
             record.publish();
@@ -805,7 +807,7 @@ public class Publisher implements MkvPlatformListener {
                 Integer fieldIndex = schema.fieldIndexMap.get(entry.getKey());
                 if (fieldIndex != null) {
                     Object convertedValue = convertValueToType(entry.getValue(), schema.fieldTypes[fieldIndex]);
-                    logDebug(String.format("Setting field %s[%d] = '%s' (%s)", 
+                    logger(String.format("Setting field %s[%d] = '%s' (%s)", 
                         entry.getKey(), fieldIndex, convertedValue, schema.fieldTypes[fieldIndex]));
                         
                     // Ensure primitive types are handled correctly
@@ -827,11 +829,11 @@ public class Publisher implements MkvPlatformListener {
                 throw new MkvException("Record invalid after supply: " + fullRecordId);
             }
 
-            logVerbose("Successfully published record: " + fullRecordId);
+            logger("Successfully published record: " + fullRecordId);
             return record;
             
         } catch (Exception e) {
-            logError("Failed to publish record " + fullRecordId + ": " + e.getMessage());
+            logger("Failed to publish record " + fullRecordId + ": " + e.getMessage());
             throw new MkvException("Record publication failed", e);
         }
     }
@@ -840,7 +842,7 @@ public class Publisher implements MkvPlatformListener {
         if (value == null) return MkvFieldType.STR;
 
         if (!(value instanceof ParsedToken)) {
-            logWarning("Value not wrapped in ParsedToken: " + value);
+            logger("Value not wrapped in ParsedToken: " + value);
             return MkvFieldType.STR;
         }
 
@@ -867,7 +869,7 @@ public class Publisher implements MkvPlatformListener {
         if (value == null) return null;
 
         if (!(value instanceof ParsedToken)) {
-            logWarning("Value not wrapped in ParsedToken, treating as string: " + value);
+            logger("Value not wrapped in ParsedToken, treating as string: " + value);
             return value.toString();
         }
 
@@ -886,7 +888,7 @@ public class Publisher implements MkvPlatformListener {
             }
             return token.value;
         } catch (Exception e) {
-            logWarning("Conversion failed for " + token.value + " to " + type);
+            logger("Conversion failed for " + token.value + " to " + type);
             return token.value;
         }
     }
@@ -913,7 +915,7 @@ public class Publisher implements MkvPlatformListener {
                 record.supply(builder.getSupply());
             }
         } catch (Exception e) {
-            logError("Failed to apply updates to record: " + record.getName());
+            logger("Failed to apply updates to record: " + record.getName());
         }
     }
 
@@ -938,17 +940,17 @@ public class Publisher implements MkvPlatformListener {
                 );
 
                 jedis.publish(HEARTBEAT_CHANNEL, heartbeatMessage);
-                logDebug("Sent heartbeat: " + heartbeatMessage);
+                logger("Sent heartbeat: " + heartbeatMessage);
             } catch (Exception e) {
-                logWarning("Failed to send heartbeat: " + e.getMessage());
+                logger("Failed to send heartbeat: " + e.getMessage());
             }
         }, 0, HEARTBEAT_INTERVAL_SECONDS, TimeUnit.SECONDS);
-        
-        logInfo("Heartbeat started on channel: " + HEARTBEAT_CHANNEL);
+
+        logger("Heartbeat started on channel: " + HEARTBEAT_CHANNEL);
     }
 
     public boolean shutdown() {
-        logInfo("Shutting down publisher");
+        logger("Shutting down publisher");
         running.set(false);
         
         // Shutdown heartbeat executor
@@ -984,13 +986,13 @@ public class Publisher implements MkvPlatformListener {
         }
         
         // Log final stats
-        logInfo(String.format(
+        logger(String.format(
             "Final Stats - Messages Processed: %d, Max Queue Size: %d, Schema Cache Hits/Misses: %d/%d",
             messageCount.get(), queueHighWaterMark.get(),
             schemaHits.get(), schemaMisses.get()
         ));
         
-        logInfo("Publisher shutdown complete");
+        logger("Publisher shutdown complete");
         return true;
     }
 }
