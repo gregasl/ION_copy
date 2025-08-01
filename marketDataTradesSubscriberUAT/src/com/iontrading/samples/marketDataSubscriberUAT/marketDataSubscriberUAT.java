@@ -7,6 +7,7 @@ import com.iontrading.mkv.events.MkvPlatformListener;
 import com.iontrading.mkv.events.MkvPublishListener;
 import com.iontrading.mkv.events.MkvRecordListener;
 import com.iontrading.mkv.exceptions.MkvException;
+import com.iontrading.mkv.enums.MkvShutdownMode;
 import com.iontrading.mkv.qos.MkvQoS;
 
 import redis.clients.jedis.Jedis;
@@ -16,146 +17,44 @@ import redis.clients.jedis.exceptions.JedisConnectionException;
 import java.util.concurrent.atomic.AtomicReference;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import java.time.Instant;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.concurrent.*;
 import java.util.HashMap;
 import java.util.List;
-import java.util.logging.*;
 import java.util.Map;
-import java.io.IOException;
 
-import java.time.LocalTime;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 
-public class marketDataSubscriberUAT {
+public class marketDataSubscriberUAT  implements MkvPlatformListener {
+    private MkvLog myLog;
+
+    // Logging utility methods using ION MkvLog 
+    // The ION log manager controls filtering externally
+    private void logError(String message) {
+        myLog.add(0, "[ERROR] " + message);  // Level 0 - Critical errors
+    }
+
+    private void logWarning(String message) {
+        myLog.add(0, "[WARNING] " + message);  // Level 0 - Important warnings
+    }
+
+    private void logInfo(String message) {
+        myLog.add(1, "[INFO] " + message);  // Level 1 - Operational info
+    }
+
+    private void logVerbose(String message) {
+        myLog.add(2, "[VERBOSE] " + message);  // Level 2 - Detailed processing
+    }
+
+    private void logDebug(String message) {
+        myLog.add(3, "[DEBUG] " + message);  // Level 3 - Debug information
+    }
+
     // Static logger configuration
-    private static final Logger LOGGER = Logger.getLogger(marketDataSubscriberUAT.class.getName());
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     public final String hostname = System.getenv("COMPUTERNAME");
-    
-    // Static block for logging setup with async handler
-    static {
-        try {
-            // Create an async logger with a separate thread
-            AsyncHandler asyncHandler = new AsyncHandler(500000); // Queue size of 10000 logs
-            
-            // Create a file handler and attach to async handler
-            FileHandler fileHandler = new FileHandler("subscriber.log", true);
-            fileHandler.setFormatter(new SimpleFormatter());
-            asyncHandler.setHandler(fileHandler);
-            
-            // Set async handler to the logger
-            LOGGER.addHandler(asyncHandler);
-            
-            // Set the logger level
-            LOGGER.setLevel(Level.INFO);
-            
-            LOGGER.info("Async logging initialized");
-        } catch (IOException e) {
-            System.err.println("Error setting up file logging: " + e.getMessage());
-        }
-    }
-    
-    // Custom AsyncHandler implementation for asynchronous logging
-    static class AsyncHandler extends Handler {
-        private final BlockingQueue<LogRecord> queue;
-        private Handler handler;
-        private final Thread worker;
-        private volatile boolean isRunning = true;
-
-        public AsyncHandler(int queueSize) {
-            this.queue = new LinkedBlockingQueue<>(queueSize);
-            
-            worker = new Thread(() -> {
-                while (isRunning) {
-                    try {
-                        LogRecord record = queue.poll(20, TimeUnit.MILLISECONDS);
-                        if (record != null && handler != null) {
-                            handler.publish(record);
-                        }
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        break;
-                    } catch (Exception e) {
-                        // Prevent the worker from dying due to unexpected exceptions
-                        System.err.println("Error in async logger: " + e.getMessage());
-                    }
-                }
-                // Flush remaining records
-                flush();
-            });
-            
-            worker.setDaemon(true);
-            worker.setName("AsyncLogger-Worker");
-            worker.start();
-        }
-
-        public void setHandler(Handler handler) {
-            this.handler = handler;
-            if (handler != null) {
-                handler.setErrorManager(new ErrorManager());
-            }
-        }
-
-        @Override
-        public void publish(LogRecord record) {
-            if (!isLoggable(record)) {
-                return;
-            }
-            
-            try {
-                // Wait up to 100ms to add to queue
-                boolean added = queue.offer(record, 100, TimeUnit.MILLISECONDS);
-                if (!added) {
-                    // Log to stderr when queue is full
-                    System.err.println("Async logger queue full, dropping log record");
-                }
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-        }
-
-        @Override
-        public void flush() {
-            if (handler != null) {
-                handler.flush();
-            }
-        }
-
-        @Override
-        public void close() throws SecurityException {
-            isRunning = false;
-            worker.interrupt(); // Interrupt to break out of blocking queue poll
-            try {
-                worker.join(5000); // Wait up to 5 seconds for worker to finish
-                if (worker.isAlive()) {
-                    LOGGER.warning("AsyncHandler worker thread did not terminate within timeout");
-                }
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                LOGGER.warning("Interrupted while waiting for AsyncHandler worker to terminate");
-            }
-            
-            // Drain remaining items if any and process them
-            List<LogRecord> remainingLogs = new ArrayList<>();
-            queue.drainTo(remainingLogs);
-            if (!remainingLogs.isEmpty() && handler != null) {
-                LOGGER.info("Processing " + remainingLogs.size() + " remaining log records");
-                for (LogRecord record : remainingLogs) {
-                    handler.publish(record);
-                }
-            }
-            
-            if (handler != null) {
-                handler.flush();
-                handler.close();
-            }
-        }
-    }
     
     // Configuration constants
     private static final String SOURCE = "VMO_REPO_US";
@@ -178,13 +77,14 @@ public class marketDataSubscriberUAT {
     private static final int PRICE_MINE = 0x0020;  // Price belongs to the bank
     
     private volatile long lastUpdateTimestamp = System.currentTimeMillis();
-    private final ScheduledExecutorService shutdownScheduler = Executors.newScheduledThreadPool(1);
-    
+    private Mkv mkv;
+
+
     // Add a latch to keep main thread alive
     private final CountDownLatch terminationLatch = new CountDownLatch(1);
     
     // Concurrent data structures
-    private Map<String, Object> marketData = new HashMap<>();
+    private Map<String, Object> marketData = new ConcurrentHashMap<>();
 
     // Fields for subscription
     private String[] fields = new String[]{
@@ -251,16 +151,22 @@ public class marketDataSubscriberUAT {
     
     // Constructor
     public marketDataSubscriberUAT(String[] args) {
-        initializeMarketData();
-        publishExecutor = createExecutorService("Redis-Publisher");
-        processingExecutor = createExecutorService("MKV-Processor");
+        try {
+            initializeMarketData();
+            publishExecutor = createExecutorService("Redis-Publisher");
+            processingExecutor = createExecutorService("MKV-Processor");
 
-        initializeRedisConnection();
-        initializeMkvConnection(args);
+            initializeMkvConnection(args);
+            initializeRedisConnection();
 
-        Runtime.getRuntime().addShutdownHook(new Thread(this::shutdown));
+            Runtime.getRuntime().addShutdownHook(new Thread(this::shutdown));
+        } catch (Exception e) {
+                // Cleanup partial initialization
+                if (jedisPool != null) jedisPool.close();
+                if (heartbeatScheduler != null) heartbeatScheduler.shutdown();
+                throw new RuntimeException("Failed to initialize subscriber", e);
+        }
     }
-
     
     // Create executor service with named threads
     private ExecutorService createExecutorService(String threadNamePrefix) {
@@ -295,13 +201,13 @@ public class marketDataSubscriberUAT {
                 try (Jedis testJedis = jedisPool.getResource()) {
                     testJedis.clientSetname(hostname + ":marketDataSubscriberUAT");
                     isRedisConnected.set(true);
-                    LOGGER.info("Connected to Redis at " + REDIS_HOST + ":" + REDIS_PORT + " using JedisPool");
-                    
+                    logInfo("Connected to Redis at " + REDIS_HOST + ":" + REDIS_PORT + " using JedisPool");
+
                     // Start heartbeat after successful connection
                     startHeartbeat();
                 }
             } catch (Exception e) {
-                LOGGER.log(Level.SEVERE, "Error connecting to Redis", e);
+                logError("Error connecting to Redis: " + e.getMessage());
                 throw new RuntimeException("Redis connection failed", e);
             }
         }
@@ -321,8 +227,8 @@ public class marketDataSubscriberUAT {
                     sendHeartbeat();
                 }
             }, 0, HEARTBEAT_INTERVAL_SECONDS, TimeUnit.SECONDS);
-            
-            LOGGER.info("Redis heartbeat scheduled every " + HEARTBEAT_INTERVAL_SECONDS + " seconds");
+
+            logInfo("Redis heartbeat scheduled every " + HEARTBEAT_INTERVAL_SECONDS + " seconds");
         }
     }
 
@@ -330,13 +236,16 @@ public class marketDataSubscriberUAT {
     private void initializeMkvConnection(String[] args) {
         MkvQoS qos = new MkvQoS();
         qos.setArgs(args);
-        qos.setPlatformListeners(new MkvPlatformListener[] { new PlatformListener() });
+        qos.setPlatformListeners(new MkvPlatformListener[] { this });
 
         try {
-            Mkv.start(qos);
-            LOGGER.info("MKV connection initialized.");
+            mkv = Mkv.start(qos);
+            // Initialize the log after starting Mkv
+            myLog = mkv.getLogManager().createLogFile("MARKET_DATA");
+            logInfo("MKV connection established successfully");
+
         } catch (MkvException e) {
-            LOGGER.log(Level.SEVERE, "MKV connection failed", e);
+            logError("MKV connection failed: " + e.getMessage());
             throw new RuntimeException("MKV initialization failed", e);
         }
     }
@@ -365,16 +274,16 @@ public class marketDataSubscriberUAT {
             jedis.setex(key, EXPIRY_SECONDS, jsonPayload);
             jedis.publish(key, jsonPayload);
 
-            // LOGGER.info("Published data to Redis - Key: " + key);
+            // logInfo("Published data to Redis - Key: " + key);
         } catch (JedisConnectionException jce) {
-            LOGGER.log(Level.SEVERE, "Redis connection lost, attempting to reconnect", jce);
+            logError("Redis connection lost, attempting to reconnect: " + jce.getMessage());
             try {
                 initializeRedisConnection();
             } catch (Exception e) {
-                LOGGER.log(Level.SEVERE, "Failed to reconnect to Redis", e);
+                logError("Failed to reconnect to Redis: " + e.getMessage());
             }
         } catch (Exception e) {
-            LOGGER.log(Level.SEVERE, "Error publishing to Redis", e);
+            logError("Error publishing to Redis: " + e.getMessage());
         }
     }
     
@@ -439,9 +348,9 @@ public class marketDataSubscriberUAT {
 
                             }
                         } catch (NumberFormatException e) {
-                            LOGGER.log(Level.SEVERE, "Error parsing attribute index from field: " + fieldName, e);
+                            logError("Error parsing attribute index from field: " + fieldName + " - " + e.getMessage());
                         } catch (Exception e) {
-                            LOGGER.log(Level.SEVERE, "Error processing attribute field: " + fieldName, e);
+                            logError("Error processing attribute field: " + fieldName + " - " + e.getMessage());
                         }
                     }
                     // Regular way updates
@@ -456,7 +365,7 @@ public class marketDataSubscriberUAT {
                 publishToRedis(key, recordName, recordData);
 
             } catch (Exception e) {
-                LOGGER.log(Level.SEVERE, "Error processing market data update", e);
+                logError("Error processing market data update: " + e.getMessage());
             }
         }
     }
@@ -497,7 +406,7 @@ public class marketDataSubscriberUAT {
                 publishToRedis(key, recordName, recordData);
 
             } catch (Exception e) {
-                LOGGER.log(Level.SEVERE, "Error processing instrument data update", e);
+                logError("Error processing instrument data update: " + e.getMessage());
             }
         }
     }
@@ -538,7 +447,7 @@ public class marketDataSubscriberUAT {
                 publishToRedis(key, recordName, recordData);
 
             } catch (Exception e) {
-                LOGGER.log(Level.SEVERE, "Error processing trade data update", e);
+                logError("Error processing trade data update: " + e.getMessage());
             }
         }
     }
@@ -579,7 +488,7 @@ public class marketDataSubscriberUAT {
                 publishToRedis(key, recordName, recordData);
 
             } catch (Exception e) {
-                LOGGER.log(Level.SEVERE, "Error processing trade data update", e);
+                logError("Error processing trade data update: " + e.getMessage());
             }
         }
     }
@@ -620,23 +529,11 @@ public class marketDataSubscriberUAT {
                 publishToRedis(key, recordName, recordData);
 
             } catch (Exception e) {
-                LOGGER.log(Level.SEVERE, "Error processing trade data update", e);
+                logError("Error processing trade data update: " + e.getMessage());
             }
         }
     }
-
-    // Platform Listener inner class
-    private class PlatformListener implements MkvPlatformListener {
-        public void onComponent(MkvComponent component, boolean start) {}
-        public void onConnect(String component, boolean start) {}
-
-        public void onMain(MkvPlatformEvent event) {
-            if (event.equals(MkvPlatformEvent.START)) {
-                Mkv.getInstance().getPublishManager().addPublishListener(new PublishListener());
-            }
-        }
-    }
-
+    
     // Publish Listener inner class
     private class PublishListener implements MkvPublishListener {
         private final MkvRecordListener dataListener = new DataListener();
@@ -657,9 +554,9 @@ public class marketDataSubscriberUAT {
                     try {
                         pattern.subscribe(fields, dataListener);
                         isDepthSubscribed = true;
-                        LOGGER.info("Subscribed to market depth pattern: " + pattern.getName());
+                        logInfo("Subscribed to market depth pattern: " + pattern.getName());
                     } catch (Exception e) {
-                        LOGGER.log(Level.SEVERE, "Error subscribing to market depth data", e);
+                        logError("Error subscribing to market depth data: " + e.getMessage());
                         isDepthSubscribed = false;
                     }
                 }
@@ -668,9 +565,9 @@ public class marketDataSubscriberUAT {
                     try {
                         pattern.subscribe(fieldsTrade, tradeListener);
                         isTradeSubscribed = true;
-                        LOGGER.info("Subscribed to trade pattern: " + pattern.getName());
+                        logInfo("Subscribed to trade pattern: " + pattern.getName());
                     } catch (Exception e) {
-                        LOGGER.log(Level.SEVERE, "Error subscribing to trade data", e);
+                        logError("Error subscribing to trade data: " + e.getMessage());
                         isTradeSubscribed = false;
                     }
                 }
@@ -679,9 +576,9 @@ public class marketDataSubscriberUAT {
                     try {
                         pattern.subscribe(fieldsInstrument, instrumentListener);
                         isInstrumentSubscribed = true;
-                        LOGGER.info("Subscribed to instrument pattern: " + pattern.getName());
+                        logInfo("Subscribed to instrument pattern: " + pattern.getName());
                     } catch (Exception e) {
-                        LOGGER.log(Level.SEVERE, "Error subscribing to instrument data", e);
+                        logError("Error subscribing to instrument data: " + e.getMessage());
                         isInstrumentSubscribed = false;
                     }
                 }
@@ -690,9 +587,9 @@ public class marketDataSubscriberUAT {
                     try {
                         pattern.subscribe(fieldsOrder, orderListener);
                         isOrderSubscribed = true;
-                        LOGGER.info("Subscribed to order pattern: " + pattern.getName());
+                        logInfo("Subscribed to order pattern: " + pattern.getName());
                     } catch (Exception e) {
-                        LOGGER.log(Level.SEVERE, "Error subscribing to order data", e);
+                        logError("Error subscribing to order data: " + e.getMessage());
                         isOrderSubscribed = false;
                     }
                 }
@@ -701,9 +598,9 @@ public class marketDataSubscriberUAT {
                     try {
                         pattern.subscribe(fieldsRefPrice, referencePriceListener);
                         isReferencePriceSubscribed = true;
-                        LOGGER.info("Subscribed to reference price pattern: " + pattern.getName());
+                        logInfo("Subscribed to reference price pattern: " + pattern.getName());
                     } catch (Exception e) {
-                        LOGGER.log(Level.SEVERE, "Error subscribing to reference price data", e);
+                        logError("Error subscribing to reference price data: " + e.getMessage());
                         isReferencePriceSubscribed = false;
                     }
                 }
@@ -755,11 +652,11 @@ public class marketDataSubscriberUAT {
     }
     
     // Shutdown method
-    private void shutdown() {
-        if (!running) return; // Prevent multiple shutdown calls
+    private boolean shutdown() {
+        if (!running) return true; // Prevent multiple shutdown calls
         running = false;
 
-        LOGGER.info("Shutting down market data subscriber...");
+        logInfo("Shutting down market data subscriber...");
         try {
             // Send final heartbeat with stopped status if still connected
             if (isRedisConnected.get()) {
@@ -772,27 +669,25 @@ public class marketDataSubscriberUAT {
                     
                     String jsonPayload = OBJECT_MAPPER.writeValueAsString(heartbeatData);
                     jedis.publish(HEARTBEAT_CHANNEL, jsonPayload);
-                    LOGGER.info("Final heartbeat sent with STOPPING status");
+                    logInfo("Final heartbeat sent with STOPPING status");
                 } catch (Exception e) {
-                    LOGGER.log(Level.WARNING, "Failed to send final heartbeat", e);
+                    logWarning("Failed to send final heartbeat: " + e.getMessage());
+                    return false;
                 }
             }
             
             // Stop heartbeat scheduler
             if (heartbeatScheduler != null) {
                 heartbeatScheduler.shutdownNow();
-                LOGGER.info("Heartbeat scheduler terminated");
+                logInfo("Heartbeat scheduler terminated");
             }
             
             // Close JedisPool
             if (jedisPool != null) {
                 jedisPool.close();
-                LOGGER.info("Redis connection pool closed");
+                logInfo("Redis connection pool closed");
             }
-            
-            shutdownScheduler.shutdownNow();
-            LOGGER.info("Shutdown scheduler terminated");
-            
+
             // Rest of the shutdown code remains the same...
             publishExecutor.shutdown();
             processingExecutor.shutdown();
@@ -804,59 +699,87 @@ public class marketDataSubscriberUAT {
                 if (!processingExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
                     processingExecutor.shutdownNow();
                 }
-                LOGGER.info("Executor services terminated");
+                logInfo("Executor services terminated");
             } catch (InterruptedException e) {
                 publishExecutor.shutdownNow();
                 processingExecutor.shutdownNow();
                 Thread.currentThread().interrupt();
-                LOGGER.warning("Executor service shutdown interrupted");
+                logWarning("Executor service shutdown interrupted");
+                return false;
             }
             
             Mkv.stop();
-            LOGGER.info("MKV connection stopped");
-            
-            // Close logging handlers to ensure all logs are flushed
-            for (Handler handler : LOGGER.getHandlers()) {
-                handler.flush();
-                handler.close();
-            }
+            logInfo("MKV connection stopped");
             
             // Release the latch to allow main thread to exit
             terminationLatch.countDown();
-            
-            LOGGER.info("Shutdown complete.");
+
+            logInfo("Shutdown complete.");
         } catch (Exception e) {
-            LOGGER.log(Level.SEVERE, "Error during shutdown", e);
+            logError("Error during shutdown: " + e.getMessage());
+            return false;
         }
+        return true;
     }
-    
-    // Method to wait for shutdown signal
-    public void waitForTermination() {
-        try {
-            terminationLatch.await();
-        } catch (InterruptedException e) {
-            LOGGER.log(Level.WARNING, "Termination wait interrupted", e);
-            Thread.currentThread().interrupt();
-        }
-    }
+
 
     // Main method
     public static void main(String[] args) {
-        LOGGER.info("Starting Market Data Subscriber UAT application");
-        LOGGER.info("Current time: " + LocalDateTime.now());
-        
         try {
-            
             marketDataSubscriberUAT subscriber = new marketDataSubscriberUAT(args);
-            
-            // Keep the application running until shutdown is triggered
-            subscriber.waitForTermination();
-            
-            LOGGER.info("Application exiting normally");
         } catch (Exception e) {
-            LOGGER.log(Level.SEVERE, "Fatal error in application", e);
             System.exit(1);
         }
+    }
+
+    /**
+     * Implements the MkvPlatformListener.onMain method to handle platform events.
+     * This is where we'll handle the shutdown request from the daemon.
+     */
+    @Override
+    public void onMain(MkvPlatformEvent event) {
+        if (event.equals(MkvPlatformEvent.START)) {
+            Mkv.getInstance().getPublishManager().addPublishListener(new PublishListener());
+            logInfo("PublishListener registered successfully");
+        } else if (event.intValue() == MkvPlatformEvent.SHUTDOWN_REQUEST_code) {
+            logInfo("Received shutdown request from MKV platform");
+            
+            try {
+                // Do the shutdown work synchronously in this method
+                boolean isReady = shutdown();
+            if (isReady) {
+                // Signal that we're completely done
+                Mkv.getInstance().shutdown(MkvShutdownMode.SYNC, 
+                    "MarketDataSubscriber shutdown complete");
+                logInfo("Signaled SYNC shutdown to platform");
+            } else {
+                // We need more time, request async and let platform retry
+                Mkv.getInstance().shutdown(MkvShutdownMode.ASYNC, 
+                    "MarketDataSubscriber still processing...");
+                logWarning("Requested ASYNC shutdown - platform will retry");
+            }
+            } catch (MkvException e) {
+                logError("Error during shutdown signaling: " + e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * Implements the MkvPlatformListener.onComponent method.
+     * This is called when component state changes.
+     */
+    @Override
+    public void onComponent(MkvComponent comp, boolean start) {
+        logVerbose("Component " + comp.getName() + " " + (start ? "started" : "stopped"));
+    }
+
+    /**
+     * Implements the MkvPlatformListener.onConnect method.
+     * This is called when the connection state changes.
+     */
+    @Override
+    public void onConnect(String comp, boolean start) {
+        logVerbose("Connection to " + comp + " " + (start ? "established" : "lost"));
     }
 
     private void sendHeartbeat() {
@@ -871,9 +794,9 @@ public class marketDataSubscriberUAT {
             String jsonPayload = OBJECT_MAPPER.writeValueAsString(heartbeatData);
             jedis.publish(HEARTBEAT_CHANNEL, jsonPayload);
 
-            // LOGGER.fine("Heartbeat sent to Redis");
+            // logFine("Heartbeat sent to Redis");
         } catch (Exception e) {
-            LOGGER.log(Level.WARNING, "Failed to send heartbeat", e);
+            logWarning("Failed to send heartbeat: " + e.getMessage());
             isRedisConnected.set(false);
             
             // Try to reconnect
@@ -882,7 +805,7 @@ public class marketDataSubscriberUAT {
                     initializeRedisConnection();
                 }
             } catch (Exception reconnectEx) {
-                LOGGER.log(Level.SEVERE, "Failed to reconnect to Redis during heartbeat", reconnectEx);
+                logError("Failed to reconnect to Redis during heartbeat: " + reconnectEx.getMessage());
             }
         }
     }
