@@ -50,17 +50,34 @@ import com.iontrading.mkv.helper.MkvSupplyFactory;
  * Implements both MkvFunctionCallListener (to receive the response to order creation)
  * and MkvRecordListener (to receive ongoing updates about the order's state)
  */
-public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener {
+public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener extends OrderManagement {
   
+  private void logger(String message) {
+      switch (logLevel) {
+          case 0:
+              myLog.add("[ERROR] " + message);  // Level 0 - Critical errors
+              break;
+          case 1:
+              myLog.add("[WARNING] " + message);  // Level 1 - Important warnings
+              break;
+          case 2:
+              myLog.add("[INFO] " + message);  // Level 2 - Operational info
+              break;
+          case 3:
+              myLog.add("[VERBOSE] " + message);  // Level 3 - Detailed processing
+              break;
+          case 4:
+              myLog.add("[DEBUG] " + message);  // Level 4 - Debug information
+              break;
+      }
+  }
+
   private static String marketSource;
 	
   /**
    * Timestamp when the order was created (in milliseconds since epoch)
    */
   private final long creationTimestamp;
-
-  // Add logger for debugging
-  private static final Logger LOGGER = LoggerFactory.getLogger(MarketOrder.class.getName());
   
   /**
    * An id that should be unique during the life of the component.
@@ -91,9 +108,7 @@ public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener {
     reqId++;
     
     // Log the order creation attempt
-    if (LOGGER.isInfoEnabled()) {
-      LOGGER.info("Creating order request #{} for {} {} @ {}", reqId, verb, instrId, qty, price);
-    }
+    logger("Creating order request #" + reqId + " for " + verb + " " + instrId + " @ " + qty + ", " + price);
 
     // Get the publish manager to access functions
     MkvPublishManager pm = Mkv.getInstance().getPublishManager();
