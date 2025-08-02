@@ -1,7 +1,8 @@
 package com.iontrading.automatedMarketMaking;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.iontrading.mkv.Mkv;
+import com.iontrading.mkv.MkvLog;
+
 import java.util.function.Function;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -17,7 +18,8 @@ import java.util.List;
  * across OrderManagement and MarketMaker components.
  */
 public class ActiveQuote {
-    private static final Logger LOGGER = LoggerFactory.getLogger(ActiveQuote.class);
+    private static MkvLog log = Mkv.getInstance().getLogManager().getLogFile("MarketMaker");
+    private static IONLogger logger = new IONLogger(log, 2, "ActiveQuote");
 
     // Thread safety mechanism
     private final Object lock = new Object();
@@ -304,7 +306,7 @@ public class ActiveQuote {
                 updateOrderHistory(bidOrder.getOrderId(), status);
                 
                 if (!isActive) {
-                    LOGGER.info("Bid for {} deactivated by status change", id);
+                    logger.info("Bid for "+id+" deactivated by status change");
                 }
             }
         }
@@ -328,7 +330,7 @@ public class ActiveQuote {
                 updateOrderHistory(askOrder.getOrderId(), status);
                 
                 if (!isActive) {
-                    LOGGER.info("Ask for {} deactivated by status change", id);
+                    logger.info("Ask for "+id+" deactivated by status change");
                 }
             }
         }
@@ -415,15 +417,13 @@ public class ActiveQuote {
         synchronized(lock) {
             // Validate bid order reference
             if (bidOrder != null && !bidOrderId.equals(bidOrder.getOrderId())) {
-                LOGGER.warn("Inconsistent bid order reference for {}: {} vs {}", 
-                    id, bidOrderId, bidOrder.getOrderId());
+                logger.warn("Inconsistent bid order reference for "+id+": "+bidOrderId+" vs "+bidOrder.getOrderId());
                 bidOrderId = bidOrder.getOrderId(); // Fix inconsistency
             }
             
             // Validate ask order reference
             if (askOrder != null && !askOrderId.equals(askOrder.getOrderId())) {
-                LOGGER.warn("Inconsistent ask order reference for {}: {} vs {}", 
-                    id, askOrderId, askOrder.getOrderId());
+                logger.warn("Inconsistent ask order reference for " + id + ": " + askOrderId + " vs " + askOrder.getOrderId());
                 askOrderId = askOrder.getOrderId(); // Fix inconsistency
             }
         }
@@ -675,9 +675,8 @@ public class ActiveQuote {
         // Calculate exponential backoff time (in milliseconds)
         long backoffMs = Math.min(300_000, (long)(1000 * Math.pow(2, bidUpdateFailureCount)));
         bidBackoffUntilTime = System.currentTimeMillis() + backoffMs;
-        
-        LOGGER.info("Bid failure count for {} incremented to {}, backing off for {}ms", 
-            id, bidUpdateFailureCount, backoffMs);
+
+        logger.info("Bid failure count for " + id + " incremented to " + bidUpdateFailureCount + ", backing off for " + backoffMs + "ms");
     }
     
     /**
@@ -688,9 +687,8 @@ public class ActiveQuote {
         // Calculate exponential backoff time (in milliseconds)
         long backoffMs = Math.min(300_000, (long)(1000 * Math.pow(2, askUpdateFailureCount)));
         askBackoffUntilTime = System.currentTimeMillis() + backoffMs;
-        
-        LOGGER.info("Ask failure count for {} incremented to {}, backing off for {}ms", 
-            id, askUpdateFailureCount, backoffMs);
+
+        logger.info("Ask failure count for " + id + " incremented to " + askUpdateFailureCount + ", backing off for " + backoffMs + "ms");
     }
     
     /**
@@ -700,7 +698,7 @@ public class ActiveQuote {
         bidUpdateFailureCount = 0;
         bidBackoffUntilTime = 0;
         
-        LOGGER.info("Bid failure count for {} reset", id);
+        logger.info("Bid failure count for " + id + " reset");
     }
     
     /**
@@ -710,7 +708,7 @@ public class ActiveQuote {
         askUpdateFailureCount = 0;
         askBackoffUntilTime = 0;
         
-        LOGGER.info("Ask failure count for {} reset", id);
+        logger.info("Ask failure count for " + id + " reset");
     }
     
     /**

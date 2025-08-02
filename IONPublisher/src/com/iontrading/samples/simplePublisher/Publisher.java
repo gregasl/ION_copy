@@ -161,6 +161,7 @@ public class Publisher implements MkvPlatformListener {
             logLevel = properties.getIntProperty("DEBUG");
             // Initialize the log after starting Mkv
             this.myLog = mkv.getLogManager().createLogFile("PUBLISHER");
+            this.logger = new IONLogger(myLog, logLevel, "Publisher");
 
         } catch (MkvException e) {
             if (myLog != null) {
@@ -247,6 +248,10 @@ public class Publisher implements MkvPlatformListener {
 
     public static void main(String[] args) {
         Publisher publisher = new Publisher(args);
+        if (publisher.logger == null) {
+                publisher.logger = new IONLogger(publisher.getMkvLog(), publisher.getLogLevel(), "Publisher");
+        }
+        publisher.logger.info("Market Data Publisher started successfully");
     }
     
     /**

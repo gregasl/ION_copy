@@ -1,1 +1,0 @@
-java -cp "marketDataSubscriberUAT.jar" com.iontrading.samples.marketDataSubscriberUAT.marketDataSubscriberUAT

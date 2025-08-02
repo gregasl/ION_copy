@@ -1,1 +1,0 @@
-java -cp "marketDataSubscriberPROD.jar" com.iontrading.samples.marketDataSubscriberPROD.marketDataSubscriberPROD
