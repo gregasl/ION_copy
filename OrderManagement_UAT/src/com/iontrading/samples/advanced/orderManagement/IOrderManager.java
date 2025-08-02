@@ -1,5 +1,7 @@
 package com.iontrading.samples.advanced.orderManagement;
 
+import com.iontrading.mkv.MkvLog;
+
 /**
  * Interface defining the core order management operations.
  * Implementations are responsible for:
@@ -60,7 +62,7 @@ public interface IOrderManager {
 	 */
 	public String getApplicationId();
 
-		/**
+	/**
 	 * Maps an order ID to a request ID for lookup purposes
 	 * 
 	 * @param orderId The order ID from the market

@@ -26,10 +26,9 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.Date;
-// import java.util.logging.Level;
-// import java.util.logging.Logger;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+
+import com.iontrading.mkv.Mkv;
+import com.iontrading.mkv.MkvLog;
 
 import com.iontrading.mkv.MkvRecord;
 import com.iontrading.mkv.MkvSupply;
@@ -46,8 +45,8 @@ import com.iontrading.mkv.helper.MkvSubscribeProxy;
 public class DepthListener implements MkvRecordListener {
 
     // Add logger for debugging
-    private static final Logger LOGGER = LoggerFactory.getLogger(DepthListener.class);
-    
+    private static MkvLog log = Mkv.getInstance().getLogManager().getLogFile("ORDER_MANAGEMENT");
+    private static IONLogger logger = new IONLogger(log, 2, "DepthListener");        
     /**
      * Shared proxy instances used to map MKV record fields to Java bean properties.
      * These are static as they can be shared across all instances for the same record types.
@@ -128,7 +127,7 @@ public class DepthListener implements MkvRecordListener {
     private static void initProxies(MkvRecord rec) throws MkvException {
 
         if (instrumentProxy == null) {
-            LOGGER.info("Initializing MkvSubscribeProxy for DepthListener instrument data");
+            logger.info("Initializing MkvSubscribeProxy for DepthListener instrument data");
 
             // Define the mapping from MKV field names to Instrument bean property names
             Properties instrumentProps = new Properties();
@@ -141,13 +140,13 @@ public class DepthListener implements MkvRecordListener {
                 instrumentProps.setProperty("Attribute" + i, "attribute" + i);
             }
 
-            LOGGER.info("Creating MkvSubscribeProxy for DepthListener instrument data");
+            logger.info("Creating MkvSubscribeProxy for DepthListener instrument data");
             instrumentProxy = new MkvSubscribeProxy(Instrument.class, instrumentProps);
-            LOGGER.info("Instrument MkvSubscribeProxy created successfully");
+            logger.info("Instrument MkvSubscribeProxy created successfully");
         }
 
         if (depthProxy == null) {
-            LOGGER.info("Initializing MkvSubscribeProxy for DepthListener depth data");
+            logger.info("Initializing MkvSubscribeProxy for DepthListener depth data");
             
             // Define the mapping from MKV field names to Best bean property names
             Properties depthProps = new Properties();
@@ -168,9 +167,9 @@ public class DepthListener implements MkvRecordListener {
             depthProps.setProperty("BidSize0_Min", "bidSizeMin");
             depthProps.setProperty("TrdValueLast", "lastTradePrice");
 
-            LOGGER.info("Creating MkvSubscribeProxy for DepthListener depth data");
+            logger.info("Creating MkvSubscribeProxy for DepthListener depth data");
             depthProxy = new MkvSubscribeProxy(Best.class, depthProps);
-            LOGGER.info("Depth MkvSubscribeProxy created successfully");
+            logger.info("Depth MkvSubscribeProxy created successfully");
         }
     }
 
@@ -181,7 +180,7 @@ public class DepthListener implements MkvRecordListener {
      */
     public DepthListener(IOrderManager manager) {
         this.orderManager = manager;
-        LOGGER.info("Creating DepthListener for pattern subscription");
+        logger.info("Creating DepthListener for pattern subscription");
         initializeHeartbeat();
     }
     
@@ -230,7 +229,7 @@ public class DepthListener implements MkvRecordListener {
                 }
             }
         } catch (Exception e) {
-            LOGGER.error("Error processing update: {}", e.getMessage(), e);
+            logger.error("Error processing update: {}" + e.getMessage() + e);
             consecutiveErrorCount.incrementAndGet();
         }
     }
@@ -297,7 +296,7 @@ public class DepthListener implements MkvRecordListener {
             // Only proceed if data changed
             if (changed) {
                 Best best = createAppropriateBean(recordName, recordData);
-                LOGGER.info(depthInstrumentId + " - Processing depth update for " + recordName +
+                logger.info(depthInstrumentId + " - Processing depth update for " + recordName +
                     ": " + best.toString() + " (isSnapshot=" + isSnapshot + ")");
                 // Always use cached GC data
                 orderManager.best(best, cachedCashGC, cachedRegGC, cachedGCBestCash, cachedGCBestREG);
@@ -305,8 +304,8 @@ public class DepthListener implements MkvRecordListener {
             }
             
         } catch (Exception e) {
-            LOGGER.error("Error processing depth update: {}", e.getMessage(), e);
-            LOGGER.error("Error details", e);
+            logger.error("Error processing depth update: {}" + e.getMessage() + e);
+            logger.error("Error details" + e);
         }
     }
     
@@ -318,13 +317,13 @@ public class DepthListener implements MkvRecordListener {
             String recordName = mkvRecord.getName();
             String instrumentId = extractInstrumentId(recordName);
             if (instrumentId == null || instrumentId.trim().isEmpty()) {
-                LOGGER.warn("Skipping update - no instrument ID in record: {}", recordName);
+                logger.warn("Skipping update - no instrument ID in record: {}" + recordName);
                 return;
             }
 
             // Single consolidated log instead of Steps 1-4
-            LOGGER.debug("Processing {} for instrument {}", 
-                isSnapshot ? "SNAPSHOT" : "UPDATE", instrumentId);
+            logger.debug("Processing " + (isSnapshot ? "SNAPSHOT" : "UPDATE") + 
+                " for instrument " + instrumentId);
 
             Instrument instrument = null;
 
@@ -346,7 +345,7 @@ public class DepthListener implements MkvRecordListener {
                     updateInstrumentFields(instrument, mkvRecord, mkvSupply);
                     instrument.buildSourceMappings();
                 } catch (Exception e) {
-                    LOGGER.error("Error processing instrument {} with proxy", instrumentId, e);
+                    logger.error("Error processing instrument " + instrumentId + " with proxy" + e);
                 }
             } else if (isNewInstrument) {
                 // Fallback to manual processing if proxy is unavailable
@@ -354,7 +353,7 @@ public class DepthListener implements MkvRecordListener {
             }
 
         } catch (Exception e) {
-            LOGGER.error("Fatal error in processInstrumentUpdate", e);
+            logger.error("Fatal error in processInstrumentUpdate" + e);
         }
     }
     
@@ -379,22 +378,22 @@ public class DepthListener implements MkvRecordListener {
 
                         updateInstrumentProperty(instrument, fieldName, fieldValue);
                     } else {
-                        LOGGER.debug("Skipping null field in manual processing: {}", fieldName);
+                        logger.debug("Skipping null field in manual processing: {}" + fieldName);
                     }
                 } catch (Exception e) {
-                    LOGGER.warn("Error processing field manually for instrument: {}", instrument.getInstrumentId(), e);
+                    logger.warn("Error processing field manually for instrument: {}" + instrument.getInstrumentId() + " - " + e.getMessage());
                 }
                 cursor = mkvSupply.nextIndex(cursor);
             }
 
-            LOGGER.info("processInstrumentManually completed for {}: processed {} out of {} fields",
-                instrument.getInstrumentId(), processedCount, fieldCount);
+            logger.info("processInstrumentManually completed for " + instrument.getInstrumentId() + 
+                ": processed " + processedCount + " out of " + fieldCount + " fields");
 
             // Build source mappings after manual processing
             instrument.buildSourceMappings();
             
         } catch (Exception e) {
-            LOGGER.error("Error in manual instrument processing", e);
+            logger.error("Error in manual instrument processing" + e);
         }
     }
     
@@ -413,7 +412,7 @@ public class DepthListener implements MkvRecordListener {
         
         // Log the full record name when we can't extract an ID
         if (recordName != null) {
-            LOGGER.info("Unable to extract instrument ID from record name: {}", recordName);
+            logger.info("Unable to extract instrument ID from record name: {}" + recordName);
         }
 
         return null;
@@ -430,8 +429,9 @@ public class DepthListener implements MkvRecordListener {
     pendingDepthUpdates.computeIfAbsent(instrumentId, k -> new ArrayList<>())
         .add(new QueuedUpdate(record, supply, isSnapshot));
 
-    LOGGER.debug("Queued depth update for instrument {} - waiting for instrument data. Queue size: {}",
-        instrumentId, pendingDepthUpdates.getOrDefault(instrumentId, Collections.emptyList()).size());
+    logger.debug("Queued depth update for instrument " + instrumentId + 
+        " - waiting for instrument data. Queue size: " + 
+        pendingDepthUpdates.getOrDefault(instrumentId, Collections.emptyList()).size());
 }
 
 private String extractInstrumentIdFromDepth(String recordName) {
@@ -457,13 +457,13 @@ private void processQueuedUpdatesForInstrument(String instrumentId) {
         List<QueuedUpdate> updatesCopy = new ArrayList<>(updates);
         updates.clear();
 
-        LOGGER.info("Processing {} queued depth updates for instrument: {}", updatesCopy.size(), instrumentId);
+        logger.info("Processing " + updatesCopy.size() + " queued depth updates for instrument: " + instrumentId);
 
         for (QueuedUpdate update : updatesCopy) {
             try {
                 processDepthUpdate(update.record, update.supply, update.isSnapshot);
             } catch (Exception e) {
-                LOGGER.error("Error processing queued depth update: {}", e.getMessage(), e);
+                logger.error("Error processing queued depth update: " + e.getMessage() + " " + e);
             }
         }
     }
@@ -495,11 +495,11 @@ private Best createAppropriateBean(String recordName, Map<String, Object> record
     Best best = bestCache.computeIfAbsent(recordName, key -> {
         if (key.equals(GC_TU10_C) || key.equals(GC_TU10_REG)) {
             // Log only when creating a new instance
-            LOGGER.info("Created new GCBest instance for instrument: {}", key);
+            logger.info("Created new GCBest instance for instrument: {}" + key);
             return new GCBest(key);
         } else {
             // Log only when creating a new instance
-            LOGGER.info("Created new Best instance for instrument: {}", key);
+            logger.info("Created new Best instance for instrument: {}" + key);
             return new Best(key);
         }
     });
@@ -569,7 +569,7 @@ private Best createAppropriateBean(String recordName, Map<String, Object> record
 	        askLevel = (askLevel == -1) ? 0 : askLevel;
 	        bidLevel = (bidLevel == -1) ? 0 : bidLevel;
 	        
-	        LOGGER.debug("Using ask level {} and bid level {} for {}", askLevel, bidLevel, best.getId());
+            logger.debug("Using ask level " + askLevel + " and bid level " + bidLevel + " for " + best.getId());
 	    
 	        // Set price fields with rounding already handled in the setter
 	        best.setAsk(getDoubleValue(recordData, "Ask" + askLevel, 0.0));
@@ -659,7 +659,7 @@ private Best createAppropriateBean(String recordName, Map<String, Object> record
             }
         } catch (Exception e) {
             // Log the error but return default value
-            LOGGER.warn("Error converting field {} value: {}", field, value);
+            logger.warn("Error converting field " + field + " value: " + value);
         }
         
         return defaultValue;
@@ -699,7 +699,7 @@ private Best createAppropriateBean(String recordName, Map<String, Object> record
                 }
             }
         } catch (Exception e) {
-            LOGGER.warn("Error converting field {} value: {}", field, value);
+            logger.warn("Error converting field " + field + " value: " + value);
         }
 
         return defaultValue;
@@ -715,19 +715,16 @@ private Best createAppropriateBean(String recordName, Map<String, Object> record
      * @return The native instrument ID or null if not found
      */
 public String getInstrumentFieldBySourceString(String instrumentId, String sourceId, Boolean isAON) {
-    LOGGER.debug("getInstrumentFieldBySourceString called with instrumentId={}, sourceId={}, isAON={}",
-        instrumentId, sourceId, isAON);
+    logger.debug("getInstrumentFieldBySourceString called with instrumentId=\"" + instrumentId + "\", sourceId=\"" + sourceId + "\", isAON=" + isAON);
 
     if (instrumentId == null || sourceId == null || instrumentId.isEmpty() || sourceId.isEmpty()) {
-        LOGGER.warn("getInstrumentFieldBySourceString received null/empty parameter: instrumentId={}, sourceId={}",
-            instrumentId, sourceId);
+        logger.warn("getInstrumentFieldBySourceString received null/empty parameter: instrumentId=\"" + instrumentId + "\", sourceId=\"" + sourceId + "\"");
         return null;
     }
 
     Instrument instrument = instrumentData.get(instrumentId);
     if (instrument == null) {
-        LOGGER.warn("No instrument data found for: {} (total instruments loaded: {})",
-            instrumentId, instrumentData.size());
+        logger.warn("No instrument data found for: \"" + instrumentId + "\" (total instruments loaded: " + instrumentData.size() + ")");
 
         // Add diagnostic info about available instruments for this source
         int matchCount = 0;
@@ -743,8 +740,8 @@ public String getInstrumentFieldBySourceString(String instrumentId, String sourc
         }
         
         if (matchCount > 0) {
-            LOGGER.info("Found {} similar instrument IDs: {}",
-                matchCount, (matchCount > 5 ? matchingInstruments.toString() + "..." : matchingInstruments.toString()));
+            logger.info("Found \"" + matchCount + "\" similar instrument IDs: \"" +
+                (matchCount > 5 ? matchingInstruments.toString() + "..." : matchingInstruments.toString()) + "\"");
         }
 
         return null;
@@ -752,12 +749,10 @@ public String getInstrumentFieldBySourceString(String instrumentId, String sourc
 
     // If we found the instrument, delegate to it and log the result
     String result = instrument.getInstrumentFieldBySourceString(sourceId, isAON);
-    LOGGER.debug("getInstrumentFieldBySourceString result for {} with source {} (isAON={}): {}",
-        instrumentId, sourceId, isAON, result);
+    logger.debug("getInstrumentFieldBySourceString result for \"" + instrumentId + "\" with source \"" + sourceId + "\" (isAON=" + isAON + "): " + result);
 
     if (result == null) {
-        LOGGER.warn("Instrument {} found but returned null mapping for source: {} (isAON={})",
-            instrumentId, sourceId, isAON);
+        logger.warn("Instrument \"" + instrumentId + "\" found but returned null mapping for source: \"" + sourceId + "\" (isAON=" + isAON + ")");
     }
 
     return result;
@@ -776,13 +771,13 @@ public String getInstrumentFieldBySourceString(String instrumentId, String sourc
             try {
                 checkAndLogActivityStatus();
             } catch (Exception e) {
-                LOGGER.error("Error in DepthListener heartbeat: {}", e.getMessage(), e);
+                logger.error("Error in DepthListener heartbeat: {}" +  e.getMessage() + e);
             }
         }, HEARTBEAT_INTERVAL_MS, HEARTBEAT_INTERVAL_MS, TimeUnit.MILLISECONDS);
 
         // Add shutdown hook
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            LOGGER.info("Shutting down DepthListener heartbeat");
+            logger.info("Shutting down DepthListener heartbeat");
             heartbeatScheduler.shutdown();
             try {
                 if (!heartbeatScheduler.awaitTermination(5, TimeUnit.SECONDS)) {
@@ -801,9 +796,8 @@ public String getInstrumentFieldBySourceString(String instrumentId, String sourc
         
         if (lastUpdate == 0) {
             // No updates received yet
-            LOGGER.info("DepthListener heartbeat: No market data updates received yet. Instruments loaded: {}" +
-                ", Instrument pattern subscribed: {}, Instrument updates received: {}",
-                instrumentData.size(), isInstrumentPatternSubscribed, instrumentUpdatesReceived.get());
+            logger.info("DepthListener heartbeat: No market data updates received yet. Instruments loaded: " + instrumentData.size() +
+                ", Instrument pattern subscribed: \"" + isInstrumentPatternSubscribed + "\", Instrument updates received: \"" + instrumentUpdatesReceived.get() + "\"");
             return;
         }
         
@@ -815,23 +809,21 @@ public String getInstrumentFieldBySourceString(String instrumentId, String sourc
         .sum();
     
     if (totalQueuedUpdates > 0) {
-        LOGGER.info("Currently {} depth updates queued for {} instruments",
-            totalQueuedUpdates, pendingDepthUpdates.size());
+        logger.info("Currently " + totalQueuedUpdates + " depth updates queued for " + pendingDepthUpdates.size() + " instruments" +
+            " (last update at " + formatTimestamp(lastUpdate) + ")" +
+            ", Instruments loaded: " + instrumentData.size() + ")");
     }
 
         long silenceTime = now - lastUpdate;
         long updateCount = updateCounter.get();
         
         if (silenceTime > DATA_SILENCE_CRITICAL_MS) {
-            LOGGER.error("CRITICAL: No market data updates for {} seconds. Last update at {}. Total updates received: {}. Instruments loaded: {}. Instrument pattern subscribed: {}. Instrument updates: {}",
-                silenceTime / 1000, new Date(lastUpdate), updateCount, instrumentData.size(), isInstrumentPatternSubscribed, instrumentUpdatesReceived.get());
+            logger.error("CRITICAL: No market data updates for " + silenceTime / 1000 + " seconds. Last update at " + new Date(lastUpdate) + ". Total updates received: " + updateCount + ". Instruments loaded: " + instrumentData.size() + ". Instrument pattern subscribed: " + isInstrumentPatternSubscribed + ". Instrument updates: " + instrumentUpdatesReceived.get());
         } else if (silenceTime > DATA_SILENCE_WARNING_MS) {
-            LOGGER.warn("WARNING: No market data updates for {} seconds. Last update at {}. Total updates received: {}. Instruments loaded: {}. Instrument pattern subscribed: {}. Instrument updates: {}",
-                silenceTime / 1000, new Date(lastUpdate), updateCount, instrumentData.size(), isInstrumentPatternSubscribed, instrumentUpdatesReceived.get());
+            logger.warn("WARNING: No market data updates for " + silenceTime / 1000 + " seconds. Last update at " + new Date(lastUpdate) + ". Total updates received: " + updateCount + ". Instruments loaded: " + instrumentData.size() + ". Instrument pattern subscribed: " + isInstrumentPatternSubscribed + ". Instrument updates: " + instrumentUpdatesReceived.get());
         } else {
             // Normal operation - periodic status log
-            LOGGER.info("DepthListener heartbeat: Last update {} seconds ago. Update rate: {} updates/sec. Total updates: {}. Instruments loaded: {}. Instrument pattern subscribed: {}. Instrument updates: {}",
-                silenceTime / 1000, String.format("%.2f", updateCount / ((now - startTime) / 1000.0)), updateCount, instrumentData.size(), isInstrumentPatternSubscribed, instrumentUpdatesReceived.get());
+            logger.info("DepthListener heartbeat: Last update " + silenceTime / 1000 + " seconds ago. Update rate: " + String.format("%.2f", updateCount / ((now - startTime) / 1000.0)) + " updates/sec. Total updates: " + updateCount + ". Instruments loaded: " + instrumentData.size() + ". Instrument pattern subscribed: " + isInstrumentPatternSubscribed + ". Instrument updates: " + instrumentUpdatesReceived.get());
 
             // Reset consecutive error count since we're receiving data
             consecutiveErrorCount.set(0);
@@ -866,7 +858,7 @@ public String getInstrumentFieldBySourceString(String instrumentId, String sourc
      */
     private void updateInstrumentFields(Instrument instrument, MkvRecord mkvRecord, MkvSupply mkvSupply) {
         try {
-            LOGGER.info("Starting updateInstrumentFields for {}", instrument.getInstrumentId());
+            logger.info("Starting updateInstrumentFields for " +  instrument.getInstrumentId());
 
             int cursor = mkvSupply.firstIndex();
             int fieldCount = 0;
@@ -877,27 +869,26 @@ public String getInstrumentFieldBySourceString(String instrumentId, String sourc
                 Object fieldValue = mkvSupply.getObject(cursor);
                 fieldCount++;
 
-                LOGGER.info("Field {}: {} = {} (null={})", fieldCount, fieldName, fieldValue, (fieldValue == null));
+                logger.info("Field " + fieldCount + ": " + fieldName + " = " + fieldValue + " (null=" + (fieldValue == null) + ")");
 
                 // Process ALL non-null fields for instruments, not just those in the list
                 if (fieldValue != null) {
                     processedCount++;
-                    LOGGER.info("Processing field {}: {} = {}", processedCount, fieldName, fieldValue);
+                    logger.info("Processing field " + processedCount + ": " + fieldName + " = " + fieldValue);
 
                     // Update the instrument property
                     updateInstrumentProperty(instrument, fieldName, fieldValue);
                 } else {
-                    LOGGER.info("Skipping null field: {}", fieldName);
+                    logger.info("Skipping null field: " + fieldName);
                 }
 
                 cursor = mkvSupply.nextIndex(cursor);
             }
 
-            LOGGER.info("updateInstrumentFields completed for {}: processed {} out of {} fields",
-                instrument.getInstrumentId(), processedCount, fieldCount);
+            logger.info("updateInstrumentFields completed for " + instrument.getInstrumentId() + ": processed " + processedCount + " out of " + fieldCount + " fields");
 
         } catch (Exception e) {
-            LOGGER.error("Error updating instrument fields: {}", e.getMessage(), e);
+            logger.error("Error updating instrument fields: " + e.getMessage() + " " + e);
         }
     }
 
@@ -937,12 +928,12 @@ public String getInstrumentFieldBySourceString(String instrumentId, String sourc
                         case 14: instrument.setId14(value.toString()); break;
                         case 15: instrument.setId15(value.toString()); break;
                         default: 
-                            LOGGER.warn("Invalid Id index: {}", index);
+                            logger.warn("Invalid Id index: " + index);
                             return;
                     }
 
                 } catch (NumberFormatException e) {
-                    LOGGER.warn("Invalid id index format: {}", fieldName);
+                    logger.warn("Invalid id index format: " + fieldName);
                 }
             }
             // Handle source fields (Src0-Src15) 
@@ -972,12 +963,12 @@ public String getInstrumentFieldBySourceString(String instrumentId, String sourc
                         case 14: instrument.setSrc14(value.toString()); break;
                         case 15: instrument.setSrc15(value.toString()); break;
                         default: 
-                            LOGGER.warn("Invalid Src index: {}", index);
+                            logger.warn("Invalid Src index: " + index);
                             return;
                     }
 
                 } catch (NumberFormatException e) {
-                    LOGGER.warn("Invalid source index format: {}", fieldName);
+                    logger.warn("Invalid source index format: \"" + fieldName + "\"");
                 }
             }
             // Handle attribute fields (Attribute0-Attribute15)
@@ -1007,7 +998,7 @@ public String getInstrumentFieldBySourceString(String instrumentId, String sourc
                         case 14: instrument.setAttribute14(value.toString()); break;
                         case 15: instrument.setAttribute15(value.toString()); break;
                         default:
-                            LOGGER.warn("Invalid Attribute index: {}", index);
+                            logger.warn("Invalid Attribute index: \"" + index + "\"");
                             return;
                     }
 
@@ -1033,8 +1024,7 @@ public String getInstrumentFieldBySourceString(String instrumentId, String sourc
                             case 14: instrument.setIs14AON(Boolean.TRUE); break;
                             case 15: instrument.setIs15AON(Boolean.TRUE); break;
                         }
-                        LOGGER.info("Set AON flag for index {} to TRUE due to attribute value: {}", 
-                            index, attributeValue);
+                        logger.info("Set AON flag for index " + index + " to TRUE due to attribute value: " + attributeValue);
                     } else if (attributeValue != null) {
                         // Set the corresponding AON flag to false if it exists
                         // This ensures we properly handle changes where AON is removed
@@ -1059,11 +1049,11 @@ public String getInstrumentFieldBySourceString(String instrumentId, String sourc
                     }
 
                 } catch (NumberFormatException e) {
-                    LOGGER.warn("Invalid attribute index format: {}", fieldName);
+                    logger.warn("Invalid attribute index format: " + fieldName);
                 }
             }
         } catch (Exception e) {
-            LOGGER.warn("Error updating property {}: {}", fieldName, e.getMessage(), e);
+            logger.warn("Error updating property " + fieldName + ": " + e.getMessage() + e);
         }
     }
 
@@ -1091,7 +1081,7 @@ public String getInstrumentFieldBySourceString(String instrumentId, String sourc
             isInstrumentPatternSubscribed = subscribed;
 
             if (oldValue != subscribed) {
-                LOGGER.info("Instrument pattern subscription status changed: {} -> {}", oldValue, subscribed);
+                logger.info("Instrument pattern subscription status changed: " + oldValue + " -> " + subscribed);
             }
         }
     }

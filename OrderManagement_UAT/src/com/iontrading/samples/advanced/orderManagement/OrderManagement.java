@@ -10,7 +10,6 @@
 
 package com.iontrading.samples.advanced.orderManagement;
 
-import java.lang.invoke.TypeDescriptor;
 import java.util.Set;
 import java.util.HashSet;
 import java.util.ArrayList;
@@ -310,7 +309,7 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
    * @param sourceId The source identifier
    * @return The native instrument ID or null if not found
    */
-  public static String getNativeInstrumentId(String instrumentId, String sourceId, Boolean isAON) {
+  public String getNativeInstrumentId(String instrumentId, String sourceId, Boolean isAON) {
     if (depthListener != null) {
       return depthListener.getInstrumentFieldBySourceString(instrumentId, sourceId, isAON);
     }
@@ -1641,7 +1640,7 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
         
         if (lastTradeTime != null && (currentTime - lastTradeTime) < MIN_TRADE_INTERVAL_MS) {
             // Too soon to trade this instrument again
-            logger.debug(reason);("Skipping trade for " + tradingKey + " last trade was too recent: " + (currentTime - lastTradeTime) + "ms since last trade");
+            logger.debug("Skipping trade for " + tradingKey + " last trade was too recent: " + (currentTime - lastTradeTime) + "ms since last trade");
             return;
         }
 
