@@ -9,10 +9,9 @@ package com.iontrading.samples.advanced.orderManagement;
 
 import java.util.HashMap;
 import java.util.Map;
-// import java.util.logging.Level;
-// import java.util.logging.Logger;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+
+import com.iontrading.mkv.Mkv;
+import com.iontrading.mkv.MkvLog;
 
 /**
  * Instrument is a data container class representing instrument mapping data
@@ -23,7 +22,8 @@ import org.slf4j.LoggerFactory;
  */
 public class Instrument {
 
-    private static final Logger LOGGER = LoggerFactory.getLogger(Instrument.class);
+    private static MkvLog log = Mkv.getInstance().getLogManager().getLogFile("ORDER_MANAGEMENT");
+    private static IONLogger logger = new IONLogger(log, 2, "Instrument");
 
     /**
      * The instrument ID this Instrument object represents.
@@ -55,9 +55,7 @@ public class Instrument {
      */
     public Instrument(String instrumentId) {
         this.instrumentId = instrumentId;
-        if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("Created new Instrument instance for: {}", instrumentId);
-        }
+        logger.debug("Created new Instrument instance for: {}" + instrumentId);
     }
 
     /**
@@ -277,7 +275,7 @@ public class Instrument {
      */
     public String getInstrumentFieldBySourceString(String sourceId, Boolean isAON) {
         if (sourceId == null || sourceId.isEmpty()) {
-            LOGGER.warn("Instrument.getInstrumentFieldBySourceString received null/empty sourceId");
+            logger.warn("Instrument.getInstrumentFieldBySourceString received null/empty sourceId");
             return null;
         }
 
@@ -285,67 +283,62 @@ public class Instrument {
         String cacheKey = sourceId + (isAON ? "_AON" : "");
         String cachedResult = sourceToNativeIdMap.get(cacheKey);
         if (cachedResult != null) {
-            LOGGER.info("Found cached mapping for {}, source={}, isAON={}: {}", instrumentId, sourceId, isAON, cachedResult);
+            logger.info("Found cached mapping for "+ instrumentId +", source=" + sourceId + ", isAON=" + isAON + ": " + cachedResult);
             return cachedResult;
         }
 
         // Log the contents of the sourceToNativeIdMap for debugging
-        if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("Source mapping cache for {} contains {} entries:", instrumentId, sourceToNativeIdMap.size());
-            for (Map.Entry<String, String> entry : sourceToNativeIdMap.entrySet()) {
-                LOGGER.debug("  {} -> {}", entry.getKey(), entry.getValue());
-            }
+        logger.debug("Source mapping cache for " + instrumentId + " contains " + sourceToNativeIdMap.size() + " entries:");
+        for (Map.Entry<String, String> entry : sourceToNativeIdMap.entrySet()) {
+            logger.debug("  " + entry.getKey() + " -> " + entry.getValue());
         }
+
 
         try {
             // Search through all source/ID pairs
-            LOGGER.info("Searching through source/ID pairs for {} looking for source={}", instrumentId, sourceId);
+            logger.info("Searching through source/ID pairs for " + instrumentId + " looking for source=" + sourceId);
 
             for (int i = 0; i <= 15; i++) {
                 String src = getSourceByIndex(i);
                 String nativeId = getIdByIndex(i);
                 Boolean isNativeIdAON = getAONByIndex(i);
 
-                if (LOGGER.isDebugEnabled()) {
-                    LOGGER.debug("Checking index {}: src={}, nativeId={}, isAON={}", i, src, nativeId, isNativeIdAON);
-                }
+                logger.debug("Checking index " + i + ": src=" + src + ", nativeId=" + nativeId + ", isAON=" + isNativeIdAON);
 
                 if (src == null || !sourceId.equals(src) || nativeId == null) {
                     continue;
                 }
 
-                LOGGER.info("Found matching source at index {}: {}", i, src);
-                
+                logger.info("Found matching source at index " + i + ": " + src);
+
                 // Check if AON matches
                 if (isAON != null && isNativeIdAON != null && isAON != isNativeIdAON) {
-                    LOGGER.info("Skipping index {} because AON mismatch: expected={}, found={}", 
-                        i, isAON, isNativeIdAON);
+                    logger.info("Skipping index " + i + " because AON mismatch: expected=" + isAON + ", found=" + isNativeIdAON);
                     continue;
                 }
 
                 // Special handling for FENICS_USREPO
                 if ("FENICS_USREPO".equals(src)) {
                     String attributeValue = getAttributeByIndex(i);
-                    LOGGER.debug("FENICS_USREPO found, checking attribute value: {}", attributeValue);
+                    logger.debug("FENICS_USREPO found, checking attribute value: " + attributeValue);
                     
                     // Only use this entry if attribute also matches FENICS_USREPO
                     if ("BGC".equals(attributeValue)) {
-                        LOGGER.info("Skipping FENICS_USREPO entry because attribute doesn't match: {}", attributeValue);
+                        logger.info("Skipping FENICS_USREPO entry because attribute doesn't match: " + attributeValue);
                         continue;
                     } else if ("FENICS_USREPO".equals(attributeValue)) {
-                        LOGGER.info("Using FENICS_USREPO entry because attribute matches: {}", attributeValue);
+                        logger.info("Using FENICS_USREPO entry because attribute matches: " + attributeValue);
                         return nativeId;
                     } 
                 } else {
                     // For all other sources, return the native ID directly
-                    LOGGER.info("Returning native ID for source {}: {}", src, nativeId);
+                    logger.info("Returning native ID for source " + src + ": " + nativeId);
                     return nativeId;
                 }
             }
 
             // No matches found after full search
-            LOGGER.warn("No matching instrument found for source: {}, AON: {}, instrument: {}", 
-                sourceId, isAON, instrumentId);
+            logger.warn("No matching instrument found for source: " + sourceId + ", AON: " + isAON + ", instrument: " + instrumentId);
 
             // Log the actual source and ID fields to help diagnose
             StringBuilder sb = new StringBuilder();
@@ -365,12 +358,12 @@ public class Instrument {
                     .append("\n");
                 }
             }
-            LOGGER.info("Source fields for {}:\n{}", instrumentId, sb.toString());
+            logger.info("Source fields for \"" + instrumentId + "\":\n" + sb.toString());
 
             return null;
             
         } catch (Exception e) {
-            LOGGER.error("Error getting instrument field for source: {}", sourceId, e);
+            logger.error("Error getting instrument field for source: " + sourceId + e);
             return null;
         }
     }
@@ -477,7 +470,7 @@ public class Instrument {
      * This should be called after all fields are populated.
      */
     public void buildSourceMappings() {
-        LOGGER.info("Building source mappings for instrument: {}", instrumentId);
+        logger.info("Building source mappings for instrument: " + instrumentId);
         
         // Log the field values for mapping
         StringBuilder sb = new StringBuilder();
@@ -508,7 +501,7 @@ public class Instrument {
                 sb.append("  Error accessing field at index ").append(i)
                 .append(": ").append(e.getMessage()).append("\n");
                 // Print full stack trace to console for debugging
-                LOGGER.error("Error accessing field at index {}", i, e);
+                logger.error("Error accessing field at index " + i + ": " + e);
                 continue;
             }
             
@@ -522,14 +515,14 @@ public class Instrument {
                                 
                 if ("FENICS_USREPO".equals(src)) {
                     String attributeValue = getAttributeByIndex(i);
-                    LOGGER.debug("FENICS_USREPO found, checking attribute value: {}", attributeValue);
-                    
+                    logger.debug("FENICS_USREPO found, checking attribute value: " + attributeValue);
+
                     // Only use this entry if attribute also matches FENICS_USREPO
                     if ("BGC".equals(attributeValue)) {
-                        LOGGER.info("Skipping FENICS_USREPO entry because attribute doesn't match: {}", attributeValue);
+                        logger.info("Skipping FENICS_USREPO entry because attribute doesn't match: " + attributeValue);
                         continue;
                     } else if ("FENICS_USREPO".equals(attributeValue)) {
-                        LOGGER.info("Using FENICS_USREPO entry because attribute matches: {}", attributeValue);
+                        logger.info("Using FENICS_USREPO entry because attribute matches: " + attributeValue);
                         sourceToNativeIdMap.put(cacheKey, id);
                     }
                 } else {
@@ -547,7 +540,7 @@ public class Instrument {
             .append("\n");
         }
 
-        LOGGER.info("Source mappings built for instrument: {}", instrumentId);
+        logger.info("Source mappings built for instrument: " + instrumentId);
     }
     
     /**
