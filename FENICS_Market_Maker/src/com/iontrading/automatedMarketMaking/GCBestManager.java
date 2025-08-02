@@ -1,15 +1,12 @@
 package com.iontrading.automatedMarketMaking;
 
 import java.util.concurrent.atomic.AtomicReference;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /**
  * Centralized manager for GCBest data to ensure consistency across components.
  * Implements the Singleton pattern for global access.
  */
 public class GCBestManager {
-    private static final Logger LOGGER = LoggerFactory.getLogger(GCBestManager.class);
     
     // Singleton instance
     private static volatile GCBestManager instance;
@@ -52,7 +49,6 @@ public class GCBestManager {
             gcBestCash.set(gcBest);
             cashGcRate.set(rate);
             lastUpdateTimestamp = System.currentTimeMillis();
-            LOGGER.debug("Updated Cash GCBest: {}, rate: {}", gcBest, rate);
         }
     }
     
@@ -67,7 +63,6 @@ public class GCBestManager {
             gcBestREG.set(gcBest);
             regGcRate.set(rate);
             lastUpdateTimestamp = System.currentTimeMillis();
-            LOGGER.debug("Updated REG GCBest: {}, rate: {}", gcBest, rate);
         }
     }
     

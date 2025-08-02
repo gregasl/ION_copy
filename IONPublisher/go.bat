@@ -2,10 +2,11 @@
 set WORKINGDIR=
 if "%1"=="" goto END_LIST
 
-if NOT "%1"=="SimplePublisher" goto a
+if NOT "%1"=="simplePublisher" goto a
 	set WORKINGDIR=RUN_SimplePublisher
 	set MAINCLASS=com.iontrading.samples.simplePublisher.Publisher
 	set SRC=src\com\iontrading\samples\simplePublisher
+	set SAMPLE_NAME=simplePublisher
 goto END_LIST
 
 :a

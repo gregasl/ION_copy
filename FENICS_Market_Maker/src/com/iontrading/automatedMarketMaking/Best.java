@@ -7,9 +7,6 @@
 
 package com.iontrading.automatedMarketMaking;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 /**
  * Best is a data container class representing the best bid and ask prices
  * for a specific instrument.
@@ -32,7 +29,6 @@ public class Best {
     public static final int PRICE_BILATERAL = 0x0200;
     public static final int PRICE_NOT_ETRADABLE = 0x0400;
 
-    private static final Logger LOGGER = LoggerFactory.getLogger(Best.class);
     private static final String FENICS_USREPO = MarketDef.FENICS_USREPO;
     private static final String BGC = MarketDef.BGC;
 
@@ -85,10 +81,6 @@ public class Best {
     public Best(String instrumentId) {
         this.instrumentId = instrumentId;
         // Prices and sizes are initialized to 0.0 by default
-        if (LOGGER.isInfoEnabled()) {
-            LOGGER.info(
-                "Best object created for instrument: {}", getId());
-        }
     }
 
     /**
@@ -111,10 +103,7 @@ public class Best {
      * @param Id The CUSIP ID
      */
     public void setId(String Id) {
-        if (LOGGER.isInfoEnabled()) {
-            LOGGER.info(
-                "Setting ID for instrument " + instrumentId + ": " + Id);
-        }
+
         this.Id = Id;
     }
         
@@ -131,9 +120,7 @@ public class Best {
      * @param askSrc The new ask source
      */
     public void setAskSrc(String askSrc) {
-        if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("Setting askSrc for instrument {}: {}", instrumentId, askSrc);
-        }
+
         this.askSrc = askSrc;
     }
     
@@ -142,18 +129,11 @@ public class Best {
      */
     public String getAskSrc() {
         if (askSrc == null) {
-            // This is a common case - no ask available
-            // Only log at DEBUG level to reduce noise
-            if (LOGGER.isDebugEnabled()) {
-                LOGGER.debug("getAskSrc called with null askSrc for instrument: {}", instrumentId);
-            }
+
             return null;
         }
         
         if (askSrc.equals(FENICS_USREPO)) {
-            if (LOGGER.isDebugEnabled()) {
-                LOGGER.debug("FENICS_USREPO source detected for ask, returning askSrcCheck: {} for instrument: {}", askSrcCheck, instrumentId);
-            }
             return askSrcCheck;
         } else {
             return askSrc;
@@ -170,9 +150,7 @@ public class Best {
     
     public void setAskIsAON(int askStatus) {
         boolean isAon = isAON(askStatus);
-        if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("Setting askIsAON for instrument {} to {} based on status bitmask: {}", instrumentId, isAon, askStatus);
-        }
+
         this.askIsAON = isAon;
     }
     
@@ -189,9 +167,6 @@ public class Best {
      * @param AskAttribute0 The attribute value that determines the source check
      */
     public void setAskSrcCheck(String AskAttribute0) {
-        if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("Setting askSrcCheck for instrument {} based on attribute: {}", instrumentId, AskAttribute0);
-        }
 
         if (AskAttribute0 == null) {
             this.askSrcCheck = null;
@@ -206,9 +181,6 @@ public class Best {
             this.askSrcCheck = null;
         }
         
-        if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("Set askSrcCheck for instrument {} to: {}", instrumentId, this.askSrcCheck);
-        }
     }
 
     /**
@@ -225,9 +197,6 @@ public class Best {
      */
     public void setAsk(double ask) {
         double roundedAsk = Math.round(ask * 100.0) / 100.0;
-        if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("Setting ask price for instrument {}: {} (original: {})", instrumentId, roundedAsk, ask);
-        }
         this.ask = roundedAsk;
     }
 
@@ -244,9 +213,7 @@ public class Best {
      * @param askSize The new ask size
      */
     public void setAskSize(double askSize) {
-        if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("Setting askSize for instrument {}: {}", instrumentId, askSize);
-        }
+
         this.askSize = askSize;
     }
 
@@ -263,9 +230,7 @@ public class Best {
      * @param askSizeMin The new minimum ask size
      */
     public void setAskSizeMin(double askSizeMin) {
-        if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("Setting askSizeMin for instrument {}: {}", instrumentId, askSizeMin);
-        }
+
         this.askSizeMin = askSizeMin;
     }
     
@@ -283,17 +248,13 @@ public class Best {
      */
     public void setBid(double bid) {
         double roundedBid = Math.round(bid * 100.0) / 100.0;
-        if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("Setting bid price for instrument {}: {} (original: {})", instrumentId, roundedBid, bid);
-        }
+
         this.bid = roundedBid;
     }
 
     public void setBidIsAON(int bidStatus) {
         boolean isAon = isAON(bidStatus);
-        if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("Setting bidIsAON for instrument {} to {} based on status bitmask: {}", instrumentId, isAon, bidStatus);
-        }
+
         this.bidIsAON = isAon;
     }
     
@@ -310,9 +271,7 @@ public class Best {
      * @param BidAttribute0 The attribute value that determines the source check
      */
     public void setBidSrcCheck(String BidAttribute0) {
-        if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("Setting bidSrcCheck for instrument {} based on attribute: {}", instrumentId, BidAttribute0);
-        }
+ 
 
         if (BidAttribute0 == null) {
             this.bidSrcCheck = null;
@@ -326,10 +285,7 @@ public class Best {
         } else {
             this.bidSrcCheck = null;
         }
-        
-        if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("Set bidSrcCheck for instrument {} to: {}", instrumentId, this.bidSrcCheck);
-        }
+
     }
 
     /**
@@ -353,9 +309,7 @@ public class Best {
      * @param bidSrc The new bid source
      */
     public void setBidSrc(String bidSrc) {
-        if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("Setting bidSrc for instrument {}: {}", instrumentId, bidSrc);
-        }
+
         this.bidSrc = bidSrc;
     }
     
@@ -364,18 +318,12 @@ public class Best {
      */
     public String getBidSrc() {
         if (bidSrc == null) {
-            // This is a common case - no bid available
-            // Only log at DEBUG level to reduce noise
-            if (LOGGER.isDebugEnabled()) {
-                LOGGER.debug("getBidSrc called with null bidSrc for instrument: {}", instrumentId);
-            }
+
             return null;
         }
         
         if (bidSrc.equals(FENICS_USREPO)) {
-            if (LOGGER.isDebugEnabled()) {
-                LOGGER.debug("FENICS_USREPO source detected for bid, returning bidSrcCheck: {} for instrument: {}", bidSrcCheck, instrumentId);
-            }
+
             return bidSrcCheck;
         } else {
             return bidSrc;
@@ -393,9 +341,7 @@ public class Best {
      * Sets the quantity available at the best bid price.
      */
     public void setBidSize(double bidSize) {
-        if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("Setting bidSize for instrument {}: {}", instrumentId, bidSize);
-        }
+
         this.bidSize = bidSize;
     }
     
@@ -405,9 +351,7 @@ public class Best {
      * @param bidSizeMin The new minimum bid size
      */
     public void setBidSizeMin(double bidSizeMin) {
-        if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("Setting bidSizeMin for instrument {}: {}", instrumentId, bidSizeMin);
-        }
+
         this.bidSizeMin = bidSizeMin;
     }
 
@@ -424,9 +368,7 @@ public class Best {
      * @param lastTradePrice The last trade price
      */
     public void setLastTradePrice(double lastTradePrice) {
-        if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("Setting lastTradePrice for instrument {}: {}", instrumentId, lastTradePrice);
-        }
+
         this.lastTradePrice = lastTradePrice;
     }
     
@@ -467,10 +409,6 @@ public class Best {
         String representation = "Best{instrumentId='" + instrumentId + "', " +
                "bid=" + bid + "/" + bidSize + ", " +
                "ask=" + ask + "/" + askSize + "}";
-
-        if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("toString called for instrument {}, returning: {}", instrumentId, representation);
-        }
 
         return representation;
     }

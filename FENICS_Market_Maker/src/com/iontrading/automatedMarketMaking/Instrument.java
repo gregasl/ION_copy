@@ -9,8 +9,9 @@ package com.iontrading.automatedMarketMaking;
 
 import java.util.HashMap;
 import java.util.Map;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+
+import com.iontrading.mkv.Mkv;
+import com.iontrading.mkv.MkvLog;
 
 /**
  * Instrument is a data container class representing instrument mapping data
@@ -21,8 +22,9 @@ import org.slf4j.LoggerFactory;
  */
 public class Instrument {
 
-    private static final Logger LOGGER = LoggerFactory.getLogger(Instrument.class);
-
+    private static MkvLog log = Mkv.getInstance().getLogManager().getLogFile("MarketMaker");
+    private static IONLogger logger = new IONLogger(log, 2, "Instrument");
+    
     /**
      * The instrument ID this Instrument object represents.
      * This is immutable once set in the constructor.
@@ -56,9 +58,7 @@ public class Instrument {
      */
     public Instrument(String instrumentId) {
         this.instrumentId = instrumentId;
-        if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("Created new Instrument instance for: {}", instrumentId);
-        }
+        logger.debug("Created new Instrument instance for: " + instrumentId);
     }
 
     /**
@@ -327,7 +327,7 @@ public class Instrument {
      */
     public String getInstrumentFieldBySourceString(String sourceId, Boolean isAON) {
         if (sourceId == null || sourceId.isEmpty()) {
-            LOGGER.warn("Instrument.getInstrumentFieldBySourceString received null/empty sourceId");
+            logger.warn("Instrument.getInstrumentFieldBySourceString received null/empty sourceId");
             return null;
         }
 
@@ -335,67 +335,62 @@ public class Instrument {
         String cacheKey = sourceId + (isAON ? "_AON" : "");
         String cachedResult = sourceToNativeIdMap.get(cacheKey);
         if (cachedResult != null) {
-            LOGGER.info("Found cached mapping for {}, source={}, isAON={}: {}", instrumentId, sourceId, isAON, cachedResult);
+            logger.info("Found cached mapping for "+instrumentId+", source="+sourceId+", isAON="+isAON+": "+cachedResult);
             return cachedResult;
         }
 
         // Log the contents of the sourceToNativeIdMap for debugging
-        if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("Source mapping cache for {} contains {} entries:", instrumentId, sourceToNativeIdMap.size());
+            logger.debug("Source mapping cache for "+instrumentId+" contains "+sourceToNativeIdMap.size()+" entries:");
             for (Map.Entry<String, String> entry : sourceToNativeIdMap.entrySet()) {
-                LOGGER.debug("  {} -> {}", entry.getKey(), entry.getValue());
+                logger.debug(" "+entry.getKey()+" <-> "+entry.getValue());
             }
-        }
 
         try {
             // Search through all source/ID pairs
-            LOGGER.info("Searching through source/ID pairs for {} looking for source={}", instrumentId, sourceId);
+            logger.info("Searching through source/ID pairs for "+instrumentId+" looking for source="+sourceId);
 
             for (int i = 0; i <= 15; i++) {
                 String src = getSourceByIndex(i);
                 String nativeId = getIdByIndex(i);
                 Boolean isNativeIdAON = getAONByIndex(i);
 
-                if (LOGGER.isDebugEnabled()) {
-                    LOGGER.debug("Checking index {}: src={}, nativeId={}, isAON={}", i, src, nativeId, isNativeIdAON);
-                }
+                logger.debug("Checking index "+i+": src="+src+", nativeId="+nativeId+", isAON="+isNativeIdAON);
+
 
                 if (src == null || !sourceId.equals(src) || nativeId == null) {
                     continue;
                 }
 
-                LOGGER.info("Found matching source at index {}: {}", i, src);
-                
+                logger.info("Found matching source at index "+i+": "+src);
+
                 // Check if AON matches
                 if (isAON != null && isNativeIdAON != null && isAON != isNativeIdAON) {
-                    LOGGER.info("Skipping index {} because AON mismatch: expected={}, found={}", 
-                        i, isAON, isNativeIdAON);
+                    logger.info("Skipping index "+i+" because AON mismatch: expected="+isAON+", found="+isNativeIdAON);
                     continue;
                 }
 
                 // Special handling for FENICS_USREPO
                 if ("FENICS_USREPO".equals(src)) {
                     String attributeValue = getAttributeByIndex(i);
-                    LOGGER.debug("FENICS_USREPO found, checking attribute value: {}", attributeValue);
-                    
+                    logger.debug("FENICS_USREPO found, checking attribute value: " + attributeValue);
+
                     // Only use this entry if attribute also matches FENICS_USREPO
                     if ("BGC".equals(attributeValue)) {
-                        LOGGER.info("Skipping FENICS_USREPO entry because attribute doesn't match: {}", attributeValue);
+                        logger.info("Skipping FENICS_USREPO entry because attribute doesn't match: " + attributeValue);
                         continue;
                     } else if ("FENICS_USREPO".equals(attributeValue)) {
-                        LOGGER.info("Using FENICS_USREPO entry because attribute matches: {}", attributeValue);
+                        logger.info("Using FENICS_USREPO entry because attribute matches: " + attributeValue);
                         return nativeId;
                     } 
                 } else {
                     // For all other sources, return the native ID directly
-                    LOGGER.info("Returning native ID for source {}: {}", src, nativeId);
+                    logger.info("Returning native ID for source " + src + ": " + nativeId);
                     return nativeId;
                 }
             }
 
             // No matches found after full search
-            LOGGER.warn("No matching instrument found for source: {}, AON: {}, instrument: {}", 
-                sourceId, isAON, instrumentId);
+            logger.warn("No matching instrument found for source: \"" + sourceId + "\", AON: " + isAON + ", instrument: " + instrumentId);
 
             // Log the actual source and ID fields to help diagnose
             StringBuilder sb = new StringBuilder();
@@ -415,12 +410,12 @@ public class Instrument {
                     .append("\n");
                 }
             }
-            LOGGER.info("Source fields for {}:\n{}", instrumentId, sb.toString());
+            logger.info("Source fields for \"" + instrumentId + "\":\n" + sb.toString());
 
             return null;
             
         } catch (Exception e) {
-            LOGGER.error("Error getting instrument field for source: {}", sourceId, e);
+            logger.error("Error getting instrument field for source: " + sourceId + " " + e);
             return null;
         }
     }
@@ -435,42 +430,40 @@ public class Instrument {
  */
 public double getMinimumQuantityBySource(String sourceId) {
     if (sourceId == null || sourceId.isEmpty()) {
-        LOGGER.warn("Instrument.getMinimumQuantityBySource received null/empty sourceId");
+        logger.warn("Instrument.getMinimumQuantityBySource received null/empty sourceId");
         return -1;
     }
 
     try {
         // Search through all source/QtyMin pairs
-        if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("Searching for minimum quantity for source: {} in instrument: {}", sourceId, instrumentId);
-        }
+        logger.debug("Searching for minimum quantity for source: "+sourceId+" in instrument: "+instrumentId);
+
 
         for (int i = 0; i <= 15; i++) {
             String src = getSourceByIndex(i);
             String qtyMinStr = getQtyMinByIndex(i);
 
-            if (LOGGER.isDebugEnabled()) {
-                LOGGER.debug("Checking index {}: src={}, qtyMin={}", i, src, qtyMinStr);
-            }
+            logger.debug("Checking index "+i+": src="+src+", qtyMin="+qtyMinStr);
+
 
             // Skip if source doesn't match or is null
             if (src == null || !sourceId.equals(src)) {
                 continue;
             }
 
-            LOGGER.info("Found matching source at index {}: {}", i, src);
+            logger.info("Found matching source at index "+i+": "+src);
 
             // Special handling for FENICS_USREPO (same logic as getInstrumentFieldBySourceString)
             if ("FENICS_USREPO".equals(src)) {
                 String attributeValue = getAttributeByIndex(i);
-                LOGGER.debug("FENICS_USREPO found, checking attribute value: {}", attributeValue);
-                
+                logger.debug("FENICS_USREPO found, checking attribute value: "+attributeValue);
+
                 // Only use this entry if attribute also matches FENICS_USREPO
                 if ("BGC".equals(attributeValue)) {
-                    LOGGER.info("Skipping FENICS_USREPO entry because attribute doesn't match: {}", attributeValue);
+                    logger.info("Skipping FENICS_USREPO entry because attribute doesn't match: "+attributeValue);
                     continue;
                 } else if (!"FENICS_USREPO".equals(attributeValue)) {
-                    LOGGER.info("Skipping FENICS_USREPO entry because attribute doesn't match: {}", attributeValue);
+                    logger.info("Skipping FENICS_USREPO entry because attribute doesn't match: "+attributeValue);
                     continue;
                 }
             }
@@ -479,56 +472,50 @@ public double getMinimumQuantityBySource(String sourceId) {
             if (qtyMinStr != null && !qtyMinStr.isEmpty()) {
                 try {
                     double qtyMin = Double.parseDouble(qtyMinStr);
-                    if (LOGGER.isInfoEnabled()) {
-                        LOGGER.info("Found minimum quantity for source {}: {}", sourceId, qtyMin);
-                    }
+                    logger.info("Found minimum quantity for source " + sourceId + ": " + qtyMin);
+
                     return qtyMin;
                 } catch (NumberFormatException e) {
-                    LOGGER.warn("Invalid QtyMin format for source {} at index {}: {}", sourceId, i, qtyMinStr);
+                    logger.warn("Invalid QtyMin format for source " + sourceId + " at index " + i + ": " + qtyMinStr);
                     // Continue searching in case there's another valid entry
                 }
             } else {
-                LOGGER.warn("QtyMin is null/empty for source {} at index {}", sourceId, i);
+                logger.warn("QtyMin is null/empty for source " + sourceId + " at index " + i);
                 // Continue searching in case there's another valid entry
             }
         }
 
         // No valid matches found
-        LOGGER.warn("No minimum quantity found for source: {} in instrument: {}", sourceId, instrumentId);
+        logger.warn("No minimum quantity found for source: " + sourceId + " in instrument: " + instrumentId);
 
         // Log all source fields for debugging (only if debug is enabled)
-        if (LOGGER.isDebugEnabled()) {
-            logAllSourceFields();
-        }
+        logAllSourceFields();
 
         return -1;
         
     } catch (Exception e) {
-        LOGGER.error("Error getting minimum quantity for source: {} in instrument: {}", 
-            sourceId, instrumentId, e);
+        logger.error("Error getting minimum quantity for source: " + sourceId + " in instrument: " + instrumentId + " " + e);
         return -1;
     }
 }
 
-/**
- * Gets the minimum quantity for a specific source with a fallback default.
- * This is a convenience method that provides a fallback value if no specific minimum is found.
- * 
- * @param sourceId The source identifier
- * @param defaultMinimum The default minimum to return if source-specific minimum is not found
- * @return The minimum quantity for the source, or defaultMinimum if not found
- */
-public double getMinimumQuantityBySource(String sourceId, double defaultMinimum) {
-    double sourceMinimum = getMinimumQuantityBySource(sourceId);
-    if (sourceMinimum <= 0) {
-        if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("No specific minimum found for source {}, using default: {}", 
-                sourceId, defaultMinimum);
+    /**
+     * Gets the minimum quantity for a specific source with a fallback default.
+     * This is a convenience method that provides a fallback value if no specific minimum is found.
+     * 
+     * @param sourceId The source identifier
+     * @param defaultMinimum The default minimum to return if source-specific minimum is not found
+     * @return The minimum quantity for the source, or defaultMinimum if not found
+     */
+    public double getMinimumQuantityBySource(String sourceId, double defaultMinimum) {
+        double sourceMinimum = getMinimumQuantityBySource(sourceId);
+        if (sourceMinimum <= 0) {
+            logger.debug("No specific minimum found for source " + sourceId + ", using default: " + defaultMinimum);
+
+            return defaultMinimum;
         }
-        return defaultMinimum;
+        return sourceMinimum;
     }
-    return sourceMinimum;
-}
 
 /**
  * Gets all minimum quantities mapped by source for this instrument.
@@ -557,12 +544,12 @@ public Map<String, Double> getAllMinimumQuantitiesBySource() {
                     double qtyMin = Double.parseDouble(qtyMinStr);
                     result.put(src, qtyMin);
                 } catch (NumberFormatException e) {
-                    LOGGER.warn("Invalid QtyMin format for source {} at index {}: {}", src, i, qtyMinStr);
+                    logger.warn("Invalid QtyMin format for source " + src + " at index " + i + ": " + qtyMinStr);
                 }
             }
         }
     } catch (Exception e) {
-        LOGGER.error("Error getting all minimum quantities for instrument: {}", instrumentId, e);
+        logger.error("Error getting all minimum quantities for instrument: " + instrumentId + " " + e);
     }
     
     return result;
@@ -590,8 +577,8 @@ private void logAllSourceFields() {
               .append("\n");
         }
     }
-    
-    LOGGER.debug("Source/QtyMin mapping for {}:\n{}", instrumentId, sb.toString());
+
+    logger.debug("Source/QtyMin mapping for " + instrumentId + ":\n" + sb.toString());
 }
     
     /**
@@ -721,7 +708,7 @@ private void logAllSourceFields() {
      * This should be called after all fields are populated.
      */
     public void buildSourceMappings() {
-        LOGGER.info("Building source mappings for instrument: {}", instrumentId);
+        logger.info("Building source mappings for instrument: " + instrumentId);
         
         // Log the field values for mapping
         StringBuilder sb = new StringBuilder();
@@ -734,28 +721,22 @@ private void logAllSourceFields() {
         for (int i = 0; i <= 15; i++) {
             String src = null;
             String id = null;
-            String attr = null;
-            Double qtyMin = null;
             Boolean instrumentIsAon = null;
             try {
 
                     java.lang.reflect.Method getSrc = this.getClass().getMethod("getSrc" + i);
                     java.lang.reflect.Method getId = this.getClass().getMethod("getId" + i);
-                    java.lang.reflect.Method getAttr = this.getClass().getMethod("getAttribute" + i);
                     java.lang.reflect.Method getAON = this.getClass().getMethod("get" + i + "IsAON");
-                    java.lang.reflect.Method getQtyMin = this.getClass().getMethod("getQtyMin" + i);
 
                     src = (String) getSrc.invoke(this);
                     id = (String) getId.invoke(this);
-                    attr = (String) getAttr.invoke(this);
                     instrumentIsAon = (Boolean) getAON.invoke(this);
-                    qtyMin = (Double) getQtyMin.invoke(this);
 
             } catch (Exception e) {
                 sb.append("  Error accessing field at index ").append(i)
                 .append(": ").append(e.getMessage()).append("\n");
                 // Print full stack trace to console for debugging
-                LOGGER.error("Error accessing field at index {}", i, e);
+                logger.error("Error accessing field at index " + i + " " + e);
                 continue;
             }
             
@@ -769,14 +750,14 @@ private void logAllSourceFields() {
                                 
                 if ("FENICS_USREPO".equals(src)) {
                     String attributeValue = getAttributeByIndex(i);
-                    LOGGER.debug("FENICS_USREPO found, checking attribute value: {}", attributeValue);
+                    logger.debug("FENICS_USREPO found, checking attribute value: " + attributeValue);
                     
                     // Only use this entry if attribute also matches FENICS_USREPO
                     if ("BGC".equals(attributeValue)) {
-                        LOGGER.info("Skipping FENICS_USREPO entry because attribute doesn't match: {}", attributeValue);
+                        logger.info("Skipping FENICS_USREPO entry because attribute doesn't match: " + attributeValue);
                         continue;
                     } else if ("FENICS_USREPO".equals(attributeValue)) {
-                        LOGGER.info("Using FENICS_USREPO entry because attribute matches: {}", attributeValue);
+                        logger.info("Using FENICS_USREPO entry because attribute matches: " + attributeValue);
                         sourceToNativeIdMap.put(cacheKey, id);
                     }
                 } else {
@@ -794,7 +775,7 @@ private void logAllSourceFields() {
             .append("\n");
         }
 
-        LOGGER.info("Source mappings built for instrument: {}", instrumentId);
+        logger.info("Source mappings built for instrument: " + instrumentId);
     }
     
     /**

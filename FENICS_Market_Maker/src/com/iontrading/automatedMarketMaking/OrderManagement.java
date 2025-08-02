@@ -21,10 +21,7 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
@@ -38,6 +35,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.iontrading.mkv.Mkv;
 import com.iontrading.mkv.MkvChain;
 import com.iontrading.mkv.MkvObject;
+import com.iontrading.mkv.MkvLog;
 import com.iontrading.mkv.MkvPattern;
 import com.iontrading.mkv.MkvPublishManager;
 import com.iontrading.mkv.MkvRecord;
@@ -63,123 +61,22 @@ import redis.clients.jedis.exceptions.JedisConnectionException;
  */
 public class OrderManagement implements MkvPublishListener, MkvRecordListener,
     MkvChainListener, IOrderManager {
-    
-  // Add logger for debugging
-private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.class);
-
-    /**
-     * Ultra-minimal production logging - only critical events
-     */
-    public static void configureProductionLogging() {
-        // Set global default to ERROR (minimal logging)
-        ApplicationLogging.setGlobalLogLevel("ERROR");
-        
-        // Only critical business events at WARN level
-        ApplicationLogging.setLogLevels("WARN",
-            "com.iontrading.automatedMarketMaking.OrderManagement"
-        );
-        
-        // Keep order tracking at WARN for business monitoring
-        ApplicationLogging.setLogLevels("WARN",
-            "com.iontrading.automatedMarketMaking.MarketOrder"
-        );
-        
-        // All infrastructure components at ERROR only
-        ApplicationLogging.setLogLevels("ERROR",
-            "com.iontrading.automatedMarketMaking.DepthListener",
-            "com.iontrading.automatedMarketMaking.AsyncLoggingManager",
-            "com.iontrading.automatedMarketMaking.ApplicationLogging",
-            "com.iontrading.automatedMarketMaking.MarketDef",
-            "com.iontrading.automatedMarketMaking.Best",
-            "com.iontrading.automatedMarketMaking.Instrument",
-            "com.iontrading.automatedMarketMaking.GCBest",
-            "com.iontrading.automatedMarketMaking.GCLevelResult"
-        );
-
-        System.out.println("PRODUCTION logging configured - minimal output mode");
-    }
-
-    /**
-     * Development logging with reasonable verbosity
-     */
-    public static void configureDevelopmentLogging() {
-        // Set global default to WARN
-        ApplicationLogging.setGlobalLogLevel("WARN");
-
-        ApplicationLogging.setLogLevels("DEBUG",
-            "com.iontrading.automatedMarketMaking.MarketMaker",
-            "com.iontrading.automatedMarketMaking.OrderManagement"
-        );
-
-        // Core business logic at INFO
-        ApplicationLogging.setLogLevels("INFO",
-            "com.iontrading.automatedMarketMaking.MarketOrder"
-        );
-
-        // Infrastructure at ERROR
-        ApplicationLogging.setLogLevels("ERROR",
-            "com.iontrading.automatedMarketMaking.BondEligibilityListener",
-            "com.iontrading.automatedMarketMaking.Instrument",
-            "com.iontrading.automatedMarketMaking.EligibilityChangeListener",
-            "com.iontrading.automatedMarketMaking.AsyncLoggingManager",
-            "com.iontrading.automatedMarketMaking.ApplicationLogging",
-            "com.iontrading.automatedMarketMaking.DepthListener",
-            "com.iontrading.automatedMarketMaking.MarketDef",
-            "com.iontrading.automatedMarketMaking.Best",
-            "com.iontrading.automatedMarketMaking.BondConsolidatedData",
-            "com.iontrading.automatedMarketMaking.GCBest",
-            "com.iontrading.automatedMarketMaking.GCLevelResult",
-            "com.iontrading.automatedMarketMaking.IOrderManager",
-            "com.iontrading.automatedMarketMaking.MarketMakerConfig"
-        );
-    }
-
-    /**
-     * Debug mode for specific troubleshooting
-     */
-    public static void configureDebugLogging(String focusComponent) {
-        configureDevelopmentLogging();
-        
-        if (focusComponent != null && !focusComponent.isEmpty()) {
-            ApplicationLogging.setLogLevel(
-                "com.iontrading.automatedMarketMaking." + focusComponent,
-                "DEBUG"
-            );
-            System.out.println("DEBUG logging enabled for " + focusComponent);
-        }
-    }
-
-    public static void configureLogging(boolean isProduction, String focusComponent) {
-        try {
-            if (isProduction) {
-                configureProductionLogging();
-                LOGGER.info("Configured for PRODUCTION mode");
-            } else {
-                configureDevelopmentLogging();
-                LOGGER.info("Configured for DEVELOPMENT mode");
-
-                // If a focus component is specified, enable detailed debugging for it
-                if (focusComponent != null && !focusComponent.isEmpty()) {
-                    configureDebugLogging(focusComponent);
-                }
-            }
-        } catch (Exception e) {
-            LOGGER.error("Error configuring logging: {}", e.getMessage(), e);
-        }
-    }
+  private MkvLog myLog;
+  private int logLevel;
+  private IONLogger logger;
 
   private volatile boolean isShuttingDown = false;
 
   // Instance of DepthListener to load and access instrument data
   private static DepthListener depthListener;
 
-  private final BondEligibilityListener bondEligibilityListener;
+  private BondEligibilityListener bondEligibilityListener;
 
   // Market maker instance for automated market making
   private MarketMaker marketMaker;
   
   // order repository instance for managing market orders
-  private final OrderRepository orderRepository;
+  private OrderRepository orderRepository;
   
   // Market maker configuration
   private MarketMakerConfig marketMakerConfig;
@@ -212,21 +109,21 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
  
   private final ScheduledExecutorService heartbeatScheduler = Executors.newScheduledThreadPool(1);
   private final ScheduledExecutorService orderExpirationScheduler = Executors.newScheduledThreadPool(1);
-  
-  private static final ThreadLocal<StringBuilder> messageBuilder = 
-    ThreadLocal.withInitial(() -> new StringBuilder(512));
 
   // Redis connection constants
-  private static final String HEARTBEAT_CHANNEL = "HEARTBEAT:ION:MARKETMAKERUAT";
-  private static final String ADMIN_CHANNEL = "ADMIN:ION:MARKETMAKERUAT";
-  private static final String REDIS_HOST = "cacheuat";
+  private final String HEARTBEAT_CHANNEL;
+  private final String ADMIN_CHANNEL;
+  private final String REDIS_HOST;
   private static final int REDIS_PORT = 6379;
   
+  private Mkv mkv;
+
   public final String hostname = System.getenv("COMPUTERNAME");
     
   //Flag to track if the system is in stopped state
   private volatile boolean isSystemStopped = false;
-  
+  private final boolean isProduction = hostname != null && hostname.equalsIgnoreCase("aslionapp01");
+
   /**
    * Time to live in milliseconds before automatic cancellation
    * Public to allow access from OrderManagement
@@ -261,7 +158,7 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
                   if (!"PONG".equals(pingResponse)) {
                       throw new RuntimeException("Redis ping test failed, expected 'PONG', got: " + pingResponse);
                   }
-                  LOGGER.info("Connected to Redis pool at {}:{}", REDIS_HOST, REDIS_PORT);
+                  logger.info("Connected to Redis pool at "+ REDIS_HOST + ":" + REDIS_PORT);
                   isRedisConnected = true;
               } finally {
                   // Return the resource to the pool
@@ -270,7 +167,7 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
                   }
               }
           } catch (Exception e) {
-              LOGGER.error("Error connecting to Redis pool", e);
+              logger.error("Error connecting to Redis pool " + e);
               throw new RuntimeException("Redis connection pool initialization failed", e);
           }
       }
@@ -297,7 +194,7 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
           jedis.publish(key, jsonPayload);
           
       } catch (JedisConnectionException jce) {
-          LOGGER.error("Redis connection lost, attempting to reconnect", jce);
+          logger.error("Redis connection lost, attempting to reconnect " + jce);
           if (jedis != null) {
               jedisPool.returnBrokenResource(jedis);
               jedis = null;
@@ -305,10 +202,10 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
           try {
               initializeRedisConnection();
           } catch (Exception e) {
-              LOGGER.error("Failed to reconnect to Redis", e);
+              logger.error("Failed to reconnect to Redis " + e);
           }
       } catch (Exception e) {
-          LOGGER.error("Error publishing to Redis", e);
+          logger.error("Error publishing to Redis " + e);
       } finally {
           if (jedis != null) {
               jedisPool.returnResource(jedis);
@@ -321,69 +218,42 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
      * Initializes the MKV API and sets up subscriptions.
      */
     public static void main(String[] args) {
-        // Initialize centralized logging before anything else
-        try {
-            System.out.println("### STARTUP: Beginning application initialization");
-            if (!ApplicationLogging.initialize("MarketMaker")) {
-                System.err.println("Failed to initialize logging, exiting");
-                System.exit(1);
-            }
 
-            LOGGER.info("Starting OrderManagement");
-        } catch (Exception e) {
-            LOGGER.error("Failed to start: {}", e.getMessage(), e);
-        }
-
-        System.out.println("### DIRECT: Creating BondEligibilityListener instance");
-        BondEligibilityListener bondEligibilityListener = new BondEligibilityListener();
-
-        System.out.println("### DIRECT: Creating OrderManagement instance");
-        // Create the order management instance
         OrderManagement om = new OrderManagement();
-        System.out.println("### DIRECT: OrderManagement instance created");    
-        
-        try {
-            // Get thread information
-            Thread[] threads = new Thread[Thread.activeCount()];
-            Thread.enumerate(threads);
-            System.out.println("### DIRECT: Current threads:");
-            for (Thread t : threads) {
-                if (t != null) {
-                    System.out.println("  - " + t.getName() + " (daemon: " + t.isDaemon() + ", alive: " + t.isAlive() + ", state: " + t.getState() + ")");
-                }
-            }
-            
-            AsyncLoggingManager manager = AsyncLoggingManager.getInstance();
-            System.out.println("### DIRECT: AsyncLoggingManager instance: " + manager);
-            System.out.println("### DIRECT: Current queue size: " + manager.getCurrentQueueSize());
-            System.out.println("### DIRECT: Messages queued: " + manager.getMessagesQueued());
-            System.out.println("### DIRECT: Messages processed: " + manager.getMessagesProcessed());
+        om.initializeMkv(args);
 
-            // Initialize MKV API with async shutdown support
-            om.initializeMkvWithAsyncShutdown(args);
+        // Initialize centralized logging before anything else
+        BondEligibilityListener bondEligibilityListener = new BondEligibilityListener();
+        om.initializeOM(bondEligibilityListener);
+
+        MkvQoS qos = om.mkv.getQoS();
+        qos.setPublishListeners(new MkvPublishListener[] { om });
+        qos.setPlatformListeners(new MkvPlatformListener[] { new OrderManagementPlatformListener(om) });
+
+        try {
 
             // Initialize DepthListener after MKV is started
             depthListener = new DepthListener(om);
-            LOGGER.info("DepthListener initialized");
+            om.logger.info("DepthListener initialized");
 
             // DepthListener now handles instrument data loading internally
             // and reports status through its health monitoring methods
-            LOGGER.info("Instrument data will be loaded by DepthListener automatically");
+            om.logger.info("Instrument data will be loaded by DepthListener automatically");
 
             // Initialize the market maker component
-            LOGGER.info("Initializing market maker component");
+            om.logger.info("Initializing market maker component");
             om.initializeMarketMaker();
 
             // Set up depth subscriptions - this will trigger the instrument data loading
-            LOGGER.info("Setting up depths subscriptions");
+            om.logger.info("Setting up depths subscriptions");
             om.subscribeToDepths();
 
-            LOGGER.info("Completing market maker initialization");
+            om.logger.info("Completing market maker initialization");
             om.completeMarketMakerInitialization();
 
         } catch (Exception e) {
-            LOGGER.warn("Failed to start MKV API: {}", e.getMessage(), e);
-            LOGGER.warn("Error details", e);
+            om.logger.warn("Failed to start MKV API: {}" + e.getMessage() + e);
+            om.logger.warn("Error details " + e);
         }
     }
         
@@ -395,11 +265,11 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
      * @param sourceId The source identifier
      * @return The native instrument ID or null if not found
      */
-    public static String getNativeInstrumentId(String instrumentId, String sourceId, Boolean isAON) {
+    public String getNativeInstrumentId(String instrumentId, String sourceId, Boolean isAON) {
         if (depthListener != null) {
         return depthListener.getInstrumentFieldBySourceString(instrumentId, sourceId, isAON);
         }
-        LOGGER.warn("DepthListener not initialized - cannot get native instrument ID");
+        logger.warn("DepthListener not initialized - cannot get native instrument ID");
         return null;
     }
   
@@ -416,32 +286,45 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
     private final String applicationId;
 
     /**
-     * Creates a new instance of OrderManagement with a new BondEligibilityListener.
-     * This constructor maintains backward compatibility.
+     * Creates a new instance of OrderManagement.
+     * Generates a unique application ID based on the current time.
      */
     public OrderManagement() {
-        this(new BondEligibilityListener());
+
+        if (isProduction) {
+            HEARTBEAT_CHANNEL = "HEARTBEAT:ION:MARKETMAKER";
+            ADMIN_CHANNEL = "ADMIN:ION:MARKETMAKER";
+            REDIS_HOST = "cacheprod";
+        } else {
+            HEARTBEAT_CHANNEL = "HEARTBEAT:ION:MARKETMAKERUAT";
+            ADMIN_CHANNEL = "ADMIN:ION:MARKETMAKERUAT";
+            REDIS_HOST = "cacheuat";
+        }
+
+        applicationId = "Java_Order_Manager";
+        
+        this.bondEligibilityListener = null;
+        this.orderRepository = null;
     }
+
 
     /**
      * Creates a new instance of OrderManagement.
      * Generates a unique application ID based on the current time.
      */
-    public OrderManagement(BondEligibilityListener bondEligibilityListener) {
-        configureLogging(false, null);
+    public void initializeOM(BondEligibilityListener bondEligibilityListener) {
 
         this.bondEligibilityListener = bondEligibilityListener;
         this.orderRepository = OrderRepository.getInstance();
 
-        applicationId = "Java_Order_Manager"; 
-        LOGGER.info("Application ID: {}", applicationId);
-        
+        logger.info("Application ID: " + applicationId);
+
         initializeRedisConnection();
         
         // Add shutdown hook for Redis pool
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             if (jedisPool != null) {
-                LOGGER.info("Shutting down Redis connection pool");
+                logger.info("Shutting down Redis connection pool");
                 jedisPool.destroy(); // Use destroy() for older Jedis versions
             }
         }));
@@ -454,8 +337,6 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
         
         // Initialize heartbeats
         initializeHeartbeat();
-
-        initializeSignalHandlers();
 
         initializeOrderExpirationChecker();
 
@@ -484,42 +365,45 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
      * 
      * @param args Command line arguments to pass to MKV
      */
-    public void initializeMkvWithAsyncShutdown(String[] args) {
+    public void initializeMkv(String[] args) {
         try {
-            LOGGER.info("Initializing MKV API with async shutdown support");
             
             MkvQoS qos = new MkvQoS();
             qos.setArgs(args);
-            qos.setPublishListeners(new MkvPublishListener[] { this });
-            
-            // Add the platform listener for async shutdown
-            qos.setPlatformListeners(new MkvPlatformListener[] { new OrderManagementPlatformListener() });
-            
-            // Start MKV with our QoS settings
-            Mkv existingMkv = Mkv.getInstance();
-            if (existingMkv == null) {
-                Mkv.start(qos);
-                LOGGER.info("MKV started with async shutdown support");
-            } else {
-                LOGGER.info("MKV API already started, adding our listeners");
-                existingMkv.getPublishManager().addPublishListener(this);
+
+            try {
+                mkv = Mkv.start(qos);
+                logLevel = mkv.getProperties().getIntProperty("DEBUG");
+                // Initialize the log after starting Mkv
+                myLog = mkv.getLogManager().createLogFile("MarketMaker");
+                logger = new IONLogger(myLog, logLevel, "orderManagement");
+                logger.info("MKV connection established successfully");
+                mkv.getPublishManager().addPublishListener(this);
+            } catch (MkvException e) {
+                logger.error("MKV connection failed: " + e.getMessage());
+                throw new RuntimeException("MKV initialization failed", e);
             }
+            logger.info("MKV API already started, adding our listeners");
+
         } catch (Exception e) {
-            LOGGER.error("Failed to initialize MKV with async shutdown: {}", e.getMessage(), e);
+            logger.error("Failed to initialize MKV with async shutdown: " + e.getMessage() + " " + e);
         }
     }
-  
-  // Initialize the mapping of venues to trader IDs
-  private void initializeTraderMap() {
-    //  venueToTraderMap.put("BTEC_REPO_US", "EGEI");
-    //  venueToTraderMap.put("DEALERWEB_REPO", "aslegerhard01");
-    //  venueToTraderMap.put("FENICS_USREPO", "frosevan");
-    venueToTraderMap.put("BTEC_REPO_US", "TEST2");
-    venueToTraderMap.put("DEALERWEB_REPO", "asldevtrd1");
-    venueToTraderMap.put("FENICS_USREPO", "frosasl1");
-      // Add more venue-trader mappings as needed
 
-      LOGGER.info("Venue to trader mapping initialized with {} entries", venueToTraderMap.size());
+/**
+ * Initialize the mapping of venues to trader IDs
+ */
+private void initializeTraderMap() {
+    if (isProduction) {
+        venueToTraderMap.put("BTEC_REPO_US", "EGEI");
+        venueToTraderMap.put("DEALERWEB_REPO", "aslegerhard01");
+        venueToTraderMap.put("FENICS_USREPO", "frosevan");
+    } else {
+        venueToTraderMap.put("BTEC_REPO_US", "TEST2");
+        venueToTraderMap.put("DEALERWEB_REPO", "asldevtrd1");
+        venueToTraderMap.put("FENICS_USREPO", "frosasl1");
+    }
+      logger.info("Venue to trader mapping initialized with " + venueToTraderMap.size() + " entries");
   }
 
     /**
@@ -534,110 +418,33 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
                 .setMarketSource("FENICS_USREPO")
                 .setTargetVenues("BTEC_REPO_US", "DEALERWEB_REPO")
                 .build();
-            LOGGER.info("Default market maker configuration created: {}", marketMakerConfig);
+            logger.info("Default market maker configuration created: " + marketMakerConfig);
             // Create the market maker instance
             marketMaker = new MarketMaker(this, marketMakerConfig, bondEligibilityListener);
-            LOGGER.info("Market maker initialized with default configuration: {}", marketMakerConfig);
+            logger.info("Market maker initialized with default configuration: " + marketMakerConfig);
 
             // Add a shutdown hook for the market maker
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 if (marketMaker != null) {
-                    LOGGER.info("Shutting down market maker");
+                    logger.info("Shutting down market maker");
                     marketMaker.shutdown();
                 }
             }));
         } catch (Exception e) {
-            LOGGER.error("Error initializing market maker", e);
+            logger.error("Error initializing market maker " + e);
         }
     }
 
-    /**
-     * Initialize signal handlers to ensure proper shutdown sequence
-     */
-    private void initializeSignalHandlers() {
-        LOGGER.info("Initializing signal handlers for graceful shutdown");
-        
-        // Create a special handler for SIGINT (Ctrl+C)
-        final Thread ctrlCHandler = new Thread(() -> {
-            LOGGER.info("SIGINT (Ctrl+C) received, starting controlled shutdown");
-            
-            try {
-                // Mark that we're shutting down
-                isShuttingDown = true;
-                
-                // Create a countdown latch to block the shutdown process
-                final CountDownLatch shutdownLatch = new CountDownLatch(1);
-                
-                // Start the cancellation in a separate thread
-                Thread cancelThread = new Thread(() -> {
-                    try {
-                        LOGGER.info("Cancelling all orders before shutdown");
-                        
-                        // First cancel market maker orders
-                        if (marketMaker != null) {
-                            try {
-                                // Use the asyncShutdown method for consistency
-                                LOGGER.info("Executing market maker shutdown phase 1");
-                                marketMaker.asyncShutdown(1);
-                                
-                                LOGGER.info("Executing market maker shutdown phase 2");
-                                marketMaker.asyncShutdown(2);
-                                
-                                LOGGER.info("Market maker shutdown complete");
-                            } catch (Exception e) {
-                                LOGGER.error("Error during market maker shutdown: {}", e.getMessage());
-                            }
-                        }
-                        
-                        // Then cancel any remaining orders
-                        try {
-                            cancelAllOrders();
-                        } catch (Exception e) {
-                            LOGGER.error("Error cancelling orders: {}", e.getMessage());
-                        }
-                        
-                        LOGGER.info("All cancellations complete, releasing shutdown latch");
-                    } finally {
-                        // Always release the latch to avoid deadlock
-                        shutdownLatch.countDown();
-                    }
-                });
-                
-                // Make this a daemon thread so it doesn't prevent JVM exit if it hangs
-                cancelThread.setDaemon(true);
-                cancelThread.setName("Ctrl+C-CancellationThread");
-                cancelThread.start();
-                
-                // Wait for cancellations to complete with a timeout
-                if (!shutdownLatch.await(15, TimeUnit.SECONDS)) {
-                    LOGGER.warn("Timeout waiting for order cancellations, proceeding with shutdown anyway");
-                }
-                
-                LOGGER.info("Controlled shutdown sequence completed");
-            } catch (Exception e) {
-                LOGGER.error("Error during controlled shutdown: {}", e.getMessage());
-            }
-        });
-        
-        // Set the name for easier identification
-        ctrlCHandler.setName("Ctrl+C-ShutdownHandler");
-        
-        // Register our handler to run before the JVM shutdown hooks
-        Runtime.getRuntime().addShutdownHook(ctrlCHandler);
-        
-        LOGGER.info("Signal handlers initialized");
-    }
-
     private void initializeOrderExpirationChecker() {
-        LOGGER.info("Initializing order expiration checker");
+        logger.info("Initializing order expiration checker");
         
         // Schedule the order expiration task to run every 5 seconds
         orderExpirationScheduler.scheduleAtFixedRate(() -> {
             try {
-                LOGGER.debug("Checking for expired orders");
+                logger.debug("Checking for expired orders");
                 monitorActiveOrders();
             } catch (Exception e) {
-                LOGGER.error("Error checking for expired orders: {}", e.getMessage(), e);
+                logger.error("Error checking for expired orders: " + e.getMessage() + " " + e);
             }
         }, 0, 10, TimeUnit.SECONDS);
     }
@@ -646,10 +453,10 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
     private void completeMarketMakerInitialization() {
         if (marketMaker != null) {
             try {
-                LOGGER.info("Completing market maker initialization with MKV subscriptions");
+                logger.info("Completing market maker initialization with MKV subscriptions");
                 marketMaker.initializeMkvSubscriptions();
             } catch (Exception e) {
-                LOGGER.error("Error completing market maker initialization", e);
+                logger.error("Error completing market maker initialization" + e);
             }
         }
     }
@@ -663,12 +470,12 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
         try {
             if (marketMaker != null) {
                 marketMaker.startAutomatedMarketMaking();
-                LOGGER.info("Market making started");
+                logger.info("Market making started");
                 return true;
             }
             return false;
         } catch (Exception e) {
-            LOGGER.error("Error starting market making", e);
+            logger.error("Error starting market making: " + e.getMessage() + " " + e);
             return false;
         }
     }
@@ -682,12 +489,12 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
         try {
             if (marketMaker != null) {
                 marketMaker.stopAutomatedMarketMaking();
-                LOGGER.info("Market making stopped");
+                logger.info("Market making stopped");
                 return true;
             }
             return false;
         } catch (Exception e) {
-            LOGGER.error("Error stopping market making", e);
+            logger.error("Error stopping market making " + e);
             return false;
         }
     }
@@ -730,7 +537,7 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
 	public String getTraderForVenue(String venue) {
 	   String traderId = venueToTraderMap.get(venue);
 	   if (traderId == null) {
-	       LOGGER.warn("No trader configured for venue: {}", venue);
+	       logger.warn("No trader configured for venue: " + venue);
 	       return "DEFAULT_TRADER"; // Fallback trader ID
 	   }
 	   return traderId;
@@ -742,12 +549,12 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
 	 */
 	private void initializeRedisControlListener() {
 	    if (!isRedisConnected) {
-	        LOGGER.error("Cannot initialize Redis control listener - Redis is not connected");
+	        logger.error("Cannot initialize Redis control listener - Redis is not connected");
 	        return;
 	    }
-	    
-	    LOGGER.info("Initializing Redis control channel listener on channel: {}", ADMIN_CHANNEL);
-	    
+
+	    logger.info("Initializing Redis control channel listener on channel: " + ADMIN_CHANNEL);
+
 	    // Start a separate thread for Redis pub/sub listening
 	    Thread redisListenerThread = new Thread(() -> {
 	        Jedis subscriberJedis = null;
@@ -755,13 +562,13 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
 	            // Get a dedicated connection from the pool for pub/sub
 	            subscriberJedis = jedisPool.getResource();
 
-	            LOGGER.info("Redis control listener started on channel: {}", ADMIN_CHANNEL);
-	            
+	            logger.info("Redis control listener started on channel: " + ADMIN_CHANNEL);
+
 	            // Create a subscriber to process messages
 	            subscriberJedis.subscribe(new JedisPubSubListener(), ADMIN_CHANNEL);
 	            
 	        } catch (Exception e) {
-	            LOGGER.error("Error in Redis control listener: {}", e.getMessage(), e);
+	            logger.error("Error in Redis control listener: " + e.getMessage() + " " + e);
 	            if (subscriberJedis != null) {
 	                jedisPool.returnBrokenResource(subscriberJedis);
 	                subscriberJedis = null;
@@ -772,7 +579,7 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
 	                try {
 	                    jedisPool.returnResource(subscriberJedis);
 	                } catch (Exception e) {
-	                    LOGGER.warn("Error returning Redis subscriber to pool: {}", e.getMessage());
+	                    logger.warn("Error returning Redis subscriber to pool: " + e.getMessage());
 	                }
 	            }
 	        }
@@ -781,8 +588,8 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
 	    // Set as daemon thread so it doesn't prevent JVM shutdown
 	    redisListenerThread.setDaemon(true);
 	    redisListenerThread.start();
-	    
-	    LOGGER.info("Redis control listener thread started");
+
+	    logger.info("Redis control listener thread started");
 	}
 	
     /**
@@ -796,7 +603,7 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
 	            return; // Ignore messages from other channels
 	        }
 
-	        LOGGER.info("Received control message: {} on channel: {}", message, channel);
+	        logger.info("Received control message: " + message + " on channel: " + channel);
 
 	        try {
 	            // Parse message as JSON to extract command and parameters
@@ -814,21 +621,21 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
                 } else if ("MM_CONFIG".equalsIgnoreCase(command)) {
                     handleMarketMakerConfigCommand(controlMessage);
                 } else {
-                    LOGGER.warn("Unknown control command received: {}", command);
+                    logger.warn("Unknown control command received: " + command);
                 }
 	        } catch (Exception e) {
-	            LOGGER.error("Error processing control message: {}", e.getMessage(), e);
+	            logger.error("Error processing control message: " + e.getMessage() + " " + e);
 	        }
 	    }
 
 	    @Override
 	    public void onSubscribe(String channel, int subscribedChannels) {
-	        LOGGER.info("Subscribed to Redis channel: {}", channel);
+	        logger.info("Subscribed to Redis channel: " + channel);
 	    }
 
 	    @Override
 	    public void onUnsubscribe(String channel, int subscribedChannels) {
-	        LOGGER.info("Unsubscribed from Redis channel: {}", channel);
+	        logger.info("Unsubscribed from Redis channel: " + channel);
 	    }
 	}
 	
@@ -845,8 +652,8 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
             return OBJECT_MAPPER.readValue(message, Map.class);
         } catch (Exception e) {
             // If not valid JSON, create a simple command map
-            LOGGER.warn("Failed to parse control message as JSON, treating as plain command: {}", message);
-            
+            logger.warn("Failed to parse control message as JSON, treating as plain command: " + message);
+
             Map<String, Object> result = new HashMap<>();
             result.put("command", message.trim());
             return result;
@@ -861,11 +668,11 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
     private void handleStopCommand(Map<String, Object> controlMessage) {
         // Skip if already stopped
         if (isSystemStopped) {
-            LOGGER.info("System already in STOPPED state, ignoring redundant STOP command");
+            logger.info("System already in STOPPED state, ignoring redundant STOP command");
             return;
         }
 
-        LOGGER.warn("Executing STOP command - cancelling orders and preventing new submissions");
+        logger.warn("Executing STOP command - cancelling orders and preventing new submissions");
 
         // Set the system to stopped state
         isSystemStopped = true;
@@ -879,8 +686,8 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
         // Publish status update
     //    publishSystemStatus();
 
-        LOGGER.warn("STOP command executed - system is now STOPPED");
-    }   
+        logger.warn("STOP command executed - system is now STOPPED");
+    }
 
     /**
      * Handles the RESUME command, allowing new orders to be submitted.
@@ -890,11 +697,11 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
     private void handleResumeCommand(Map<String, Object> controlMessage) {
         // Skip if not stopped
         if (!isSystemStopped) {
-            LOGGER.info("System already in RUNNING state, ignoring redundant RESUME command");
+            logger.info("System already in RUNNING state, ignoring redundant RESUME command");
             return;
         }
 
-        LOGGER.warn("Executing RESUME command - allowing new order submissions");
+        logger.warn("Executing RESUME command - allowing new order submissions");
 
         // Set the system back to running state
         isSystemStopped = false;
@@ -903,15 +710,15 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
         Boolean enableTrading = (Boolean) controlMessage.getOrDefault("enableTrading", Boolean.TRUE);
         if (enableTrading) {
             continuousTradingEnabled = true;
-            LOGGER.info("Continuous trading re-enabled as part of RESUME command");
+            logger.info("Continuous trading re-enabled as part of RESUME command");
         } else {
-            LOGGER.info("Continuous trading remains disabled after RESUME command");
+            logger.info("Continuous trading remains disabled after RESUME command");
         }
         
         // Publish status update
     //    publishSystemStatus();
 
-        LOGGER.warn("RESUME command executed - system is now RUNNING");
+        logger.warn("RESUME command executed - system is now RUNNING");
     }
 
         /**
@@ -920,8 +727,8 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
      * @param controlMessage The control message containing command parameters
      */
     private void handleMarketMakerStartCommand(Map<String, Object> controlMessage) {
-        LOGGER.info("Executing MM_START command - starting market maker");
-        
+        logger.info("Executing MM_START command - starting market maker");
+
         boolean success = startMarketMaking();
         
         Map<String, Object> status = new HashMap<>();
@@ -931,8 +738,8 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
         status.put("timestamp", new Date().getTime());
         
         publishToRedis(ADMIN_CHANNEL + "_RESPONSE", status);
-        
-        LOGGER.info("Market maker start command executed - result: {}", success ? "SUCCESS" : "FAILED");
+
+        logger.info("Market maker start command executed - result: " + (success ? "SUCCESS" : "FAILED"));
     }
 
     /**
@@ -941,8 +748,8 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
      * @param controlMessage The control message containing command parameters
      */
     private void handleMarketMakerStopCommand(Map<String, Object> controlMessage) {
-        LOGGER.info("Executing MM_STOP command - stopping market maker");
-        
+        logger.info("Executing MM_STOP command - stopping market maker");
+
         boolean success = stopMarketMaking();
         
         Map<String, Object> status = new HashMap<>();
@@ -952,8 +759,8 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
         status.put("timestamp", new Date().getTime());
         
         publishToRedis(ADMIN_CHANNEL + "_RESPONSE", status);
-        
-        LOGGER.info("Market maker stop command executed - result: {}", success ? "SUCCESS" : "FAILED");
+
+        logger.info("Market maker stop command executed - result: " + (success ? "SUCCESS" : "FAILED"));
     }
 
     /**
@@ -962,7 +769,7 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
      * @param controlMessage The control message containing configuration parameters
      */
     private void handleMarketMakerConfigCommand(Map<String, Object> controlMessage) {
-        LOGGER.info("Executing MM_CONFIG command - updating market maker configuration");
+        logger.info("Executing MM_CONFIG command - updating market maker configuration");
         
         try {
         // Extract configuration parameters with proper defaults
@@ -1000,9 +807,9 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
             
             publishToRedis(ADMIN_CHANNEL + "_RESPONSE", status);
             
-            LOGGER.info("Market maker configuration updated: {}", newConfig);
+            logger.info("Market maker configuration updated: " + newConfig);
         } catch (Exception e) {
-            LOGGER.error("Error updating market maker configuration: {}", e.getMessage(), e);
+            logger.error("Error updating market maker configuration: " + e.getMessage() + " " + e);
             
             Map<String, Object> status = new HashMap<>();
             status.put("command", "MM_CONFIG");
@@ -1020,9 +827,8 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
    */
   public void onPublish(MkvObject mkvObject, boolean pub_unpub, boolean dwl) {
     // Not handling individual publication events
-    if (LOGGER.isDebugEnabled()) {
-      LOGGER.debug("Publication event for: {}", mkvObject.getName());
-    }
+    logger.debug("Publication event for: " + mkvObject.getName());
+
   }
 
   /**
@@ -1034,9 +840,7 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
    * @param start Whether this is the start of idle time
    */
   public void onPublishIdle(String component, boolean start) {
-    if (LOGGER.isDebugEnabled()) {
-      LOGGER.debug("Publication idle for component: {}, start: {}", component, start);
-    }
+      logger.debug("Publication idle for component: " + component + ", start: " + start);
   }
 
   /**
@@ -1045,76 +849,80 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
    */
   public void onSubscribe(MkvObject mkvObject) {
     // No action needed - we are not a publisher
-    if (LOGGER.isDebugEnabled()) {
-      LOGGER.debug("Subscription event for: {}", mkvObject.getName());
-    }
-  }
+    logger.debug("Subscription event for: " + mkvObject.getName());
+      }
 
     /**
      * Platform listener implementation that handles the async shutdown process.
      * This allows the application to gracefully shut down when requested by the daemon.
      */
-    private class OrderManagementPlatformListener implements MkvPlatformListener {
+    private static class OrderManagementPlatformListener implements MkvPlatformListener {
+        private final OrderManagement om;
+
+        public OrderManagementPlatformListener(OrderManagement orderManagement) {
+            this.om = orderManagement;
+        }
+    
         @Override
         public void onMain(MkvPlatformEvent event) {
             switch (event.intValue()) {
                 case MkvPlatformEvent.START_code:
-                    LOGGER.info("MKV platform START event received");
+                    om.logger.info("MKV platform START event received");
                     break;
                     
                 case MkvPlatformEvent.STOP_code:
-                    LOGGER.info("MKV platform STOP event received");
-                    if (asyncShutdownInProgress) {
-                        LOGGER.info("Final STOP event received after async shutdown - completing shutdown process");
+                    om.logger.info("MKV platform STOP event received");
+                    if (om.asyncShutdownInProgress) {
+                        om.logger.info("Final STOP event received after async shutdown - completing shutdown process");
                     }
                     break;
                     
                 case MkvPlatformEvent.SHUTDOWN_REQUEST_code:
-                    LOGGER.info("MKV platform SHUTDOWN_REQUEST event received - beginning async shutdown sequence");
+                    om.logger.info("MKV platform SHUTDOWN_REQUEST event received - beginning async shutdown sequence");
                     
                     try {
                         // First phase of the shutdown process
-                        asyncShutdownInProgress = true;
+                        om.asyncShutdownInProgress = true;
                         
                         // If we're not ready to stop yet, ask for an async shutdown
-                        if (readyToStop.decrementAndGet() > 0) {
-                            LOGGER.info("Not ready to stop - requesting async shutdown (pending phases: {})", readyToStop.get());
-                            
+                        if (om.readyToStop.decrementAndGet() > 0) {
+                            om.logger.info("Not ready to stop - requesting async shutdown (pending phases: " + om.readyToStop.get() + ")");
+
                             // Start the graceful shutdown in a separate thread
                             Thread shutdownThread = new Thread(() -> {
                                 try {
-                                    LOGGER.info("Beginning first phase of graceful shutdown...");
+                                    om.logger.info("Beginning first phase of graceful shutdown...");
                                     
                                     // First prepare the market maker (disable but don't cancel orders yet)
-                                    if (marketMaker != null) {
-                                        LOGGER.info("Preparing market maker for shutdown");
-                                        marketMaker.prepareForShutdown();
+                                    if (om.marketMaker != null) {
+                                        om.logger.info("Preparing market maker for shutdown");
+                                        om.marketMaker.prepareForShutdown();
                                     }
                                     
                                     // Cancel market maker orders with a timeout
-                                    LOGGER.info("Cancelling market maker orders");
-                                    boolean cancelled = cancelMarketMakerOrders(10000);
-                                    LOGGER.info("Market maker order cancellation complete: all cancelled={}", cancelled);
-                                    
+                                    om.logger.info("Cancelling market maker orders");
+                                    boolean cancelled = om.cancelMarketMakerOrders(10000);
+                                    om.logger.info("Market maker order cancellation complete: all cancelled=" + cancelled);
+
                                     // Then cancel any remaining orders
-                                    LOGGER.info("Cancelling remaining orders");
-                                    cancelAllOrders();
+                                    om.logger.info("Cancelling remaining orders");
+                                    om.cancelAllOrders();
                                     
                                     // Notify that we're ready for final shutdown
-                                    LOGGER.info("All orders cancelled, ready for final shutdown");
-                                    readyToStop.decrementAndGet();
+                                    om.logger.info("All orders cancelled, ready for final shutdown");
+                                    om.readyToStop.decrementAndGet();
                                     
                                     // Request a synchronous shutdown now that we're ready
-                                    LOGGER.info("Requesting synchronous shutdown to complete process");
+                                    om.logger.info("Requesting synchronous shutdown to complete process");
                                     Mkv.getInstance().shutdown(MkvShutdownMode.SYNC, "Component is stopping...");
                                 } catch (Exception e) {
-                                    LOGGER.error("Error during async shutdown sequence: {}", e.getMessage(), e);
-                                    
+                                    om.logger.error("Error during async shutdown sequence: " + e.getMessage() + " " + e);
+
                                     // Force sync shutdown if we hit an error
                                     try {
                                         Mkv.getInstance().shutdown(MkvShutdownMode.SYNC, "Component is stopping due to error...");
                                     } catch (Exception ex) {
-                                        LOGGER.error("Failed to request sync shutdown: {}", ex.getMessage(), ex);
+                                        om.logger.error("Failed to request sync shutdown: " + ex.getMessage() + " " + ex);
                                     }
                                 }
                             }, "AsyncShutdown-Thread");
@@ -1127,11 +935,11 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
                             Mkv.getInstance().shutdown(MkvShutdownMode.ASYNC, "Not yet ready to stop, cancelling orders...");
                         } else {
                             // We're already ready to stop, so request a sync shutdown
-                            LOGGER.info("Ready to stop - requesting sync shutdown");
+                            om.logger.info("Ready to stop - requesting sync shutdown");
                             Mkv.getInstance().shutdown(MkvShutdownMode.SYNC, "Component is stopping...");
                         }
                     } catch (MkvException e) {
-                        LOGGER.error("Error handling shutdown request: {}", e.getMessage(), e);
+                        om.logger.error("Error handling shutdown request: " + e.getMessage() + " " + e);
                     }
                     break;
             }
@@ -1139,12 +947,12 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
 
         @Override
         public void onComponent(MkvComponent comp, boolean start) {
-            LOGGER.info("MKV component event: component={}, start={}", comp.getName(), start);
+            om.logger.info("MKV component event: component=" + comp.getName() + ", start=" + start);
         }
 
         @Override
         public void onConnect(String comp, boolean start) {
-            LOGGER.info("MKV connect event: component={}, start={}", comp, start);
+            om.logger.info("MKV connect event: component=" + comp + ", start=" + start);
         }
     }
 
@@ -1154,12 +962,12 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
    */
   public void subscribeToDepths() {
         try {
-            LOGGER.info("Setting up subscriptions to instrument patterns");
+            logger.info("Setting up subscriptions to instrument patterns");
 
             // Also subscribe to the instrument pattern explicitly
             subscribeToInstrumentPattern();
 
-            LOGGER.info("Subscribing to consolidated depth data using pattern: {}", DEPTH_PATTERN);
+            logger.info("Subscribing to consolidated depth data using pattern: " + DEPTH_PATTERN);
 
             // Subscribe to the depth pattern
             subscribeToPattern();
@@ -1174,8 +982,8 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
             setupPatternSubscriptionMonitor();
             
         } catch (Exception e) {
-            LOGGER.error("Error setting up depth subscriptions: {}", e.getMessage(), e);
-            LOGGER.error("Error details", e);
+            logger.error("Error setting up depth subscriptions: " + e.getMessage() + " " + e);
+            logger.error("Error details: " + e);
         }
     }
 
@@ -1192,17 +1000,17 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
                 synchronized (subscriptionLock) {
                     // Check again inside synchronization to avoid race conditions
                     if (!subscribedPatterns.contains(pattern)) {
-                        LOGGER.info("Found " + pattern + ", subscribing: {}", pattern);
+                        logger.info("Found " + pattern + ", subscribing: " + pattern);
 
                         ((MkvPattern) obj).subscribe(fields, this);
 
                         // Mark that we've successfully subscribed
                         subscribedPatterns.add(pattern);
-                        LOGGER.info("Successfully subscribed to {}", pattern);
+                        logger.info("Successfully subscribed to " + pattern);
                     }
                 }
             } else {
-                LOGGER.warn("Pattern not found: {}", pattern);
+                logger.warn("Pattern not found: " + pattern);
 
                 MkvPublishListener patternListener = new MkvPublishListener() {
                     @Override
@@ -1244,7 +1052,7 @@ private static final Logger LOGGER = LoggerFactory.getLogger(OrderManagement.cla
                 pm.addPublishListener(patternListener);
             }
         } catch (Exception e) {
-            LOGGER.error("Error subscribing to pattern: {}", e.getMessage(), e);
+            logger.error("Error subscribing to pattern: " + e.getMessage() + " " + e);
         }
     }
 
@@ -1257,18 +1065,18 @@ private void trySubscribeAndRemoveListener(MkvObject mkvObject, MkvPublishManage
         }
         
         try {
-            LOGGER.info("Pattern found, subscribing: {}", pattern);
+            logger.info("Pattern found, subscribing: " + pattern);
 
             ((MkvPattern) mkvObject).subscribe(fields, this);
             subscribedPatterns.add(pattern);
 
-            LOGGER.info("Successfully subscribed to {}", pattern);
+            logger.info("Successfully subscribed to " + pattern);
 
             // Remove the listener now that we've subscribed - safely outside the callback
             // but still inside synchronization
             pm.removePublishListener(listener);
         } catch (Exception e) {
-            LOGGER.error("Error subscribing to pattern: {}", e.getMessage(), e);
+            logger.error("Error subscribing to pattern: " + e.getMessage() + " " + e);
         }
     }
   }
@@ -1280,7 +1088,7 @@ private void trySubscribeAndRemoveListener(MkvObject mkvObject, MkvPublishManage
 private void subscribeToInstrumentPattern() {
     try {
 
-        LOGGER.info("Subscribing to instrument data using pattern: {}", INSTRUMENT_PATTERN);
+        logger.info("Subscribing to instrument data using pattern: " + INSTRUMENT_PATTERN);
 
         // Get the publish manager to access patterns
         MkvPublishManager pm = Mkv.getInstance().getPublishManager();
@@ -1289,8 +1097,8 @@ private void subscribeToInstrumentPattern() {
         MkvObject obj = pm.getMkvObject(INSTRUMENT_PATTERN);
        
         if (obj != null && obj.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
-            LOGGER.info("Found instrument pattern, subscribing: {}", INSTRUMENT_PATTERN);
-            
+            logger.info("Found instrument pattern, subscribing: " + INSTRUMENT_PATTERN);
+
             // Initialize with the full field list from MarketDef
             List<String> fieldsList = new ArrayList<>(Arrays.asList(INSTRUMENT_FIELDS));
             boolean subscribed = false;
@@ -1302,16 +1110,16 @@ private void subscribeToInstrumentPattern() {
                     ((MkvPattern) obj).subscribe(fields, depthListener);
                     subscribed = true;
 
-                    LOGGER.info("Successfully subscribed to instrument pattern with {} fields", fieldsList.size());
+                    logger.info("Successfully subscribed to instrument pattern with " + fieldsList.size() + " fields");
                 } catch (Exception e) {
                     // If we have any fields left to remove
                     if (fieldsList.size() > 3) {  // Keep at least 3 essential fields
                         // Remove the last field in the list
                         String lastField = fieldsList.remove(fieldsList.size() - 1);
-                        LOGGER.warn("Subscription failed with field: {}. Retrying with {} fields.", lastField, fieldsList.size());
+                        logger.warn("Subscription failed with field: " + lastField + ". Retrying with " + fieldsList.size() + " fields.");
                     } else {
                         // If we've removed too many fields, try with a minimal set
-                        LOGGER.warn("Failed with reduced field set, trying minimal fields");
+                        logger.warn("Failed with reduced field set, trying minimal fields");
 
                         // Define minimal essential fields
                         String[] minimalFields = new String[] {
@@ -1321,9 +1129,9 @@ private void subscribeToInstrumentPattern() {
                         try {
                             ((MkvPattern) obj).subscribe(minimalFields, depthListener);
                             subscribed = true;
-                            LOGGER.info("Successfully subscribed with minimal fields");
+                            logger.info("Successfully subscribed with minimal fields");
                         } catch (Exception minEx) {
-                            LOGGER.error("Failed even with minimal fields: {}", minEx.getMessage(), minEx);
+                            logger.error("Failed even with minimal fields: " + minEx.getMessage() + " " + minEx);
                             throw minEx;  // Propagate the exception if even minimal fields fail
                         }
                         break;
@@ -1331,11 +1139,11 @@ private void subscribeToInstrumentPattern() {
                 }
             }
         } else {
-            LOGGER.warn("Instrument pattern not found: {}", INSTRUMENT_PATTERN);
+            logger.warn("Instrument pattern not found: " + INSTRUMENT_PATTERN);
         }
     } catch (Exception e) {
-        LOGGER.error("Error subscribing to instrument pattern: {}", e.getMessage(), e);
-        LOGGER.error("Error details", e);
+        logger.error("Error subscribing to instrument pattern: " + e.getMessage() + " " + e);
+        logger.error("Error details: " + e.getMessage() + " " + e);
     }
 }
 
@@ -1352,18 +1160,18 @@ private void subscribeToPattern() {
             synchronized (subscriptionLock) {
                 // Check again inside synchronization to avoid race conditions
                 if (!subscribedPatterns.contains(DEPTH_PATTERN)) {
-                    LOGGER.info("Found consolidated depth pattern, subscribing: {}", DEPTH_PATTERN);
+                    logger.info("Found consolidated depth pattern, subscribing: " + DEPTH_PATTERN);
 
                     ((MkvPattern) obj).subscribe(DEPTH_FIELDS, depthListener);
 
                     // Mark that we've successfully subscribed
                     subscribedPatterns.add(DEPTH_PATTERN);
 
-                    LOGGER.info("Successfully subscribed to consolidated depth pattern");
+                    logger.info("Successfully subscribed to consolidated depth pattern");
                 }
             }
         } else {
-            LOGGER.warn("Consolidated depth pattern not found: {}", DEPTH_PATTERN);
+            logger.warn("Consolidated depth pattern not found: " + DEPTH_PATTERN);
 
             // Create a single shared listener instance instead of an anonymous one
             final MkvPublishListener patternListener = new MkvPublishListener() {
@@ -1406,7 +1214,7 @@ private void subscribeToPattern() {
             pm.addPublishListener(patternListener);
         }
     } catch (Exception e) {
-        LOGGER.error("Error subscribing to pattern: {}", e.getMessage(), e);
+        logger.error("Error subscribing to pattern: " + e.getMessage() + " " + e);
     }
 }
 
@@ -1419,18 +1227,18 @@ private void subscribeToPattern() {
             }
             
             try {
-                LOGGER.info("Pattern found, subscribing: {}", DEPTH_PATTERN);
+                logger.info("Pattern found, subscribing: " + DEPTH_PATTERN);
 
                 ((MkvPattern) mkvObject).subscribe(DEPTH_FIELDS, depthListener);
                 subscribedPatterns.add(DEPTH_PATTERN);
 
-                LOGGER.info("Successfully subscribed to consolidated depth pattern");
+                logger.info("Successfully subscribed to consolidated depth pattern");
 
                 // Remove the listener now that we've subscribed - safely outside the callback
                 // but still inside synchronization
                 pm.removePublishListener(listener);
             } catch (Exception e) {
-                LOGGER.error("Error subscribing to pattern: {}", e.getMessage(), e);
+                logger.error("Error subscribing to pattern: " + e.getMessage() + " " + e);
             }
         }
     }
@@ -1442,9 +1250,7 @@ private void subscribeToPattern() {
      * @param order The MarketOrder to cache
      */
     private void addOrder(MarketOrder order) {
-        if (LOGGER.isDebugEnabled()) {
-        LOGGER.debug("Adding order to cache: reqId={}", order.getMyReqId());
-        }
+        logger.debug("Adding order to cache: reqId=" + order.getMyReqId());
         orderRepository.storeOrder(order);
     }
 
@@ -1455,9 +1261,7 @@ private void subscribeToPattern() {
      * @param reqId The request ID of the order to remove
      */
     public void removeOrder(int reqId) {
-        if (LOGGER.isDebugEnabled()) {
-        LOGGER.debug("Removing order from cache: reqId={}", reqId);
-        }
+        logger.debug("Removing order from cache: reqId=" + reqId);
         orderRepository.removeOrder(reqId);
     }
 
@@ -1469,9 +1273,7 @@ private void subscribeToPattern() {
      */
     public MarketOrder getOrder(int reqId) {
         MarketOrder order = orderRepository.getOrderByReqId(reqId);
-        if (LOGGER.isDebugEnabled()) {
-        LOGGER.debug("Retrieving order from cache: reqId={}, found={}", reqId, (order != null));
-        }
+        logger.debug("Retrieving order from cache: reqId=" + reqId + ", found=" + (order != null));
         return order;
     }
 
@@ -1484,7 +1286,7 @@ private void subscribeToPattern() {
 
     public MarketOrder getOrderByOrderId(String orderId) {
         if (orderId == null || orderId.isEmpty()) {
-            LOGGER.warn("Cannot find order with null or empty orderId");
+            logger.warn("Cannot find order with null or empty orderId");
             return null;
         }
         MarketOrder order = orderRepository.getOrderByOrderId(orderId);
@@ -1511,9 +1313,8 @@ private void subscribeToPattern() {
   public void onPartialUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply,
       boolean isSnap) {
     // Not interested in partial updates
-    if (LOGGER.isDebugEnabled()) {
-      LOGGER.debug("Partial update for record: {}", mkvRecord.getName());
-    }
+    logger.debug("Partial update for record: " + mkvRecord.getName());
+
   }
 
     public int timeToInt(LocalTime t) {
@@ -1533,11 +1334,11 @@ public void onFullUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolean isSna
             } else if (recordName.contains("CM_LOGIN")) {
                 processLoginUpdate(mkvRecord, mkvSupply, isSnap);
             } else {
-                LOGGER.warn("Received unexpected record type: {}", recordName);
+                logger.warn("Received unexpected record type: " + recordName);
             }
 
     } catch (Exception e) {
-        LOGGER.error("Error processing order update: {}", e.getMessage(), e);
+        logger.error("Error processing order update: " + e.getMessage() + " " + e);
     }
 }
 
@@ -1573,17 +1374,16 @@ private void processOrderUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolea
         orderActiveStatusMap.put(statusKey, currentlyActive);
 
         boolean thisApp = appName.equals("automatedMarketMaking");
-        LOGGER.info("Processing order from app: {}", appName);
+        logger.info("Processing order from app: " + appName);
         boolean isEligible = bondEligibilityListener.isIdEligible(Id);
         
         if (!thisApp) {
             // If this is not our app, we don't process it
-            LOGGER.debug("Ignoring order from another app: {}", appName);
+            logger.debug("Ignoring order from another app: " + appName);
             return;
         }
         boolean wasOrderActive = orderRepository.getOrderStatus(orderId);
-        LOGGER.info("Order status for {}: currentlyActive={}, wasOrderActive={}", 
-            orderId, currentlyActive, wasOrderActive);
+        logger.info("Order status for " + orderId + ": currentlyActive=" + currentlyActive + ", wasOrderActive=" + wasOrderActive);
         orderRepository.setOrderStatus(orderId, currentlyActive);
         
         if (currentlyActive && !isEligible) {
@@ -1591,16 +1391,14 @@ private void processOrderUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolea
             MarketOrder cancelOrder = MarketOrder.orderCancel(
                         src, traderId, origId, this);
             orderRepository.updateOrderStatus(Id, VerbStr, !currentlyActive);
-            LOGGER.info("Order {} is not eligible for trading, cancelling order: {}", 
-                origId, cancelOrder.getOrderId());
+            logger.info("Order " + origId + " is not eligible for trading, cancelling order: " + cancelOrder.getOrderId());
         }
 
         orderRepository.setOrderStatus(orderId, currentlyActive);
         
         Map<String, Map<String, List<String>>> multipleOrders = checkForMultipleActiveOrders(Id);
         if (!multipleOrders.isEmpty()) {
-            LOGGER.warn("Multiple active orders detected after processing order update for {}/{}", 
-                Id, VerbStr);
+            logger.warn("Multiple active orders detected after processing order update for " + Id + "/" + VerbStr);
             // Cancel oldest orders so only newest order is remaining per side
             cancelOldestOrders(multipleOrders);
         }
@@ -1633,10 +1431,9 @@ private void processOrderUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolea
 
             // Only process first transition from active to inactive (this is needed as get duplicate Order messages) and requires a Complete or Partial fill
         if (currentlyActive == false && wasOrderActive == true && (qtyStatusStr.equals("Cf") || qtyStatusStr.equals("Pf"))) {
-            LOGGER.info("Order status change detected for origId={}: ActiveStr changed to No and qtyStatusStr={}", origId, qtyStatusStr);
+            logger.info("Order status change detected for origId=" + origId + ": ActiveStr changed to No and qtyStatusStr=" + qtyStatusStr);
 
-            LOGGER.info("Processing order for hedging: {}, active={}, appName={}, src={}, Id={}, orderId={}, origId={}, VerbStr={}, tradeStatus={}, qtyFill={}, price={}, intQtyGoal={}, qtyHit={}, qtyStatus={}, qtyStatusStr={}, qtyTot={}, time={}",
-                mkvRecord.getName(), active, appName, src, Id, orderId, origId, VerbStr, tradeStatus, qtyFill, price, intQtyGoal, qtyHit, qtyStatus, qtyStatusStr, qtyTot, time);
+            logger.info("Processing order for hedging: " + mkvRecord.getName() + ", active=" + active + ", appName=" + appName + ", src=" + src + ", Id=" + Id + ", orderId=" + orderId + ", origId=" + origId + ", VerbStr=" + VerbStr + ", tradeStatus=" + tradeStatus + ", qtyFill=" + qtyFill + ", price=" + price + ", intQtyGoal=" + intQtyGoal + ", qtyHit=" + qtyHit + ", qtyStatus=" + qtyStatus + ", qtyStatusStr=" + qtyStatusStr + ", qtyTot=" + qtyTot + ", time=" + time);
 
             if (!"FENICS_USREPO".equals(src) || active.equals("Yes")) {
                 return; // Exit without hedging order if not hedging FENICS USREPO orders or if order is active
@@ -1649,7 +1446,7 @@ private void processOrderUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolea
             // Get the best price information for this instrument
             Best bestMarket = orderRepository.getLatestBest(Id);
             if (bestMarket == null) {
-                LOGGER.warn("No best market found for instrument: {}", Id);
+                logger.warn("No best market found for instrument: " + Id);
                 return; // Cannot process without best market
             } else {
                 if (VerbStr.equals("Buy")) {
@@ -1661,20 +1458,20 @@ private void processOrderUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolea
                     positiveArb = (price <= orderPrice);
                     market = bestMarket.getAskSrc();
                 } else {
-                    LOGGER.warn("Unknown verb for order: {}", VerbStr);
+                    logger.warn("Unknown verb for order: " + VerbStr);
                     return; // Cannot process unknown verb
                 }
             }
             
             validVenue = marketMaker.isTargetVenue(market);
             if (!validVenue) {
-                LOGGER.warn("Invalid market venue for hedging: {}", market);
+                logger.warn("Invalid market venue for hedging: " + market);
                 return; // Cannot hedge on invalid venue
             }
             // Now we use the market variable to get the trader
             String trader = getTraderForVenue(market);
             if (trader == null || trader.isEmpty()) {
-                LOGGER.warn("No trader found for market: {}", market);
+                logger.warn("No trader found for market: " + market);
                 return; // Cannot hedge without a trader
             }
             String hedgeDirection = null;
@@ -1683,47 +1480,45 @@ private void processOrderUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolea
             } else if (VerbStr.equals("Sell")) {
                 hedgeDirection = "Buy"; // Hedge sell with buy
             } else {
-                LOGGER.warn("Invalid verb for hedging: {}", VerbStr);
+                logger.warn("Invalid verb for hedging: " + VerbStr);
                 return; // Cannot hedge unknown verb
             }
 
             // Check if execution price is approximately near the best price
             if (!positiveArb) {
-                LOGGER.warn("Not positive arb for: orderPrice={}, execPrice={}",
-                    orderPrice, price);
+                logger.warn("Not positive arb for: orderPrice=\"" + orderPrice + "\", execPrice=\"" + price + "\"");
                 return; // Reject hedge if price is too far off
             }
 
             String nativeId = getNativeInstrumentId(Id, market, false);
             if (nativeId == null || nativeId.isEmpty()) {
-                LOGGER.warn("No native ID found for instrument: {}, market: {}", Id, market);
+                logger.warn("No native ID found for instrument: " + Id + ", market: " + market);
                 return; // Cannot hedge without a native ID
             }
             
             if (orderPrice > 0.0 && qtyHit > 0.0) {
-                LOGGER.info("Preparing hedging order before self match: market={}, trader={}, Id={}, nativeId={}, verb={}, qtyFilled={}, price={}",
-                    market, trader, Id, nativeId, hedgeDirection, qtyHit, orderPrice);
+                logger.info("Preparing hedging order before self match: market=" + market + ", trader=" + trader + ", Id=" + Id + ", nativeId=" + nativeId + ", verb=" + hedgeDirection + ", qtyFilled=" + qtyHit + ", price=" + orderPrice);
                 if (hedgeDirection.equals("Buy")) {
                     if (bestMarket.isMinePrice(bestMarket.getAskStatus())) {
-                        LOGGER.info("Self match prevention on the ask side: nativeId={}, qtyHit={}", nativeId, qtyHit);
+                        logger.info("Self match prevention on the ask side: nativeId=" + nativeId + ", qtyHit=" + qtyHit);
                         return;
                     }
-                    LOGGER.info("Hedging offer lifted with buy order: nativeId={}, qtyHit={}", nativeId, qtyHit);                    
+                    logger.info("Hedging offer lifted with buy order: nativeId=" + nativeId + ", qtyHit=" + qtyHit);
                 } else {
                     if (bestMarket.isMinePrice(bestMarket.getBidStatus())) {
-                        LOGGER.info("Self match prevention on the bid side: nativeId={}, qtyHit={}", nativeId, qtyHit);
-                    return;
+                        logger.info("Self match prevention on the bid side: nativeId=" + nativeId + ", qtyHit=" + qtyHit);
+                        return;
                     }
                 }
                 addOrder(market, trader, nativeId, hedgeDirection, qtyHit, orderPrice, "Limit", "FAK"); 
             } else {
-                LOGGER.warn("Hedging not applicable for Id={}, market={}, Verb={}, currentlyActive={}, priorActive={}, qtyHit={}, price={}, wasOrderActive={}", Id, src, VerbStr, currentlyActive, qtyHit, orderPrice, wasOrderActive);
+                logger.warn("Hedging not applicable for Id=" + Id + ", market=" + src + ", Verb=" + VerbStr + ", currentlyActive=" + currentlyActive + ", priorActive=" + wasOrderActive + ", qtyHit=" + qtyHit + ", price=" + orderPrice + ", wasOrderActive=" + wasOrderActive);
             }
         } else {
-            LOGGER.info("Hedging not applicable for Id={}, market={}, Verb={}, currentlyActive={}, priorActive={}", Id, src, VerbStr, currentlyActive, wasOrderActive);
+            logger.info("Hedging not applicable for Id=" + Id + ", market=" + src + ", Verb=" + VerbStr + ", currentlyActive=" + currentlyActive + ", priorActive=" + wasOrderActive);
         }
     } catch (Exception e) {
-        LOGGER.error("Error processing order update: {}", e.getMessage(), e);
+        logger.error("Error processing order update: " + e.getMessage() + " " + e);
     }
 }
 
@@ -1733,7 +1528,7 @@ private void processLoginUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolea
         String trader = mkvRecord.getValue("Id").getString();
 
         if (!venueToTraderMap.containsValue(trader)) {
-            LOGGER.debug("Ignoring login update from another trader: {}", trader);
+            logger.debug("Ignoring login update from another trader: " + trader);
             return; // Not our trader
         }
 
@@ -1746,30 +1541,28 @@ private void processLoginUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolea
             if (src != null && !src.isEmpty() && tStatus != null && !tStatus.isEmpty()) {
                 //check if valid venue
                 if (!validVenues.contains(src)) {
-                    LOGGER.info("Not valid venue: {}", src);
+                    logger.info("Not valid venue: " + src);
                     continue;
                 } else {
                     if (tStatus.equals("On")){
                         orderRepository.addVenueActive(src, true);
-                        LOGGER.info("Venue {} is now active for trader {}", src, trader);
+                        logger.info("Venue " + src + " is now active for trader " + trader);
                     } else {
                         orderRepository.addVenueActive(src, false);
-                        LOGGER.info("Venue {} is now inactive for trader {}", src, trader);
+                        logger.info("Venue " + src + " is now inactive for trader " + trader);
                     }
                 }
             }
         }
     } catch (Exception e) {
-        LOGGER.error("Error processing login update: {}", e.getMessage(), e);
+        logger.error("Error processing login update: " + e.getMessage() + " " + e);
     }
 }
 
 @Override
 public void orderDead(MarketOrder order) {
-    if (LOGGER.isInfoEnabled()) {
-        LOGGER.info("Order is now dead: reqId={}, orderId={}", 
-            order.getMyReqId(), order.getOrderId());
-    }
+    logger.info("Order is now dead: reqId=" + order.getMyReqId() + ", orderId=" + order.getOrderId());
+
     // Remove the order from the cache
     removeOrder(order.getMyReqId());
   }
@@ -1783,9 +1576,8 @@ public void orderDead(MarketOrder order) {
   public MarketOrder addOrder(String marketSource, String traderId, String instrId, String verb, double qty,
       double price, String type, String tif) {
 
-	LOGGER.info("Attempting to create order: source={}, trader={}, instrId={}, verb={}, qty={}, price={}, type={}, tif={}",
-	             marketSource, traderId, instrId, verb, qty, price, type, tif);
-	
+	logger.info("Attempting to create order: source=" + marketSource + ", trader=" + traderId + ", instrId=" + instrId + ", verb=" + verb + ", qty=" + qty + ", price=" + price + ", type=" + type + ", tif=" + tif);
+
 	// Create the order using the static factory method
     MarketOrder order = MarketOrder.orderCreate(marketSource, traderId, instrId, verb, qty, price,
         type, tif, this);
@@ -1796,15 +1588,12 @@ public void orderDead(MarketOrder order) {
       
       // Check if there was an error code returned that indicates rejection
       if (order.getErrCode() != 0) {
-            LOGGER.warn("Order rejected by market: reqId={}, instrId={}, errCode={}, errStr={}, source={}, trader={}",
-                order.getMyReqId(), instrId, order.getErrCode(), order.getErrStr(), marketSource, traderId);
+            logger.warn("Order rejected by market: reqId=" + order.getMyReqId() + ", instrId=" + instrId + ", errCode=" + order.getErrCode() + ", errStr=" + order.getErrStr() + ", source=" + marketSource + ", trader=" + traderId);
             // Remove the rejected order from the cache since it won't be processed
             removeOrder(order.getMyReqId());
             return null; // Return null for rejected orders to indicate failure
       } else {
-            LOGGER.info("Order created successfully: reqId={}, instrId={}, source={}, trader={}",
-                order.getMyReqId(), instrId, marketSource, traderId);
-
+            logger.info("Order created successfully: reqId=" + order.getMyReqId() + ", instrId=" + instrId + ", source=" + marketSource + ", trader=" + traderId);
             // Get or create a quote for this instrument
             ActiveQuote quote = orderRepository.getQuote(instrId);
             
@@ -1820,7 +1609,7 @@ public void orderDead(MarketOrder order) {
                     quote.setAskActive(true);
                 }
             }
-            LOGGER.info("Order created successfully: {}", order.getMyReqId());
+            logger.info("Order created successfully: " + order.getMyReqId());
         }
     }
     return order;
@@ -1835,24 +1624,17 @@ public void orderDead(MarketOrder order) {
         try {
             // Validate the best object
             if (best == null || best.getId() == null || best.getInstrumentId() == null) {
-                LOGGER.warn("Received invalid best object: {}", best);
+                logger.warn("Received invalid best object: " + best);
                 return; // Cannot process invalid best
             }
-            LOGGER.debug("OrderManagement.best() called: instrument={}, instrumentId={}, ask=({}), askSrc=({}), bid=({}), bidSrc=({}), cash_gc=({}), reg_gc=({})", 
-                best.getId(), 
-                best.getInstrumentId(), 
-                best.getAsk(), best.getAskSrc(), 
-                best.getBid(), best.getBidSrc(),
-                cash_gc, reg_gc);
-
+            logger.debug("OrderManagement.best() called: instrument=" + best.getId() + ", instrumentId=" + best.getInstrumentId() + ", ask=(" + best.getAsk() + "), askSrc=(" + best.getAskSrc() + "), bid=(" + best.getBid() + "), bidSrc=(" + best.getBidSrc() + "), cash_gc=(" + cash_gc + "), reg_gc=(" + reg_gc + ")");
             orderRepository.storeBestPrice(best.getId(), best);
 
             // Call marketMaker.best() if it's available and initialized
             if (marketMaker != null) {
                 try {
 
-                    LOGGER.info("Forwarding best price to market maker: instrument={}, instrumentId={}, ask=({}), bid=({})",
-                        best.getId(), best.getInstrumentId(), best.getAsk(), best.getBid());
+                    logger.info("Forwarding best price to market maker: instrument=" + best.getId() + ", instrumentId=" + best.getInstrumentId() + ", ask=(" + best.getAsk() + "), bid=(" + best.getBid() + ")");
                     // Pass the best information to the market maker
                     // marketMaker.best(best, currentCashGC, currentRegGC, gcBestCashCopy, gcBestREGCopy);
                     marketMaker.best(best, 
@@ -1870,12 +1652,12 @@ public void orderDead(MarketOrder order) {
                     // }
 
                 } catch (Exception e) {
-                    LOGGER.error("Error forwarding best price to market maker: {}", e.getMessage(), e);
+                    logger.error("Error forwarding best price to market maker: " + e.getMessage() + " " + e);
                 }
             }
 
         } catch (Exception e) {
-                LOGGER.error("Error validating best object: {}", e.getMessage(), e);
+                logger.error("Error validating best object: " + e.getMessage() + " " + e);
                 return; // Cannot process if validation fails
         }
     }
@@ -1907,17 +1689,16 @@ private void monitorActiveOrders() {
         Map<String, Map<String, List<String>>> multipleOrders = checkForMultipleActiveOrders(null);
         
         if (!multipleOrders.isEmpty()) {
-            LOGGER.warn("Active order monitoring detected issues with {} instruments", 
-                multipleOrders.size());
-            
+            logger.warn("Active order monitoring detected issues with " + multipleOrders.size() + " instruments");
+
             // Here you could implement automatic resolution logic
             // For example, keep the newest order and cancel older ones
             cancelOldestOrders(multipleOrders);
         } else {
-            LOGGER.debug("Active order monitoring: No multiple active orders detected");
+            logger.debug("Active order monitoring: No multiple active orders detected");
         }
     } catch (Exception e) {
-        LOGGER.error("Error in active order monitoring: {}", e.getMessage(), e);
+        logger.error("Error in active order monitoring: " + e.getMessage() + " " + e);
     }
 }
 
@@ -1940,9 +1721,9 @@ private void cancelOldestOrders(Map<String, Map<String, List<String>>> multipleO
                 if (orderIds.size() <= 1) {
                     continue;
                 }
-                
-                LOGGER.info("Resolving multiple active orders for {}/{}", instrumentId, side);
-                
+
+                logger.info("Resolving multiple active orders for " + instrumentId + "/" + side);
+
                 // Sort orders by creation time (newest first)
                 List<MarketOrder> orders = new ArrayList<>();
                 for (String orderId : orderIds) {
@@ -1957,15 +1738,14 @@ private void cancelOldestOrders(Map<String, Map<String, List<String>>> multipleO
                 // Keep the newest order, cancel all others
                 if (!orders.isEmpty()) {
                     MarketOrder newestOrder = orders.get(0);
-                    LOGGER.info("Keeping newest order: {}", newestOrder.getOrderId());
+                    logger.info("Keeping newest order: " + newestOrder.getOrderId());
                     
                     // Cancel all other orders
                     for (int i = 1; i < orders.size(); i++) {
                         MarketOrder orderToCancel = orders.get(i);
-                        LOGGER.info("Cancelling duplicate order: {} (age: {} ms)", 
-                            orderToCancel.getOrderId(), 
-                            System.currentTimeMillis() - orderToCancel.getCreationTimestamp());
-                            
+                        logger.info("Cancelling duplicate order: " + orderToCancel.getOrderId() + " (age: " + 
+                            (System.currentTimeMillis() - orderToCancel.getCreationTimestamp()) + " ms)");
+
                         String marketSource = orderToCancel.getMarketSource();
                         String traderId = getTraderForVenue(marketSource);
                         String orderId = orderToCancel.getOrderId();
@@ -1978,7 +1758,7 @@ private void cancelOldestOrders(Map<String, Map<String, List<String>>> multipleO
             }
         }
     } catch (Exception e) {
-        LOGGER.error("Error resolving multiple active orders: {}", e.getMessage(), e);
+        logger.error("Error resolving multiple active orders: " + e.getMessage() + " " + e);
     }
 }
 
@@ -2021,8 +1801,7 @@ public Map<String, Map<String, List<String>>> checkForMultipleActiveOrders(Strin
         
         // Log any issues found
         if (!multipleOrders.isEmpty()) {
-            LOGGER.warn("Detected multiple active orders on the same side for {} instruments", 
-                multipleOrders.size());
+            logger.warn("Detected multiple active orders on the same side for " + multipleOrders.size() + " instruments");
                 
             for (Map.Entry<String, Map<String, List<String>>> entry : multipleOrders.entrySet()) {
                 String instrId = entry.getKey();
@@ -2032,18 +1811,13 @@ public Map<String, Map<String, List<String>>> checkForMultipleActiveOrders(Strin
                     String side = sideEntry.getKey();
                     List<String> orderIds = sideEntry.getValue();
                     
-                    LOGGER.warn("Instrument {} has {} active {} orders: {}", 
-                        instrId, orderIds.size(), side, String.join(", ", orderIds));
+                    logger.warn("Instrument " + instrId + " has " + orderIds.size() + " active " + side + " orders: " + String.join(", ", orderIds));
                         
                     // Add order details for each order
                     for (String orderId : orderIds) {
                         MarketOrder order = orderRepository.getOrderByOrderId(orderId);
                         if (order != null) {
-                            LOGGER.warn("  - OrderId: {}, ReqId: {}, MarketSource: {}, Age: {} ms", 
-                                orderId, 
-                                order.getMyReqId(),
-                                order.getMarketSource(),
-                                System.currentTimeMillis() - order.getCreationTimestamp());
+                            logger.warn("  - OrderId: " + orderId + ", ReqId: " + order.getMyReqId() + ", MarketSource: " + order.getMarketSource() + ", Age: " + (System.currentTimeMillis() - order.getCreationTimestamp()) + " ms");
                         }
                     }
                 }
@@ -2052,7 +1826,7 @@ public Map<String, Map<String, List<String>>> checkForMultipleActiveOrders(Strin
         
         return multipleOrders;
     } catch (Exception e) {
-        LOGGER.error("Error checking for multiple active orders: {}", e.getMessage(), e);
+        logger.error("Error checking for multiple active orders: " + e.getMessage() + " " + e);
         return Collections.emptyMap();
     }
 }
@@ -2063,7 +1837,7 @@ private void initializeHeartbeat() {
         	
             Map<String, Object> status = new HashMap<>();
             status.put("hostname", hostname);
-            status.put("application", "OrderManagementUAT");
+            status.put("application", "MarketMaker");
             status.put("state", isSystemStopped ? "STOPPED" : "RUNNING");
             status.put("continuousTrading", continuousTradingEnabled);
             status.put("activeOrders", orderRepository.getStatistics().get("totalOrders"));
@@ -2084,13 +1858,13 @@ private void initializeHeartbeat() {
             publishToRedis(HEARTBEAT_CHANNEL, status);
             
         } catch (Exception e) {
-            LOGGER.warn("Error in heartbeat logging: {}", e.getMessage(), e);
+            logger.warn("Error in heartbeat logging: " + e.getMessage() + " " + e);
         }
     }, 30, 30, TimeUnit.SECONDS); // Run every 30 seconds
 
     // Add a shutdown hook to properly close the heartbeat scheduler
     Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-        LOGGER.info("Shutting down heartbeat scheduler");
+        logger.info("Shutting down heartbeat scheduler");
         heartbeatScheduler.shutdown();
         try {
             if (!heartbeatScheduler.awaitTermination(5, TimeUnit.SECONDS)) {
@@ -2115,17 +1889,16 @@ private void setupPatternSubscriptionMonitor() {
                 MkvPattern pattern = (MkvPattern) instrObj;
                 
                 boolean isInstrSubscribed = false;
-                    // Try with an absolute minimum set
-                    try {
-                        String[] bareMinimumFields = new String[] { "Id" };
-                        LOGGER.debug("Retrying with absolute minimum field: {}", Arrays.toString(bareMinimumFields));
-                        isInstrSubscribed = pattern.isSubscribed(depthListener, bareMinimumFields);
-                    } catch (Exception e2) {
-                        LOGGER.warn("Error checking with minimum field. Using status from DepthListener: {}", e2.getMessage());
-                        
-                        // Fall back to the cached state in the DepthListener
-                        if (depthListener != null) {
-                            Map<String, Object> healthStatus = depthListener.getHealthStatus();
+                // Try with an absolute minimum set
+                try {
+                    String[] bareMinimumFields = new String[] { "Id" };
+                    logger.debug("Retrying with absolute minimum field: " + Arrays.toString(bareMinimumFields));
+                    isInstrSubscribed = pattern.isSubscribed(depthListener, bareMinimumFields);
+                } catch (Exception e2) {
+                    logger.warn("Error checking with minimum field. Using status from DepthListener: " + e2.getMessage());
+                    // Fall back to the cached state in the DepthListener
+                    if (depthListener != null) {
+                        Map<String, Object> healthStatus = depthListener.getHealthStatus();
                             Object subscriptionStatus = healthStatus.get("instrumentPatternSubscribed");
                             isInstrSubscribed = Boolean.TRUE.equals(subscriptionStatus);
                         }
@@ -2135,17 +1908,17 @@ private void setupPatternSubscriptionMonitor() {
                         depthListener.setInstrumentPatternSubscribed(isInstrSubscribed);
                     }
 
-                LOGGER.info("Instrument pattern subscription check: subscribed={}", isInstrSubscribed);
+                logger.info("Instrument pattern subscription check: subscribed=" + isInstrSubscribed);
 
                 // If not subscribed, resubscribe using our adaptive approach
                 if (!isInstrSubscribed) {
-                    LOGGER.warn("Instrument pattern not subscribed, subscribing now");
+                    logger.warn("Instrument pattern not subscribed, subscribing now");
 
                     try {
                         // Try using the full subscription method with failover logic
                         subscribeToInstrumentPattern();
                     } catch (Exception e) {
-                        LOGGER.error("Error calling subscribeToInstrumentPattern: {}", e.getMessage(), e);
+                        logger.error("Error calling subscribeToInstrumentPattern: " + e.getMessage() + " " + e);
 
                         // // Last resort: try to subscribe with just the absolute minimum field
                         // try {
@@ -2160,7 +1933,7 @@ private void setupPatternSubscriptionMonitor() {
                 }
             } else {
                 // The instrument pattern doesn't exist yet
-                LOGGER.debug("Instrument pattern not found: {}", instrumentPattern);
+                logger.debug("Instrument pattern not found: " + instrumentPattern);
             }
 
             // Check depth pattern
@@ -2172,15 +1945,14 @@ private void setupPatternSubscriptionMonitor() {
                 try {
                     currentlySubscribed = pattern.isSubscribed(depthListener, DEPTH_FIELDS);
                 } catch (Exception e) {
-                    LOGGER.warn("Error checking depth pattern subscription: {}", e.getMessage());
+                    logger.warn("Error checking depth pattern subscription: " + e.getMessage());
                 }
 
-                LOGGER.debug("Depth pattern subscription check: subscribed={}, our state={}",
-                    currentlySubscribed, subscribedPatterns.contains(pattern));
+                logger.debug("Depth pattern subscription check: subscribed=" + currentlySubscribed + ", our state=" + subscribedPatterns.contains(pattern));
 
                 // If we think we're subscribed but actually aren't, resubscribe
                 if (subscribedPatterns.contains(pattern) && !currentlySubscribed) {
-                    LOGGER.warn("Depth pattern subscription lost, resubscribing");
+                    logger.warn("Depth pattern subscription lost, resubscribing");
                     pattern.subscribe(DEPTH_FIELDS, depthListener);
                 }
 
@@ -2192,7 +1964,7 @@ private void setupPatternSubscriptionMonitor() {
                 }
             } else {
                 if (subscribedPatterns.contains(pattern)) {
-                    LOGGER.warn("Depth pattern not found but we thought we were subscribed");
+                    logger.warn("Depth pattern not found but we thought we were subscribed");
                     subscribedPatterns.remove(pattern);
                 }
                 // Try to find and subscribe to the pattern again
@@ -2204,10 +1976,10 @@ private void setupPatternSubscriptionMonitor() {
             // Additional detailed logging
             if (depthListener != null) {
                 Map<String, Object> healthStatus = depthListener.getHealthStatus();
-                LOGGER.info("Market data health status: {}", healthStatus);
+                logger.info("Market data health status: " + healthStatus);
             }
         } catch (Exception e) {
-            LOGGER.error("Error in pattern subscription monitor: {}", e.getMessage(), e);
+            logger.error("Error in pattern subscription monitor: " + e.getMessage() + " " + e);
         }
     }, 15, 30, TimeUnit.SECONDS);  // Check sooner initially (15 sec), then every 30 sec
   }
@@ -2242,24 +2014,24 @@ private void setupPatternSubscriptionMonitor() {
         }
         
         try {
-            LOGGER.info("Shutting down {} executor", name);
+            logger.info("Shutting down " + name + " executor");
             executor.shutdown();
             
             if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
-                LOGGER.warn("{} executor did not terminate gracefully, forcing shutdown", name);
+                logger.warn(name + " executor did not terminate gracefully, forcing shutdown");
                 List<Runnable> pendingTasks = executor.shutdownNow();
-                LOGGER.warn("Cancelled {} pending tasks for {}", pendingTasks.size(), name);
+                logger.warn("Cancelled " + pendingTasks.size() + " pending tasks for " + name);
                 
                 if (!executor.awaitTermination(2, TimeUnit.SECONDS)) {
-                    LOGGER.error("{} executor did not terminate after forced shutdown", name);
+                    logger.error(name + " executor did not terminate after forced shutdown");
                 }
             }
         } catch (InterruptedException e) {
-            LOGGER.warn("Interrupted while shutting down {} executor", name);
+            logger.warn("Interrupted while shutting down " + name + " executor");
             executor.shutdownNow();
             Thread.currentThread().interrupt();
         } catch (Exception e) {
-            LOGGER.error("Error shutting down {} executor: {}", name, e.getMessage(), e);
+            logger.error("Error shutting down " + name + " executor: " + e.getMessage() + " " + e);
         }
     }
 
@@ -2269,14 +2041,14 @@ private void setupPatternSubscriptionMonitor() {
     public void shutdown() {
         // Mark as shutting down
         isShuttingDown = true;
-        
-        LOGGER.info("Starting application shutdown sequence");
-        
+
+        logger.info("Starting application shutdown sequence");
+
         // If async shutdown is in progress, this is being called as part
         // of that process, so handle differently
         if (asyncShutdownInProgress) {
-            LOGGER.info("Async shutdown in progress, performing resource cleanup only");
-            
+            logger.info("Async shutdown in progress, performing resource cleanup only");
+
             // Clean up executors
             shutdownExecutor(heartbeatScheduler, "Heartbeat scheduler");
             shutdownExecutor(scheduler, "Market recheck scheduler");
@@ -2285,14 +2057,14 @@ private void setupPatternSubscriptionMonitor() {
             // Shutdown Redis connection pool
             if (jedisPool != null) {
                 try {
-                    LOGGER.info("Closing Redis connection pool");
+                    logger.info("Closing Redis connection pool");
                     jedisPool.destroy(); // Use destroy() for older Jedis versions
                 } catch (Exception e) {
-                    LOGGER.warn("Error closing Redis connection pool: {}", e.getMessage());
+                    logger.warn("Error closing Redis connection pool: " + e.getMessage());
                 }
             }
-            
-            LOGGER.info("Resource cleanup for async shutdown complete");
+
+            logger.info("Resource cleanup for async shutdown complete");
             return;
         }
         
@@ -2300,49 +2072,49 @@ private void setupPatternSubscriptionMonitor() {
         // First notify the market maker to prepare for shutdown 
         if (marketMaker != null) {
             try {
-                LOGGER.info("Preparing market maker for shutdown");
+                logger.info("Preparing market maker for shutdown");
                 marketMaker.prepareForShutdown();
             } catch (Exception e) {
-                LOGGER.warn("Error preparing market maker for shutdown: {}", e.getMessage());
+                logger.warn("Error preparing market maker for shutdown: " + e.getMessage());
             }
         }
         
         // Cancel market maker orders
         try {
-            LOGGER.info("Cancelling all market maker orders");
+            logger.info("Cancelling all market maker orders");
             boolean allCancelled = cancelMarketMakerOrders(10000);  // 10 second timeout
             if (!allCancelled) {
-                LOGGER.warn("Not all market maker orders were cancelled before timeout");
+                logger.warn("Not all market maker orders were cancelled before timeout");
             }
         } catch (Exception e) {
-            LOGGER.error("Error cancelling market maker orders: {}", e.getMessage(), e);
+            logger.error("Error cancelling market maker orders: " + e.getMessage() + " " + e);
         }
         
         // Cancel all remaining orders
         try {
-            LOGGER.info("Cancelling all remaining orders");
+            logger.info("Cancelling all remaining orders");
             cancelAllOrders();
         } catch (Exception e) {
-            LOGGER.warn("Error cancelling orders during shutdown: {}", e.getMessage());
+            logger.warn("Error cancelling orders during shutdown: " + e.getMessage());
         }
         
         // Complete market maker shutdown
         if (marketMaker != null) {
             try {
-                LOGGER.info("Completing market maker shutdown");
+                logger.info("Completing market maker shutdown");
                 marketMaker.completeShutdown();
             } catch (Exception e) {
-                LOGGER.warn("Error completing market maker shutdown: {}", e.getMessage());
+                logger.warn("Error completing market maker shutdown: " + e.getMessage());
             }
         }
 
         // Shutdown Redis connection pool
         if (jedisPool != null) {
             try {
-                LOGGER.info("Closing Redis connection pool");
+                logger.info("Closing Redis connection pool");
                 jedisPool.destroy(); // Use destroy() for older Jedis versions
             } catch (Exception e) {
-                LOGGER.warn("Error closing Redis connection pool: {}", e.getMessage());
+                logger.warn("Error closing Redis connection pool: " + e.getMessage());
             }
         }
 
@@ -2352,7 +2124,7 @@ private void setupPatternSubscriptionMonitor() {
         shutdownExecutor(orderExpirationScheduler, "Order expiration scheduler");
         
         // Log successful shutdown
-        LOGGER.info("OrderManagement shutdown complete");
+        logger.info("OrderManagement shutdown complete");
     }
 
     /**
@@ -2363,10 +2135,10 @@ private void setupPatternSubscriptionMonitor() {
      * @return true if all orders were successfully cancelled, false otherwise
      */
     public boolean cancelMarketMakerOrders(long timeoutMs) {
-        LOGGER.info("Cancelling all market maker orders");
+        logger.info("Cancelling all market maker orders");
         
         if (marketMaker == null) {
-            LOGGER.info("Market maker is null, no orders to cancel");
+            logger.info("Market maker is null, no orders to cancel");
             return true;
         }
         
@@ -2375,7 +2147,7 @@ private void setupPatternSubscriptionMonitor() {
             Map<String, ActiveQuote> activeQuotes = marketMaker.getActiveQuotes();
             
             if (activeQuotes.isEmpty()) {
-                LOGGER.info("No active quotes found, nothing to cancel");
+                logger.info("No active quotes found, nothing to cancel");
                 return true;
             }
             
@@ -2395,8 +2167,8 @@ private void setupPatternSubscriptionMonitor() {
                     
                     // Issue cancel request
                     String traderId = getTraderForVenue(bidOrder.getMarketSource());
-                    LOGGER.info("Cancelling bid order for {}: orderId={}", instrumentId, bidOrder.getOrderId());
-                    
+                    logger.info("Cancelling bid order for " + instrumentId + ": orderId=" + bidOrder.getOrderId());
+
                     MarketOrder cancelOrder = MarketOrder.orderCancel(
                         bidOrder.getMarketSource(),
                         traderId,
@@ -2405,7 +2177,7 @@ private void setupPatternSubscriptionMonitor() {
                     );
                     
                     if (cancelOrder == null) {
-                        LOGGER.warn("Failed to create cancel request for bid order: {}", bidOrder.getOrderId());
+                        logger.warn("Failed to create cancel request for bid order: " + bidOrder.getOrderId());
                     }
                 }
                 
@@ -2417,8 +2189,8 @@ private void setupPatternSubscriptionMonitor() {
                     
                     // Issue cancel request
                     String traderId = getTraderForVenue(askOrder.getMarketSource());
-                    LOGGER.info("Cancelling ask order for {}: orderId={}", instrumentId, askOrder.getOrderId());
-                    
+                    logger.info("Cancelling ask order for " + instrumentId + ": orderId=" + askOrder.getOrderId());
+
                     MarketOrder cancelOrder = MarketOrder.orderCancel(
                         askOrder.getMarketSource(),
                         traderId,
@@ -2427,13 +2199,13 @@ private void setupPatternSubscriptionMonitor() {
                     );
                     
                     if (cancelOrder == null) {
-                        LOGGER.warn("Failed to create cancel request for ask order: {}", askOrder.getOrderId());
+                        logger.warn("Failed to create cancel request for ask order: " + askOrder.getOrderId());
                     }
                 }
             }
-            
-            LOGGER.info("Sent {} cancel requests, waiting for confirmation...", totalOrderCount);
-            
+
+            logger.info("Sent " + totalOrderCount + " cancel requests, waiting for confirmation...");
+
             if (totalOrderCount == 0) {
                 return true; // Nothing to cancel
             }
@@ -2451,13 +2223,13 @@ private void setupPatternSubscriptionMonitor() {
                     if (order == null || order.isDead()) {
                         // Order is no longer active or no longer in our cache
                         it.remove();
-                        LOGGER.info("Confirmed cancellation for order: {}", orderId);
+                        logger.info("Confirmed cancellation for order: " + orderId);
                     }
                 }
                 
                 // Log progress periodically
                 if ((System.currentTimeMillis() - startTime) % 1000 < 50) { // Approximately every second
-                    LOGGER.info("Waiting for {} order cancellations to complete...", pendingCancellations.size());
+                    logger.info("Waiting for " + pendingCancellations.size() + " order cancellations to complete...");
                 }
                 
                 // Brief pause to avoid CPU spinning
@@ -2465,20 +2237,17 @@ private void setupPatternSubscriptionMonitor() {
                     Thread.sleep(50);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
-                    LOGGER.warn("Interrupted while waiting for cancellations");
+                    logger.warn("Interrupted while waiting for cancellations");
                     break;
                 }
             }
             
             boolean allCancelled = pendingCancellations.isEmpty();
-            LOGGER.info("Market maker order cancellation completed: {} of {} orders confirmed cancelled{}",
-                totalOrderCount - pendingCancellations.size(), 
-                totalOrderCount,
-                allCancelled ? "" : " (TIMEOUT OCCURRED)");
-            
+            logger.info("Market maker order cancellation completed: " + (totalOrderCount - pendingCancellations.size()) + " of " + totalOrderCount + " orders confirmed cancelled" + (allCancelled ? "" : " (TIMEOUT OCCURRED)"));
+
             return allCancelled;
         } catch (Exception e) {
-            LOGGER.error("Error cancelling market maker orders: {}", e.getMessage(), e);
+            logger.error("Error cancelling market maker orders: " + e.getMessage() + " " + e);
             return false;
         }
     }
@@ -2487,7 +2256,7 @@ private void setupPatternSubscriptionMonitor() {
     * Cancels all outstanding orders currently tracked by this OrderManagement instance.
     */
     public void cancelAllOrders() {
-        LOGGER.info("Cancelling all outstanding orders");
+        logger.info("Cancelling all outstanding orders");
 
         // Create a copy of the orders map to avoid concurrent modification
         Collection<MarketOrder> orderCollection = orderRepository.getAllOrders();
@@ -2507,7 +2276,7 @@ private void setupPatternSubscriptionMonitor() {
             
             // Check if the order is in a valid state for cancellation
             if (orderId == null || orderId.isEmpty()) {
-                LOGGER.warn("Order ID is null or empty for order: {}", order);
+                logger.warn("Order ID is null or empty for order: " + order);
                 continue;
             }
 
@@ -2515,18 +2284,18 @@ private void setupPatternSubscriptionMonitor() {
             if (orderId != null && !orderId.isEmpty()) {
                 String traderId = getTraderForVenue(marketSource);
 
-                LOGGER.info("Cancelling order: reqId={}, orderId={}", order.getMyReqId(), orderId);
-               
+                logger.info("Cancelling order: reqId=" + order.getMyReqId() + ", orderId=" + orderId);
+
                 // Check if the order is in a valid state for cancellation
                 if (orderId == null || orderId.isEmpty()) {
-                    LOGGER.warn("Order ID is null or empty for order: {}", order);
+                    logger.warn("Order ID is null or empty for order: " + order);
                     continue;
                 }
 
                 // Only try to cancel if we have an order ID
                 if (orderId != null && !orderId.isEmpty()) {
-                    LOGGER.info("Cancelling order: reqId={}, orderId={}", order.getMyReqId(), orderId);
-                    
+                    logger.info("Cancelling order: reqId=" + order.getMyReqId() + ", orderId=" + orderId);
+
                     // Issue the cancel request
                     MarketOrder cancelOrder = MarketOrder.orderCancel(
                         marketSource, 
@@ -2538,18 +2307,11 @@ private void setupPatternSubscriptionMonitor() {
                     if (cancelOrder != null) {
                         // Track the cancel request
                         removeOrder(order.getMyReqId());
-                        
-                        // Log to machine-readable format
-                        ApplicationLogging.logOrderUpdate(
-                            "AUTO_CANCEL", 
-                            order.getMyReqId(),
-                            order.getOrderId(),
-                            "Order cancelled by system shutdown"
-                        );
+   
                     }
                 }
             }
-            LOGGER.info("All outstanding orders cancelled");
+            logger.info("All outstanding orders cancelled");
         }
     }
     /**
@@ -2565,13 +2327,29 @@ private void setupPatternSubscriptionMonitor() {
             // Update the market maker with the new configuration
             if (marketMaker != null) {
                 marketMaker.updateConfig(newConfig);
-                LOGGER.info("Market maker configuration updated successfully");
+                logger.info("Market maker configuration updated successfully");
             } else {
-                LOGGER.warn("Market maker is null, configuration stored but not applied");
+                logger.warn("Market maker is null, configuration stored but not applied");
             }
         } catch (Exception e) {
-            LOGGER.error("Error updating market maker configuration: {}", e.getMessage(), e);
+            logger.error("Error updating market maker configuration: " + e.getMessage() + " " + e);
             throw e; // Re-throw to be handled by the caller
         }
     }
+    /**
+     * Gets the MkvLog instance for use by other components
+     * @return The MkvLog instance
+     */
+    public MkvLog getMkvLog() {
+        return myLog;
+    }
+
+    /**
+     * Gets the current log level
+     * @return The log level
+     */
+    public int getLogLevel() {
+        return logLevel;
+    }
+
 }
