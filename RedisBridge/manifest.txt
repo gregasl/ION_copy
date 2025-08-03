@@ -1,7 +1,0 @@
-Manifest-Version: 1.0
-Main-Class: com.iontrading.redisbridge.RedisBridgeApplication
-Class-Path: lib/jmkv168p9.jar lib/jedis-5.1.0.jar lib/commons-pool2-2.12.1.jar lib/jackson-core-2.18.3.jar lib/jackson-databind-2.18.3.jar lib/jackson-annotations-2.18.3.jar lib/slf4j-api-1.7.36.jar lib/logback-classic-1.2.13.jar lib/logback-core-1.2.13.jar lib/jul-to-slf4j-1.7.36.jar lib/jctools-core-4.0.5.jar
-Implementation-Title: REDIS-ION Bridge
-Implementation-Version: 1.0.0
-Implementation-Vendor: ION Trading
-Created-By: 1.8.0_292 (Oracle Corporation)
