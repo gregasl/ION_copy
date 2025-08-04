@@ -30,7 +30,7 @@ import java.util.ArrayList;
 public class BondEligibilityListener implements MkvRecordListener, MkvPublishListener {
     
     private static MkvLog log = Mkv.getInstance().getLogManager().getLogFile("MarketMaker");
-    private static IONLogger logger = new IONLogger(log, 2, "MarketOrder");
+    private static IONLogger logger = new IONLogger(log, Mkv.getInstance().getProperties().getIntProperty("DEBUG"), "BondEligibilityListener");
     // Store eligible bonds
     private final Set<String> eligibleBonds = ConcurrentHashMap.newKeySet();
 
@@ -448,6 +448,7 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
             for (Map.Entry<String, BondConsolidatedData> entry : consolidatedBondData.entrySet()) {
                 BondConsolidatedData bondData = entry.getValue();
                 String cusip = bondData.getCusip();
+                logger.info("Checking eligibility for bond: " + cusip);
                 EligibilityResult shouldBeEligible = shouldBondBeEligible(cusip, bondData);
                 
                 String IdC = cusip + "_C_Fixed";
@@ -608,6 +609,7 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
             }
 
             // Check if we should update eligibility status
+            logger.info("Checking eligibility for bond: " + cusip);
             evaluateBondEligibility(cusip, bondData);
             
         } catch (Exception e) {
@@ -769,6 +771,7 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
      */
     private void evaluateBondEligibility(String cusip, BondConsolidatedData bondData) {
         try {
+            logger.info("Checking eligibility for bond: " + cusip);
             EligibilityResult shouldBeEligible = shouldBondBeEligible(cusip, bondData);
             String IdC = IdfromCUSIP(cusip, "C");
             String IdREG = IdfromCUSIP(cusip, "REG");

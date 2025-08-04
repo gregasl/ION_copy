@@ -48,7 +48,7 @@ import com.iontrading.mkv.helper.MkvSupplyFactory;
  */
 public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener {
     private static MkvLog log = Mkv.getInstance().getLogManager().getLogFile("ORDER_MANAGEMENT");
-    private static IONLogger logger = new IONLogger(log, 2, "MarketOrder");
+    private static IONLogger logger = new IONLogger(log, Mkv.getInstance().getProperties().getIntProperty("DEBUG"), "MarketOrder");
     private static String marketSource;
 
   /**

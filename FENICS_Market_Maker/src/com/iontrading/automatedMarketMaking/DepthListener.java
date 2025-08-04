@@ -45,7 +45,7 @@ import com.iontrading.mkv.helper.MkvSubscribeProxy;
 public class DepthListener implements MkvRecordListener {
     // Add logger for debugging
     private static MkvLog log = Mkv.getInstance().getLogManager().getLogFile("MarketMaker");
-    private static IONLogger logger = new IONLogger(log, 2, "DepthListener");  
+    private static IONLogger logger = new IONLogger(log, Mkv.getInstance().getProperties().getIntProperty("DEBUG"), "DepthListener");  
     
     /**
      * Shared proxy instances used to map MKV record fields to Java bean properties.
@@ -569,11 +569,13 @@ private void updateBestFromMap(Best best, Map<String, Object> recordData) {
         int askLevel = findFirstElectronicVenueLevel(recordData, true);
         int bidLevel = findFirstElectronicVenueLevel(recordData, false);
         // Use level 0 as fallback if no electronic venue found
-        askLevel = (askLevel == -1) ? 0 : askLevel;
-        bidLevel = (bidLevel == -1) ? 0 : bidLevel;
-
-        logger.debug("Using ask level " + askLevel + " and bid level " + bidLevel + " for " + best.getId());
-
+        if (askLevel == -1) {
+            logger.debug("No ask level found for " + best.getId());
+        }
+        if (bidLevel == -1) {
+            logger.debug("No bid level found for " + best.getId());
+        }
+        
         // Set price fields with rounding already handled in the setter
         best.setAsk(getDoubleValue(recordData, "Ask" + askLevel, 0.0));
         best.setBid(getDoubleValue(recordData, "Bid" + bidLevel, 0.0));

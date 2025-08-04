@@ -19,7 +19,7 @@ import java.util.List;
  */
 public class ActiveQuote {
     private static MkvLog log = Mkv.getInstance().getLogManager().getLogFile("MarketMaker");
-    private static IONLogger logger = new IONLogger(log, 2, "ActiveQuote");
+    private static IONLogger logger = new IONLogger(log, Mkv.getInstance().getProperties().getIntProperty("DEBUG"), "ActiveQuote");
 
     // Thread safety mechanism
     private final Object lock = new Object();

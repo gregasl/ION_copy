@@ -77,7 +77,7 @@ public class Publisher implements MkvPlatformListener {
 
     private static final String REDIS_KEY_SEPARATOR = ":";
     private static final String REDIS_CHANNEL_PATTERN = "ASL:*:*:*";
-    private static final String DEFAULT_REDIS_HOST = "cacheuat";
+    private static final String DEFAULT_REDIS_HOST = "cacheprod";
     private static final int DEFAULT_REDIS_PORT = 6379;
     private static final String HEARTBEAT_CHANNEL = "HEARTBEAT:ION:PUBLISHER";
     private static final long HEARTBEAT_INTERVAL_SECONDS = 30;
