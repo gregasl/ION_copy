@@ -1527,7 +1527,7 @@ private void processLoginUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolea
         //        public static String[] LOGIN_FIELDS = { "Id", "Src0", "Src1", "Src2", "Src3", "Src4", "Src5", "Src6", "Src7", "TStatusStr", "TStatusStr0", "TStatusStr1", "TStatusStr2", "TStatusStr3", "TStatusStr4", "TStatusStr5", "TStatusStr6", "TStatusStr7"};
         String trader = mkvRecord.getValue("Id").getString();
 
-        if (!venueToTraderMap.containsValue(trader)) {
+        if (!trader.contains("evan_gerhard")) {
             logger.debug("Ignoring login update from another trader: " + trader);
             return; // Not our trader
         }

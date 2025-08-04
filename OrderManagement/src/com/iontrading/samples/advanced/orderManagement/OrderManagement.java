@@ -352,7 +352,7 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
 
     initializeMkvConnection(args);
     if (myLog != null) {
-        logger = new IONLogger(myLog, logLevel, "marketDataSubscriber");
+        logger = new IONLogger(myLog, logLevel, "orderManagement");
     }
 
     initializeRedisConnection();
@@ -1150,9 +1150,8 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
     private void processLoginUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolean isSnap) {
         try {
             String trader = mkvRecord.getValue("Id").getString();
-            
-            if (!venueToTraderMap.containsValue(trader)) {
-                logger.warn("Ignoring login update from another trader: {}"+  trader);
+            if (!trader.contains("evan_gerhard")) {
+                logger.warn("Ignoring login update from another trader: " +  trader);
                 return; // Not our trader
             }
 
