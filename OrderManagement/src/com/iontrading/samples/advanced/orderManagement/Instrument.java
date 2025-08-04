@@ -23,7 +23,7 @@ import com.iontrading.mkv.MkvLog;
 public class Instrument {
 
     private static MkvLog log = Mkv.getInstance().getLogManager().getLogFile("ORDER_MANAGEMENT");
-    private static IONLogger logger = new IONLogger(log, 2, "Instrument");
+    private static IONLogger logger = new IONLogger(log, Mkv.getInstance().getProperties().getIntProperty("DEBUG"), "Instrument");
 
     /**
      * The instrument ID this Instrument object represents.

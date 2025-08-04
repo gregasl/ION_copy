@@ -46,7 +46,7 @@ public class DepthListener implements MkvRecordListener {
 
     // Add logger for debugging
     private static MkvLog log = Mkv.getInstance().getLogManager().getLogFile("ORDER_MANAGEMENT");
-    private static IONLogger logger = new IONLogger(log, 2, "DepthListener");        
+    private static IONLogger logger = new IONLogger(log, Mkv.getInstance().getProperties().getIntProperty("DEBUG"), "DepthListener");        
     /**
      * Shared proxy instances used to map MKV record fields to Java bean properties.
      * These are static as they can be shared across all instances for the same record types.

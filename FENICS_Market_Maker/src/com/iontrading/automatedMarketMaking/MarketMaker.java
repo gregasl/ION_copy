@@ -39,7 +39,7 @@ import com.iontrading.mkv.events.MkvRecordListener;
 public class MarketMaker implements IOrderManager {
 
     private static MkvLog log = Mkv.getInstance().getLogManager().getLogFile("MarketMaker");
-    private static IONLogger logger = new IONLogger(log, 2, "MarketMaker");   
+    private static IONLogger logger = new IONLogger(log, Mkv.getInstance().getProperties().getIntProperty("DEBUG"), "MarketMaker");   
      
     // Add diagnostic counters
     private final AtomicInteger emptyIdCounter = new AtomicInteger(0);
@@ -1142,14 +1142,16 @@ public class MarketMaker implements IOrderManager {
                 if (decision.hasBid && decision.hasAsk) {
                     // Check if we need to update bid
                     double currentBidPrice = existingQuote.getBidPrice();
-                    boolean updateBid = (!hasActiveBid || ((currentBidPrice != decision.bidPrice) && (existingQuote.getBidAge() > 1500)));
+                    boolean updateBid = (!hasActiveBid || ((currentBidPrice != decision.bidPrice) && (existingQuote.getBidAge() > 1000)));
                     logger.info("processMarketUpdate: Current bid price for \"" + Id + "\": " + currentBidPrice + ", update required: " + updateBid);
                     if (updateBid) {
                         MarketOrder existingBidOrder = existingQuote.getBidOrder();
                         if (existingBidOrder != null) {
                             logger.info("Cancelling existing bid order for \"" + Id + "\": " + existingBidOrder);
                             cancelOrder(existingBidOrder, Id);
-                            orderRepository.untrackInstrument(Id);
+                            if (existingQuote.isBidActive() == false && existingQuote.isAskActive() == false) {
+                                orderRepository.untrackInstrument(Id);
+                            }
                         } else {
                             logger.info("No existing bid order to cancel for \"" + Id + "\"");
                         }
@@ -1168,7 +1170,9 @@ public class MarketMaker implements IOrderManager {
                     MarketOrder existingBidOrder = existingQuote.getBidOrder();
                     if (existingBidOrder != null) {
                         cancelOrder(existingBidOrder, Id);
-                        orderRepository.untrackInstrument(Id);
+                        if (existingQuote.isBidActive() == false && existingQuote.isAskActive() == false) {
+                            orderRepository.untrackInstrument(Id);
+                        }
                     }
                     logger.info("Cancelled bid for \"" + Id + "\" - no valid pricing reference");
                 }
@@ -1176,14 +1180,16 @@ public class MarketMaker implements IOrderManager {
                 if (decision.hasAsk) {
                     // Check if we need to update ask
                     double currentAskPrice = existingQuote.getAskPrice();
-                    boolean updateAsk = (!hasActiveAsk || ((currentAskPrice != decision.askPrice) && (existingQuote.getAskAge() > 1500)));
+                    boolean updateAsk = (!hasActiveAsk || ((currentAskPrice != decision.askPrice) && (existingQuote.getAskAge() > 1000)));
                     logger.info("processMarketUpdate: Current ask price for \"" + Id + "\": " + currentAskPrice + ", update required: " + updateAsk);
                     if (updateAsk) {
                         logger.info("Cancelling existing ask order for \"" + Id + "\": " + existingQuote.getAskOrder());
                         MarketOrder existingAskOrder = existingQuote.getAskOrder();
                         if (existingAskOrder != null) {
                             cancelOrder(existingAskOrder, Id);
-                            orderRepository.untrackInstrument(Id);
+                            if (existingQuote.isBidActive() == false && existingQuote.isAskActive() == false) {
+                                orderRepository.untrackInstrument(Id);
+                            }
                         } else {
                             logger.info("No existing ask order to cancel for \"" + Id + "\"");
                         }
@@ -1200,7 +1206,9 @@ public class MarketMaker implements IOrderManager {
                     MarketOrder existingAskOrder = existingQuote.getAskOrder();
                     if (existingAskOrder != null) {
                         cancelOrder(existingAskOrder, Id);
-                        orderRepository.untrackInstrument(Id);
+                        if (existingQuote.isBidActive() == false && existingQuote.isAskActive() == false) {
+                            orderRepository.untrackInstrument(Id);
+                        }
                     } else {
                         logger.info("No existing ask order to cancel for \"" + Id + "\"");
                     }

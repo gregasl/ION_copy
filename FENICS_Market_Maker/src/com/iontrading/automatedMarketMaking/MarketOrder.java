@@ -56,7 +56,7 @@ public class MarketOrder implements MkvFunctionCallListener, MkvRecordListener {
 
   // Add logger for debugging
     private static MkvLog log = Mkv.getInstance().getLogManager().getLogFile("MarketMaker");
-    private static IONLogger logger = new IONLogger(log, 2, "MarketOrder");  
+    private static IONLogger logger = new IONLogger(log, Mkv.getInstance().getProperties().getIntProperty("DEBUG"), "MarketOrder");  
   /**
    * An id that should be unique during the life of the component.
    * This is a simple counter implementation - in a production system,

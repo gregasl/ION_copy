@@ -3,6 +3,9 @@ package com.iontrading.automatedMarketMaking;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.iontrading.mkv.Mkv;
+import com.iontrading.mkv.MkvLog;
+
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReadWriteLock;
@@ -22,8 +25,9 @@ import java.util.concurrent.atomic.AtomicInteger;
  * and MarketMaker components.
  */
 public class OrderRepository {
-    private static final Logger LOGGER = LoggerFactory.getLogger(OrderRepository.class);
-    
+    private static MkvLog log = Mkv.getInstance().getLogManager().getLogFile("MarketMaker");
+    private static IONLogger logger = new IONLogger(log, Mkv.getInstance().getProperties().getIntProperty("DEBUG"), "OrderRepository");   
+
     // Singleton instance
     private static volatile OrderRepository instance;
     
@@ -64,11 +68,11 @@ public class OrderRepository {
     private OrderRepository() {
         // Register a shutdown hook to log statistics on exit
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            LOGGER.info("OrderRepository shutdown - Final statistics:");
-            LOGGER.info("  Total quotes managed: {}", quotesByInstrument.size());
-            LOGGER.info("  Total orders tracked: {}", ordersByReqId.size());
-            LOGGER.info("  Total order ID mappings: {}", orderIdToReqIdMap.size());
-            LOGGER.info("  Total CUSIP to instrument mappings: {}", cusipToInstrumentMap.size());
+            logger.info("OrderRepository shutdown - Final statistics:");
+            logger.info("  Total quotes managed: " + quotesByInstrument.size());
+            logger.info("  Total orders tracked: " + ordersByReqId.size());
+            logger.info("  Total order ID mappings: " + orderIdToReqIdMap.size());
+            logger.info("  Total CUSIP to instrument mappings: " + cusipToInstrumentMap.size());
         }));
     }
     
@@ -111,7 +115,7 @@ public class OrderRepository {
                     cusipToInstrumentMap.computeIfAbsent(cusip, k -> new HashSet<>()).add(instrumentId);
                 }
                 
-                LOGGER.debug("Created new ActiveQuote for {}", instrumentId);
+                logger.debug("Created new ActiveQuote for " + instrumentId);
             }
             return quote;
         } finally {
@@ -132,7 +136,7 @@ public class OrderRepository {
         lock.writeLock().lock();
         try {
             venueActive.put(venue, isActive);
-            LOGGER.debug("Set venue {} active status to {}", venue, isActive);
+            logger.debug("Set venue " + venue + " active status to " + isActive);
         } finally {
             lock.writeLock().unlock();
         }
@@ -179,7 +183,7 @@ public class OrderRepository {
                 orderIdToReqIdMap.put(orderId, order.getMyReqId());
             }
             
-            LOGGER.debug("Stored order with reqId={}, orderId={}", order.getMyReqId(), orderId);
+            logger.debug("Stored order with reqId=" + order.getMyReqId() + ", orderId=" + orderId);
         } finally {
             lock.writeLock().unlock();
         }
@@ -194,8 +198,8 @@ public class OrderRepository {
             MarketOrder order = ordersByReqId.remove(reqId);
             if (order != null && order.getOrderId() != null) {
                 orderIdToReqIdMap.remove(order.getOrderId());
-                
-                LOGGER.debug("Removed order with reqId={}, orderId={}", reqId, order.getOrderId());
+
+                logger.debug("Removed order with reqId=" + reqId + ", orderId=" + order.getOrderId());
             }
             return order;
         } finally {
@@ -241,7 +245,7 @@ public class OrderRepository {
                 order.setOrderId(orderId);
             }
             
-            LOGGER.debug("Mapped orderId={} to reqId={}", orderId, reqId);
+            logger.debug("Mapped orderId=" + orderId + " to reqId=" + reqId);
         } finally {
             lock.writeLock().unlock();
         }
@@ -380,7 +384,7 @@ public class OrderRepository {
                         }
                     }
                 }
-                LOGGER.debug("Removed quote for instrument: {}", instrumentId);
+                logger.debug("Removed quote for instrument: " + instrumentId);
             }
         } finally {
             lock.writeLock().unlock();
@@ -404,7 +408,7 @@ public class OrderRepository {
                 
                 if (quote.getBidOrder() == null && quote.getAskOrder() == null) {
                     idsToRemove.add(instrumentId);
-                    LOGGER.info("Removing empty quote for {}", instrumentId);
+                    logger.info("Removing empty quote for " + instrumentId);
                 }
             }
             
@@ -447,8 +451,7 @@ public class OrderRepository {
             }
         }
         
-        LOGGER.debug("Updated order status: instrument={}, side={}, active={}", 
-            instrumentId, side, isActive);
+        logger.debug("Updated order status: instrument=" + instrumentId + ", side=" + side + ", active=" + isActive);
     }
     
     /**
@@ -497,7 +500,7 @@ public void setOrderStatus(String orderId, boolean isActive) {
         lock.writeLock().lock();
         try {
             orderStatus.put(orderId, isActive);
-            LOGGER.debug("Set order status for {} to {}", orderId, isActive);
+            logger.debug("Set order status for " + orderId + " to " + isActive);
         } finally {
             lock.writeLock().unlock();
         }
@@ -550,7 +553,7 @@ public boolean getOrderStatus(String orderId) {
         try {
             quotesByInstrument.clear();
             cusipToInstrumentMap.clear();
-            LOGGER.info("Cleared all quotes from repository");
+            logger.info("Cleared all quotes from repository");
         } finally {
             lock.writeLock().unlock();
         }
@@ -560,7 +563,7 @@ public boolean getOrderStatus(String orderId) {
         lock.writeLock().lock();
         try {
             orderIdToReqIdMap.clear();
-            LOGGER.info("Cleared all order ID mappings");
+            logger.info("Cleared all order ID mappings");
         } finally {
             lock.writeLock().unlock();
         }
@@ -606,8 +609,8 @@ public boolean getOrderStatus(String orderId) {
             // Validate time components to prevent invalid time creation
             if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59 ||
                 seconds < 0 || seconds > 59 || millis < 0 || millis > 999) {
-                LOGGER.warn("Invalid time components in timestamp {}: {}:{}:{}.{}", 
-                    localTimestamp, hours, minutes, seconds, millis);
+                logger.warn("Invalid time components in timestamp " + localTimestamp + 
+                    ": " + hours + ":" + minutes + ":" + seconds + "." + millis);
                 throw new IllegalArgumentException("Invalid time components in timestamp");
             }
             
@@ -621,8 +624,8 @@ public boolean getOrderStatus(String orderId) {
                         .toInstant()
                         .toEpochMilli();
         } catch (Exception e) {
-            LOGGER.error("Error converting timestamp {} to milliseconds: {}", 
-                localTimestamp, e.getMessage(), e);
+            logger.error("Error converting timestamp " + localTimestamp + " to milliseconds: " + 
+                e.getMessage() + " " + e);
             throw new IllegalArgumentException("Invalid timestamp format: " + localTimestamp, e);
         }
     }
@@ -651,7 +654,7 @@ public boolean getOrderStatus(String orderId) {
      */
     public MarketOrder setStandardizedTimestamp(MarketOrder order, Object timestamp, String timeZone) {
         if (order == null) {
-            LOGGER.error("Cannot set timestamp on null order");
+            logger.error("Cannot set timestamp on null order");
             throw new IllegalArgumentException("Order cannot be null");
         }
         
@@ -689,9 +692,9 @@ public boolean getOrderStatus(String orderId) {
             // Update order with standardized timestamp
             order.setStandardizedTimestamp(epochMillis);
             order.setStandardizedTimestampStr(iso8601Timestamp);
-            
-            LOGGER.debug("Updated order {} with standardized timestamp: {}", 
-                order.getOrderId(), iso8601Timestamp);
+
+            logger.debug("Updated order " + order.getOrderId() + " with standardized timestamp: " + 
+                iso8601Timestamp);
             
             // Store the standardized timestamp in the order mapping for future use
             if (order.getOrderId() != null) {
@@ -707,8 +710,8 @@ public boolean getOrderStatus(String orderId) {
             
             return order;
         } catch (DateTimeException | IllegalArgumentException e) {
-            LOGGER.error("Error standardizing timestamp {} for order {}: {}", 
-                timestamp, order.getOrderId(), e.getMessage(), e);
+            logger.error("Error standardizing timestamp " + timestamp + " for order " + 
+                order.getOrderId() + ": " + e.getMessage()  + " " + e);
             throw new IllegalArgumentException("Invalid timestamp format: " + timestamp, e);
         }
     }
@@ -737,7 +740,7 @@ public boolean getOrderStatus(String orderId) {
         if (order != null) {
             return setStandardizedTimestamp(order, timestamp, timeZone);
         } else {
-            LOGGER.warn("Cannot set timestamp - order not found with ID: {}", orderId);
+            logger.warn("Cannot set timestamp - order not found with ID: " + orderId);
             return null;
         }
     }
