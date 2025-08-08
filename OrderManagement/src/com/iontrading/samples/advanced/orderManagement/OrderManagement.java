@@ -1503,17 +1503,17 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
                     return;
                 }
                 if (gcBidPrice == null) {
-                    logger.warn("Skipping trade: Missing GC level bid price - Instrument: " + id + ", Type: " + (id.contains("C_Fixed") ? "CASH" : "REG") + ", Current Ask: " + ask);
+                    logger.debug("Skipping trade: Missing GC level bid price - Instrument: " + id + ", Type: " + (id.contains("C_Fixed") ? "CASH" : "REG") + ", Current Ask: " + ask);
                     return;
                 }
                 
                 if (ask < gcBidPrice) {
-                     logger.warn("Skipping trade: ask " + ask + " is less than GC level bid " + gcBidPrice + " - Type: " + (id.contains("C_Fixed") ? "CASH" : "REG") + ", Instrument: " + id);
+                     logger.debug("Skipping trade: ask " + ask + " is less than GC level bid " + gcBidPrice + " - Type: " + (id.contains("C_Fixed") ? "CASH" : "REG") + ", Instrument: " + id);
                     return;
                 }
                 
                 if (gcAskPrice != null && ask < gcAskPrice) {
-                     logger.warn("Skipping trade: ask " + ask + " is less than GC level ask " + gcAskPrice + " - Type: " + (id.contains("C_Fixed") ? "CASH" : "REG") + ", Instrument: " + id);
+                     logger.debug("Skipping trade: ask " + ask + " is less than GC level ask " + gcAskPrice + " - Type: " + (id.contains("C_Fixed") ? "CASH" : "REG") + ", Instrument: " + id);
                     return;
                 }
                 
@@ -1561,7 +1561,7 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
   		  		if ((cash_gc - ask) > threshold) {
   		            if (isDynamicThresholdPeriod()) {
   		                // Only log during the dynamic threshold period to reduce overhead
-  		                logger.warn("Skipping trade: spread " + (cash_gc - ask) + " exceeds time-based threshold " + threshold);
+  		                logger.debug("Skipping trade: spread " + (cash_gc - ask) + " exceeds time-based threshold " + threshold);
   		            }
   		            return;
   		  		}
@@ -1575,7 +1575,7 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
   	    if (isCash && (cash_gc != 0) && (minsizeDiff > 0)) {
             if ((((ask-bid) * orderBidSize) - ((cash_gc - ask) * minsizeDiff)) / minsizeDiff > -0.01) {
                 // Trade is not close enough to breakeven
-                logger.warn("ID: " + id + " - Skipping trade as not close enough to breakeven: Details: [" + 
+                logger.info("ID: " + id + " - Skipping trade as not close enough to breakeven: Details: [" + 
                     (isCash ? "CASH" : "REG") + "], ask=" + ask + ", bid=" + bid + 
                     ", orderBidSize=" + orderBidSize + ", cash_gc=" + cash_gc + 
                     ", ask=" + ask + ", minsizeDiff=" + minsizeDiff + ", orderAskSize=" + orderAskSize);
@@ -1584,7 +1584,7 @@ private final Set<String> subscribedPatterns = Collections.synchronizedSet(new H
         } else if (isREG && (reg_gc != 0) && (minsizeDiff > 0)) {
             if ((((ask-bid) * orderBidSize) - ((reg_gc - ask) * minsizeDiff)) / minsizeDiff > 0.01) {
                 // Trade is not close enough to breakeven
-                logger.warn("ID: " + id + " - Skipping trade as not close enough to breakeven: Details: [" + 
+                logger.info("ID: " + id + " - Skipping trade as not close enough to breakeven: Details: [" + 
                     (isCash ? "CASH" : "REG") + "], ask=" + ask + ", bid=" + bid + 
                     ", orderBidSize=" + orderBidSize + ", reg_gc=" + reg_gc + 
                     ", ask=" + ask + ", minsizeDiff=" + minsizeDiff + ", orderAskSize=" + orderAskSize);

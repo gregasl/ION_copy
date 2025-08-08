@@ -1385,17 +1385,43 @@ private void processOrderUpdate(MkvRecord mkvRecord, MkvSupply mkvSupply, boolea
         boolean wasOrderActive = orderRepository.getOrderStatus(orderId);
         logger.info("Order status for " + orderId + ": currentlyActive=" + currentlyActive + ", wasOrderActive=" + wasOrderActive);
         orderRepository.setOrderStatus(orderId, currentlyActive);
-        
+        String traderId = getTraderForVenue(src);
+
         if (currentlyActive && !isEligible) {
-            String traderId = getTraderForVenue(src);
             MarketOrder cancelOrder = MarketOrder.orderCancel(
                         src, traderId, origId, this);
             orderRepository.updateOrderStatus(Id, VerbStr, !currentlyActive);
             logger.info("Order " + origId + " is not eligible for trading, cancelling order: " + cancelOrder.getOrderId());
         }
-
         orderRepository.setOrderStatus(orderId, currentlyActive);
-        
+
+        if (currentlyActive) {
+            ActiveQuote existingQuote = orderRepository.getQuote(Id);
+            if (VerbStr.equals("Buy")) {
+                logger.info("Processing active buy order: " + Id + ", orderId=" + orderId + ", origId=" + origId);
+                MarketOrder existingBidOrder = existingQuote.getBidOrder();
+                if (existingBidOrder != null) {
+                    logger.info("Found existing bid order: " + existingBidOrder.getOrderId());
+                    if (!existingBidOrder.getOrderId().equals(origId)) {
+                        logger.warn("Duplicate active buy orders detected for " + Id + ": existingOrderId=" + existingBidOrder.getOrderId() + ", newOrderId=" + origId);
+                        MarketOrder cancelOrder = MarketOrder.orderCancel(
+                            src, traderId, origId, this);       
+                    }
+                }
+            } else if (VerbStr.equals("Sell")) {
+                MarketOrder existingAskOrder = existingQuote.getAskOrder();
+                logger.info("Processing active sell order: " + Id + ", orderId=" + orderId + ", origId=" + origId);
+                if (existingAskOrder != null) {
+                    logger.info("Found existing ask order: " + existingAskOrder.getOrderId());
+                    if (!existingAskOrder.getOrderId().equals(origId)) {
+                        logger.warn("Duplicate active sell orders detected for " + Id + ": existingOrderId=" + existingAskOrder.getOrderId() + ", newOrderId=" + origId);
+                        MarketOrder cancelOrder = MarketOrder.orderCancel(
+                            src, traderId, origId, this);
+                    }
+                }
+            }
+        }
+
         Map<String, Map<String, List<String>>> multipleOrders = checkForMultipleActiveOrders(Id);
         if (!multipleOrders.isEmpty()) {
             logger.warn("Multiple active orders detected after processing order update for " + Id + "/" + VerbStr);

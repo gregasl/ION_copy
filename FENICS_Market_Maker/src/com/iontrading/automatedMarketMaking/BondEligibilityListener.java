@@ -52,6 +52,7 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
     private static final Pattern SDS_CUSIP_PATTERN = Pattern.compile("ALL\\.POSITION_US\\.SDS\\.([^:]+)(?::.+)?");
     private static final Pattern BOND_CUSIP_PATTERN = Pattern.compile("USD\\.CM_BOND\\.VMO_REPO_US\\.(.+)");
     private static final Pattern POSITION_CUSIP_PATTERN = Pattern.compile("USD\\.IU_POSITION\\.VMO_REPO_US\\.([^_]+)");
+    private static final Pattern ASL_CUSIP_PATTERN = Pattern.compile("ALL\\.TEMP\\.ASL\\.(.+)");
     // private static final Pattern MFA_CUSIP_PATTERN = Pattern.compile("ALL\\.STATISTICS\\.MFA\\.MFA_([^_]+)_");
 
     /**
@@ -307,7 +308,7 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
             logger.info("Checking maturity date for bond " + cusip + ": " + maturityObj);
             
             java.time.LocalDate maturityDate = null;
-            java.time.LocalDate twoMonthsFromNow = java.time.LocalDate.now().plusMonths(2);
+            java.time.LocalDate oneMonthFromNow = java.time.LocalDate.now().plusMonths(1);
             if (maturityObj != null) { 
                 try {
                     // First check if it's an integer (MKV date format)
@@ -318,10 +319,10 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
                         int month = (dateInt % 10000) / 100;
                         int day = dateInt % 100;
                         maturityDate = java.time.LocalDate.of(year, month, day);
-                        // Check if maturity date is at least 2 months from now
-                        if (maturityDate.isBefore(twoMonthsFromNow)) {
+                        // Check if maturity date is at least 1 months from now
+                        if (maturityDate.isBefore(oneMonthFromNow)) {
                             
-                            logger.info("Bond " + cusip + " ineligible: maturity date " + maturityDate + " is less than 2 months away");
+                            logger.info("Bond " + cusip + " ineligible: maturity date " + maturityDate + " is less than 1 month away");
                             
                             return new EligibilityResult(false, false);
                         }
@@ -340,9 +341,9 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
                                 java.time.format.DateTimeFormatter formatter = 
                                     java.time.format.DateTimeFormatter.ofPattern("MM/dd/yyyy");
                                 maturityDate = java.time.LocalDate.parse(maturityStr, formatter);
-                                // Check if maturity date is at least 2 months from now
-                                if (maturityDate.isBefore(twoMonthsFromNow)) {
-                                    logger.info("Bond " + cusip + " ineligible: maturity date " + maturityDate + " is less than 2 months away");
+                                // Check if maturity date is at least 1 month from now
+                                if (maturityDate.isBefore(oneMonthFromNow)) {
+                                    logger.info("Bond " + cusip + " ineligible: maturity date " + maturityDate + " is less than 1 month away");
                                     return new EligibilityResult(false, false);
                                 }
                             } catch (Exception e2) {
@@ -351,9 +352,9 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
                                     java.time.format.DateTimeFormatter formatter = 
                                         java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd");
                                     maturityDate = java.time.LocalDate.parse(maturityStr, formatter);
-                                    // Check if maturity date is at least 2 months from now
-                                    if (maturityDate.isBefore(twoMonthsFromNow)) {
-                                        logger.info("Bond " + cusip + " ineligible: maturity date " + maturityDate + " is less than 2 months away");
+                                    // Check if maturity date is at least 1 month from now
+                                    if (maturityDate.isBefore(oneMonthFromNow)) {
+                                        logger.info("Bond " + cusip + " ineligible: maturity date " + maturityDate + " is less than 1 month away");
                                         return new EligibilityResult(false, false);
                                     }
                                 } catch (Exception e3) {
@@ -448,6 +449,7 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
             for (Map.Entry<String, BondConsolidatedData> entry : consolidatedBondData.entrySet()) {
                 BondConsolidatedData bondData = entry.getValue();
                 String cusip = bondData.getCusip();
+                cusip = (cusip != null && cusip.length() >= 9) ? cusip.substring(0, 9) : cusip;
                 logger.info("Checking eligibility for bond: " + cusip);
                 EligibilityResult shouldBeEligible = shouldBondBeEligible(cusip, bondData);
                 
@@ -553,6 +555,10 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
                 // Example: USD.IU_POSITION.VMO_REPO_US.91282CMM0_20250530_STD
                 cusip = extractCusipFromPositionRecord(recordName);
                 recordType = "POSITION";
+            } else if (recordName.startsWith("ALL.TEMP_CHANNEL.ASL.")) {
+                // Example: ALL.TEMP_CHANNEL.ASL.91282CMM0
+                cusip = extractCusipFromAslRecord(recordName);
+                recordType = "ASL";
             }
             // else if (recordName.startsWith("ALL.STATISTICS.MFA.")) {
             //     // Example: ALL.STATISTICS.MFA.MFA_912810RW0_C_Fixed_TODAY
@@ -599,6 +605,12 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
                     logger.info("Updating position data for CUSIP: " + cusip);
                     bondData.updatePositionData(extractedData);
                     logger.info("Extracted position data for CUSIP " + cusip + ": " + extractedData);
+                    break;
+
+                case "ASL":
+                    logger.info("Updating ASL data for CUSIP: " + cusip);
+                    bondData.updateAslData(extractedData);
+                    logger.info("Extracted ASL data for CUSIP " + cusip + ": " + extractedData);
                     break;
 
                 // case "MFA":
@@ -734,6 +746,11 @@ public class BondEligibilityListener implements MkvRecordListener, MkvPublishLis
      */
     private String extractCusipFromPositionRecord(String recordName) {
         Matcher matcher = POSITION_CUSIP_PATTERN.matcher(recordName);
+        return matcher.find() ? matcher.group(1) : null;
+    }
+
+    private String extractCusipFromAslRecord(String recordName) {
+        Matcher matcher = ASL_CUSIP_PATTERN.matcher(recordName);
         return matcher.find() ? matcher.group(1) : null;
     }
 
