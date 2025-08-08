@@ -1,9 +1,0 @@
-#STANDARD SETTINGS
-mkv.component = STP
-mkv.user = mkvuser
-mkv.pwd = mkvpwd  
-mkv.cshost = localhost
-mkv.csport = 13000
-mkv.listen = 17996
-mkv.debug = 1
-mkv.debuglevel = 1

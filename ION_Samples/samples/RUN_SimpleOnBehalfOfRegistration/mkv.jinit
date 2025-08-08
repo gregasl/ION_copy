@@ -1,9 +1,0 @@
-#STANDARD SETTINGS
-mkv.component = SimpleOnBehalfOfRegistration
-mkv.user = mkvuser
-mkv.pwd = mkvpwd  
-mkv.cshost = localhost
-mkv.csport = 13000
-mkv.debug = 1
-mkv.debuglevel = 1
-mkv.user.pwd=:1D 94 DE 96 AE 6B 11 A4
