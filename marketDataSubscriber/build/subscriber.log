@@ -1,0 +1,8 @@
+Mar 26, 2025 2:41:43 PM com.iontrading.samples.marketDataSubscriberUAT.marketDataSubscriberUAT initializeRedisConnection
+INFO: Connected to Redis at cacheuat:6379
+Mar 26, 2025 2:41:45 PM com.iontrading.samples.marketDataSubscriberUAT.marketDataSubscriberUAT initializeMkvConnection
+INFO: MKV connection initialized.
+May 08, 2025 6:12:32 PM com.iontrading.samples.marketDataSubscriberUAT.marketDataSubscriberUAT
+INFO: Async logging initialized
+May 08, 2025 6:12:39 PM com.iontrading.samples.marketDataSubscriberUAT.marketDataSubscriberUAT
+INFO: Async logging initialized
