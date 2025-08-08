@@ -63,6 +63,7 @@ public class MarketMaker implements IOrderManager {
     private boolean isBondStaticSubscribed = false;
     private boolean isFirmPositionSubscribed = false;
     private boolean isSdsInformationSubscribed = false;
+    private boolean isAslPublisherSubscribed = false;
     // private boolean isMfaInformationSubscribed = false;
 
     // Configuration for the market maker
@@ -83,6 +84,11 @@ public class MarketMaker implements IOrderManager {
     private static final String SDS_INFORMATION_PATTERN = "ALL.POSITION_US.SDS.";
     private static final String[] SDS_INFORMATION_FIELDS = {
         "Id", "Code", "DateStart", "SOMA"
+    };
+
+    private static final String ASL_PUBLISHER_PATTERN = "ALL.TEMP_CHANNEL.ASL.";
+    private static final String[] ASL_PUBLISHER_FIELDS = {
+        "Id", "Status"
     };
 
     // private static final String MFA_INFORMATION_PATTERN = "ALL.STATISTICS.MFA.";
@@ -443,10 +449,11 @@ public class MarketMaker implements IOrderManager {
             boolean bondSubscribed = subscribeToBondStaticData();
             boolean firmSubscribed = subscribeToFirmPositionData();
             boolean sdsSubscribed = subscribeToSdsInformationData();
+            boolean aslPublisherSubscribed = subscribeToASLPublisherData();
             // boolean mfaSubscribed = subscribeToMfaInformationData();
 
             // If any subscription failed, set up a listener for pattern discovery
-            if (!bondSubscribed || !firmSubscribed || !sdsSubscribed) {
+            if (!bondSubscribed || !firmSubscribed || !sdsSubscribed || !aslPublisherSubscribed) {
                 logger.info("Some patterns not available yet, setting up a publish listener");
 
                 // Create a single shared listener for all patterns
@@ -468,6 +475,10 @@ public class MarketMaker implements IOrderManager {
                             }
                             else if (!isSdsInformationSubscribed && SDS_INFORMATION_PATTERN.equals(name)) {
                                 trySubscribeToPattern(SDS_INFORMATION_PATTERN, SDS_INFORMATION_FIELDS,
+                                    bondEligibilityListener, mkvObject, pm, this);
+                            }
+                            else if (!isAslPublisherSubscribed && ASL_PUBLISHER_PATTERN.equals(name)) {
+                                trySubscribeToPattern(ASL_PUBLISHER_PATTERN, ASL_PUBLISHER_FIELDS,
                                     bondEligibilityListener, mkvObject, pm, this);
                             }
                             // else if (!isMfaInformationSubscribed && MFA_INFORMATION_PATTERN.equals(name)) {
@@ -503,7 +514,15 @@ public class MarketMaker implements IOrderManager {
                                     bondEligibilityListener, obj, pm, this);
                             }
                         }
-                        
+
+                        if (!isAslPublisherSubscribed) {
+                            MkvObject obj = pm.getMkvObject(ASL_PUBLISHER_PATTERN);
+                            if (obj != null && obj.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
+                                trySubscribeToPattern(ASL_PUBLISHER_PATTERN, ASL_PUBLISHER_FIELDS,
+                                    bondEligibilityListener, obj, pm, this);
+                            }
+                        }
+
                         // if (!isMfaInformationSubscribed) {
                         //     MkvObject obj = pm.getMkvObject(MFA_INFORMATION_PATTERN);
                         //     if (obj != null && obj.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
@@ -535,10 +554,11 @@ public class MarketMaker implements IOrderManager {
                         synchronized (subscriptionLock) {
                             stillWaiting = !isBondStaticSubscribed || 
                                         !isFirmPositionSubscribed || 
-                                        !isSdsInformationSubscribed;
-                            
+                                        !isSdsInformationSubscribed || 
+                                        !isAslPublisherSubscribed;
+
                             if (stillWaiting) {
-                                logger.warn("Pattern subscription timeout reached. Status: Bond="+isBondStaticSubscribed+", Firm="+isFirmPositionSubscribed+", SDS="+isSdsInformationSubscribed);
+                                logger.warn("Pattern subscription timeout reached. Status: Bond="+isBondStaticSubscribed+", Firm="+isFirmPositionSubscribed+", SDS="+isSdsInformationSubscribed+", ASL="+isAslPublisherSubscribed);
 
                                 // Remove the listener to avoid leaks
                                 pm.removePublishListener(patternListener);
@@ -568,6 +588,45 @@ public class MarketMaker implements IOrderManager {
             logger.info("MKV subscriptions initialized - will continue discovery asynchronously");
         } catch (Exception e) {
             logger.error("Error setting up MKV subscriptions " + e);
+        }
+    }
+
+    /**
+     * Subscribe to ASL publisher data
+     */
+    private boolean subscribeToASLPublisherData() {
+        logger.info("subscribeToASLPublisherData: Subscribing to ASL publisher data");
+
+        try {
+            // Get the publish manager
+            MkvPublishManager pm = Mkv.getInstance().getPublishManager();
+            logger.info("Got publish manager: " + pm);
+
+            // Look up the pattern object
+            MkvObject obj = pm.getMkvObject(ASL_PUBLISHER_PATTERN);
+            logger.info("Looking up pattern: " + ASL_PUBLISHER_PATTERN + ", result: " + obj);
+
+            if (obj != null && obj.getMkvObjectType().equals(MkvObjectType.PATTERN)) {
+                synchronized (subscriptionLock) {
+                    // Check again inside synchronized block
+                    if (isBondStaticSubscribed) {
+                        return true;
+                    }
+
+                    logger.info("Found ASL publisher pattern, subscribing: " + ASL_PUBLISHER_PATTERN);
+                    ((MkvPattern) obj).subscribe(ASL_PUBLISHER_FIELDS, bondEligibilityListener);
+
+                    isBondStaticSubscribed = true;
+                    logger.info("Successfully subscribed to ASL publisher data: " + ASL_PUBLISHER_PATTERN + " with " + ASL_PUBLISHER_FIELDS.length + " fields");
+                    return true;
+                }
+            } else {
+                logger.info("ASL publisher pattern not found: " + ASL_PUBLISHER_PATTERN + ". MKV object: " + obj);
+                return false;
+            }
+        } catch (Exception e) {
+            logger.error("subscribeToASLPublisherData: Failed: " + e.getMessage() + e);
+            return false;
         }
     }
 
@@ -767,6 +826,8 @@ public class MarketMaker implements IOrderManager {
                 isAlreadySubscribed = isSdsInformationSubscribed;
             // } else if (MFA_INFORMATION_PATTERN.equals(patternName)) {
             //     isAlreadySubscribed = isMfaInformationSubscribed;
+            } else if (ASL_PUBLISHER_PATTERN.equals(patternName)) {
+                isAlreadySubscribed = isAslPublisherSubscribed;
             }
 
             // Check if already subscribed
@@ -788,12 +849,14 @@ public class MarketMaker implements IOrderManager {
                     isSdsInformationSubscribed = true;
                 // } else if (MFA_INFORMATION_PATTERN.equals(patternName)) {
                 //     isMfaInformationSubscribed = true;
+                } else if (ASL_PUBLISHER_PATTERN.equals(patternName)) {
+                    isAslPublisherSubscribed = true;
                 }
 
                logger.info("Successfully subscribed to pattern: " + patternName);
 
                 // Remove the listener if we're done with all subscriptions
-                if (isBondStaticSubscribed && isFirmPositionSubscribed && isSdsInformationSubscribed) {
+                if (isBondStaticSubscribed && isFirmPositionSubscribed && isSdsInformationSubscribed && isAslPublisherSubscribed) {
                     logger.info("All patterns subscribed, removing publish listener");
                     pm.removePublishListener(publishListener);
                 }
@@ -1123,6 +1186,18 @@ public class MarketMaker implements IOrderManager {
             // Validate pricing decision and handle early returns
             if (!decision.hasBid && !decision.hasAsk) {
                 logger.debug("No valid prices available for instrument \"" + Id + "\". Skipping market update.");
+                MarketOrder existingBidOrder = existingQuote.getBidOrder();
+                MarketOrder existingAskOrder = existingQuote.getAskOrder();
+                if (existingBidOrder != null) {
+                    logger.info("No valid price for bid, cancelling existing bid order for \"" + Id + "\": " + existingBidOrder);
+                    cancelOrder(existingBidOrder, Id);
+                }
+                if (existingAskOrder != null) {
+                    logger.info("No valid price for ask, cancelling existing ask order for \"" + Id + "\": " + existingAskOrder);
+                    cancelOrder(existingAskOrder, Id);
+                }
+                // If both bid and ask are invalid, untrack the instrument
+                orderRepository.untrackInstrument(Id);
                 return;
             }
 
@@ -1133,7 +1208,6 @@ public class MarketMaker implements IOrderManager {
                     // Use OrderRepository to get or create quote
                     existingQuote = orderRepository.getQuote(Id);
                     logger.info("Creating new quotes for bond: " + Id);
-
                 }
             }
             
@@ -1175,6 +1249,17 @@ public class MarketMaker implements IOrderManager {
                         }
                     }
                     logger.info("Cancelled bid for \"" + Id + "\" - no valid pricing reference");
+                } else if (hasActiveBid  && !decision.hasAsk) {
+                    // Cancel bid if we have no offers available
+                    logger.info("Cancelling existing bid order for \"" + Id + "\" - no valid offer");
+                    MarketOrder existingBidOrder = existingQuote.getBidOrder();
+                    if (existingBidOrder != null) {
+                        cancelOrder(existingBidOrder, Id);
+                        if (existingQuote.isBidActive() == false && existingQuote.isAskActive() == false) {
+                            orderRepository.untrackInstrument(Id);
+                        }
+                    }
+                    logger.info("Cancelled bid for \"" + Id + "\" - no valid offer");
                 }
                 
                 if (decision.hasAsk) {
@@ -1249,6 +1334,7 @@ public class MarketMaker implements IOrderManager {
             logger.info("    Bond static data subscribed: {} " + isBondStaticSubscribed);
             logger.info("    Firm position data subscribed: {} " + isFirmPositionSubscribed);
             logger.info("    SDS information data subscribed: {} " + isSdsInformationSubscribed);
+            logger.info("    ASL publisher data subscribed: {} " + isAslPublisherSubscribed);
 
             // Log depth listener status if available
             if (depthListener != null) {
@@ -1301,6 +1387,7 @@ public class MarketMaker implements IOrderManager {
         subscriptions.put("firmPosition", isFirmPositionSubscribed);
         subscriptions.put("sdsInformation", isSdsInformationSubscribed);
         // subscriptions.put("mfaInformation", isMfaInformationSubscribed);
+        subscriptions.put("aslPublisher", isAslPublisherSubscribed);
         status.put("subscriptions", subscriptions);
         
         // Add depth listener status

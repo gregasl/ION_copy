@@ -1,8 +1,5 @@
 package com.iontrading.automatedMarketMaking;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import com.iontrading.mkv.Mkv;
 import com.iontrading.mkv.MkvLog;
 
