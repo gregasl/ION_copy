@@ -1,9 +1,0 @@
-#STANDARD SETTINGS
-mkv.component = SimpleFunctionHandler
-mkv.user = mkvuser
-mkv.pwd = mkvpwd  
-mkv.cshost = localhost
-mkv.csport = 13000
-mkv.listen = 17997
-mkv.debug = 1
-mkv.debuglevel = 1
